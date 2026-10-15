@@ -648,35 +648,6 @@ h1 {
     border-radius: 0;
   }
 
-  .sidebar {
-    width: 72px;
-    padding: 1rem .5rem;
-  }
-
-  .brand {
-    justify-content: center;
-    margin: 0 0 2rem;
-  }
-
-  .brand > div:last-child,
-  .nav-title,
-  .nav-item:not(:first-of-type) {
-    font-size: 0;
-  }
-
-  .nav-item {
-    justify-content: center;
-  }
-
-  .sidebar-footer {
-    justify-content: center;
-  }
-
-  .sidebar-footer > div:not(.avatar),
-  .more-button {
-    display: none;
-  }
-
   .main-content {
     padding: 1.25rem;
   }

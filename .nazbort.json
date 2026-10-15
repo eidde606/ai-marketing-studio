@@ -1,4 +1,4 @@
 {
   "project_name": "ai-marketing-studio",
-  "test_command": "cd frontend && npm run build"
+  "test_command": ["npm", "--prefix", "frontend", "run", "build"]
 }
