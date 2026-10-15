@@ -130,6 +130,7 @@ function Navigation({
   );
 }
 
+// Provides the app's navigation sidebar.
 export function Sidebar({ activeSection, onSectionChange, pendingCount }: SidebarProps) {
   return (
     <>
