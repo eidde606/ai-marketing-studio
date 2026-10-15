@@ -1,13 +1,5 @@
 import { useMemo, useState, type FC } from 'react';
-
-type Section =
-  | 'Resumen'
-  | 'Campañas'
-  | 'Contenido'
-  | 'Equipo IA'
-  | 'Aprobaciones'
-  | 'Analíticas'
-  | 'Configuración';
+import Sidebar, { type Section } from './components/Sidebar';
 
 type ApprovalStatus = 'pendiente' | 'aprobado' | 'rechazado';
 
@@ -20,16 +12,6 @@ type Approval = {
   date: string;
   status: ApprovalStatus;
 };
-
-const sections: { label: Section; icon: string }[] = [
-  { label: 'Resumen', icon: '⌂' },
-  { label: 'Campañas', icon: '◈' },
-  { label: 'Contenido', icon: '▤' },
-  { label: 'Equipo IA', icon: '✦' },
-  { label: 'Aprobaciones', icon: '✓' },
-  { label: 'Analíticas', icon: '◒' },
-  { label: 'Configuración', icon: '⚙' },
-];
 
 const campaigns = [
   { name: 'Lanzamiento primavera', status: 'Activa', progress: 78, channel: 'Instagram · Email', date: '12 mar 2025' },
@@ -112,42 +94,11 @@ const App: FC = () => {
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-mark">✦</div>
-          <div>
-            <strong>AI Marketing</strong>
-            <span>STUDIO</span>
-          </div>
-        </div>
-
-        <nav aria-label="Navegación principal">
-          <span className="nav-title">Espacio de trabajo</span>
-          {sections.map((section) => (
-            <button
-              className={`nav-item ${activeSection === section.label ? 'active' : ''}`}
-              key={section.label}
-              onClick={() => setActiveSection(section.label)}
-              type="button"
-            >
-              <span aria-hidden="true">{section.icon}</span>
-              {section.label}
-              {section.label === 'Aprobaciones' && pendingCount > 0 && (
-                <b className="nav-count">{pendingCount}</b>
-              )}
-            </button>
-          ))}
-        </nav>
-
-        <div className="sidebar-footer">
-          <div className="avatar">AM</div>
-          <div>
-            <strong>Alex Martínez</strong>
-            <span>Administrador</span>
-          </div>
-          <button className="more-button" type="button" aria-label="Más opciones">•••</button>
-        </div>
-      </aside>
+      <Sidebar
+        activeSection={activeSection}
+        onSectionChange={setActiveSection}
+        pendingCount={pendingCount}
+      />
 
       <main className="main-content">
         <header className="topbar">
@@ -296,7 +247,7 @@ const App: FC = () => {
           </section>
         ) : (
           <section className="panel placeholder-panel">
-            <div className="placeholder-icon">{sections.find((item) => item.label === activeSection)?.icon}</div>
+            <div className="placeholder-icon">✦</div>
             <h2>{activeSection}</h2>
             <p>Esta sección está lista para que empieces a trabajar. Selecciona otra opción para volver al resumen.</p>
             <button className="primary-button" type="button" onClick={() => setActiveSection('Resumen')}>Volver al resumen</button>

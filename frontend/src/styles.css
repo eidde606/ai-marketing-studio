@@ -661,3 +661,26 @@ h1 {
     flex-direction: column;
   }
 }
+
+/* Responsive layout for the fixed sidebar */
+
+@media (min-width: 768px) {
+  .main-content {
+    margin-left: 256px;
+    width: calc(100% - 256px);
+    flex: 0 0 calc(100% - 256px);
+  }
+}
+
+@media (max-width: 767px) {
+  .main-content {
+    width: 100%;
+    flex: 1 1 100%;
+    padding-top: 5rem;
+  }
+
+  .topbar {
+    flex-wrap: wrap;
+    gap: 1rem;
+  }
+}
