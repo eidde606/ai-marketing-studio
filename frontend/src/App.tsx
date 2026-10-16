@@ -19,10 +19,15 @@ import {
   updateDraft,
 
   type Draft,
+
   type ImageRevision,
+
   createImageRevision,
+
   getImageRevisions,
+
   acceptImageRevision,
+
   rejectImageRevision,
 
 } from './services/draftsApi';
@@ -123,7 +128,17 @@ const App: FC = () => {
 
   const [checkingAuth, setCheckingAuth] = useState(true);
 
-  const [activeSection, setActiveSection] = useState<Section>('Resumen');
+  const [activeSection, setActiveSection] = useState<Section>(() => {
+    try {
+      const saved = window.localStorage.getItem('ai-marketing-studio:section');
+      const validSections: Section[] = [
+        'Resumen', 'Campañas', 'Contenido', 'Equipo IA', 'Aprobaciones',
+      ];
+      return validSections.find((section) => section === saved) ?? 'Resumen';
+    } catch {
+      return 'Resumen';
+    }
+  });
 
   const [approvals, setApprovals] = useState<Draft[]>([]);
 
@@ -151,6 +166,28 @@ const App: FC = () => {
 
   const [selectedBusinessId, setSelectedBusinessId] = useState('');
 
+  // Save navigation locally; business selection is saved separately per user.
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('ai-marketing-studio:section', activeSection);
+    } catch {
+      // The application still works when browser storage is unavailable.
+    }
+  }, [activeSection]);
+
+  useEffect(() => {
+    if (!session || !selectedBusinessId) return;
+    try {
+      window.localStorage.setItem(
+        `ai-marketing-studio:business:${session.user.id}`,
+        selectedBusinessId,
+      );
+    } catch {
+      // Ignore unavailable browser storage.
+    }
+  }, [session?.user.id, selectedBusinessId]);
+
+
   const [businessError, setBusinessError] = useState<string | null>(null);
 
   const [showBusinessForm, setShowBusinessForm] = useState(false);
@@ -162,9 +199,13 @@ const App: FC = () => {
   const [imageErrors, setImageErrors] = useState<Record<string, string>>({});
 
   const [imageInstructions, setImageInstructions] = useState<Record<string, string>>({});
+
   const [showImageEditor, setShowImageEditor] = useState<Record<string, boolean>>({});
+
   const [revisions, setRevisions] = useState<Record<string, ImageRevision | null>>({});
+
   const [revisionBusyIds, setRevisionBusyIds] = useState<string[]>([]);
+
   const [revisionErrors, setRevisionErrors] = useState<Record<string, string>>({});
 
   const imageLocks = useRef(new Set<string>());
@@ -186,6 +227,7 @@ const App: FC = () => {
   };
 
   const toggleImageEditor = (draftId: string) => {
+
     if (!showImageEditor[draftId]) void refreshRevision(draftId);
 
     setShowImageEditor((current) => ({
@@ -284,7 +326,18 @@ const App: FC = () => {
 
         setBusinesses(data);
 
-        setSelectedBusinessId((current) => current || data[0]?.id || '');
+        setSelectedBusinessId((current) => {
+          let saved = '';
+          try {
+            saved = window.localStorage.getItem(
+              `ai-marketing-studio:business:${session.user.id}`,
+            ) ?? '';
+          } catch {
+            // Continue with a default if storage is unavailable.
+          }
+          const valid = (id: string) => data.some((business) => business.id === id);
+          return valid(current) ? current : valid(saved) ? saved : data[0]?.id ?? '';
+        });
 
         setBusinessError(null);
 
@@ -321,7 +374,9 @@ const App: FC = () => {
     setImageInstructions({});
 
     setShowImageEditor({});
+
     setRevisions({});
+
     setRevisionErrors({});
 
     setEditingId(null);
@@ -921,86 +976,163 @@ const App: FC = () => {
   };
 
   const refreshRevision = async (draftId: string) => {
+
     const businessId = selectedBusinessRef.current;
+
     try {
+
       const history = await getImageRevisions(draftId);
+
       if (selectedBusinessRef.current !== businessId) return;
+
       setRevisions((current) => ({
+
         ...current,
+
         [draftId]: history.find((r) => r.status === 'ready' || r.status === 'generating') ?? null,
+
       }));
+
       setRevisionErrors((current) => ({ ...current, [draftId]: '' }));
+
     } catch (error) {
+
       console.error('Could not load revisions', error);
+
       if (selectedBusinessRef.current === businessId) {
+
         setRevisionErrors((current) => ({ ...current, [draftId]: 'No se pudo consultar el estado de la edición.' }));
+
       }
+
     }
+
   };
 
   const handleCreateRevision = async (draft: Draft) => {
+
     const instructions = imageInstructions[draft.id]?.trim() ?? '';
+
     if (!instructions || instructions.length > 1000 || imageLocks.current.has(draft.id)) return;
+
     if (revisions[draft.id]?.status === 'ready' || revisions[draft.id]?.status === 'generating') return;
+
     if (!window.confirm('¿Crear una nueva imagen con IA? Esta solicitud puede generar un cargo adicional en OpenAI. La original se conservará.')) return;
+
     const businessId = draft.business_id;
+
     imageLocks.current.add(draft.id);
+
     setRevisionBusyIds((ids) => [...ids, draft.id]);
+
     setRevisionErrors((current) => ({ ...current, [draft.id]: '' }));
+
     try {
+
       const result = await createImageRevision(draft.id, instructions);
+
       if (selectedBusinessRef.current === businessId) {
+
         setRevisions((current) => ({ ...current, [draft.id]: result }));
+
       }
+
     } catch (error) {
+
       console.error('Revision request failed', error);
+
       if (selectedBusinessRef.current === businessId) {
+
         await refreshRevision(draft.id);
+
         setRevisionErrors((current) => ({ ...current, [draft.id]: 'No se pudo confirmar la generación. Consulta el estado antes de volver a intentarlo para evitar cargos duplicados.' }));
+
       }
+
     } finally {
+
       imageLocks.current.delete(draft.id);
+
       setRevisionBusyIds((ids) => ids.filter((id) => id !== draft.id));
+
     }
+
   };
 
   const handleDecideRevision = async (draft: Draft, decision: 'accept' | 'reject') => {
+
     const revision = revisions[draft.id];
+
     if (!revision || revision.status !== 'ready' || imageLocks.current.has(draft.id)) return;
+
     if (decision === 'accept' && !window.confirm('¿Usar la nueva versión para esta publicación?')) return;
+
     const businessId = draft.business_id;
+
     imageLocks.current.add(draft.id);
+
     setRevisionBusyIds((ids) => [...ids, draft.id]);
+
     setRevisionErrors((current) => ({ ...current, [draft.id]: '' }));
+
     try {
+
       if (decision === 'accept') {
+
         await acceptImageRevision(draft.id, revision.id);
+
         if (businessId) {
+
           const [freshDrafts, freshImage] = await Promise.all([
+
             getDrafts(businessId),
+
             getDraftImage(draft.id),
+
           ]);
+
           if (selectedBusinessRef.current === businessId) {
+
             setApprovals(freshDrafts);
+
             setImageUrls((current) => ({ ...current, [draft.id]: freshImage.image_url }));
+
           }
+
         }
+
       } else {
+
         await rejectImageRevision(draft.id, revision.id);
+
       }
+
       if (selectedBusinessRef.current === businessId) {
+
         setRevisions((current) => ({ ...current, [draft.id]: null }));
+
         setImageInstructions((current) => ({ ...current, [draft.id]: '' }));
+
       }
+
     } catch (error) {
+
       console.error('Revision decision failed', error);
+
       if (selectedBusinessRef.current === businessId) {
+
         setRevisionErrors((current) => ({ ...current, [draft.id]: 'No se pudo confirmar el cambio. Actualiza la página y comprueba el resultado.' }));
+
       }
+
     } finally {
+
       imageLocks.current.delete(draft.id);
+
       setRevisionBusyIds((ids) => ids.filter((id) => id !== draft.id));
+
     }
+
   };
 
   const draftMessages = (
@@ -2200,65 +2332,125 @@ const App: FC = () => {
                     ) : null}
 
                     {/* Spanish AI image editor */}
+
                     {draft.status === 'pending' && draft.image_status === 'completed' && !!draft.image_url && (
+
                       <div className="ai-image-editor">
+
                         <button type="button" className="ai-editor-toggle"
+
                           onClick={() => toggleImageEditor(draft.id)}
+
                           aria-expanded={!!showImageEditor[draft.id]}
+
                           aria-controls={`ai-editor-content-${draft.id}`}>
+
                           <span>✦ Editar imagen con IA</span>
+
                           <span aria-hidden="true">{showImageEditor[draft.id] ? '−' : '+'}</span>
+
                         </button>
+
                         {showImageEditor[draft.id] && (
+
                           <div id={`ai-editor-content-${draft.id}`} className="ai-editor-content">
+
                             <p>Describe en español los cambios. La imagen original se conservará hasta que aceptes una versión nueva.</p>
+
                             {revisionErrors[draft.id] && <p role="alert" style={{ color: '#b91c1c' }}>{revisionErrors[draft.id]}</p>}
+
                             {revisions[draft.id]?.status === 'ready' ? (
+
                               <>
+
                                 <p><strong>Versión nueva lista para revisar</strong></p>
+
                                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
+
                                   <div>
+
                                     <strong>Original</strong>
+
                                     {imageUrls[draft.id] ? <img src={imageUrls[draft.id]} alt="Imagen original" style={{ width: '100%', borderRadius: 12 }} /> : <button type="button" onClick={() => void handlePreviewImage(draft)}>Ver original</button>}
+
                                   </div>
+
                                   <div>
+
                                     <strong>Nueva versión</strong>
+
                                     {revisions[draft.id]?.image_url ? <img src={revisions[draft.id]!.image_url!} alt="Versión editada" style={{ width: '100%', borderRadius: 12 }} /> : <p>No se recibió una vista previa. Actualiza el estado.</p>}
+
                                   </div>
+
                                 </div>
+
                                 <div className="approval-actions">
+
                                   <button type="button" className="approve-button" disabled={revisionBusyIds.includes(draft.id)} onClick={() => void handleDecideRevision(draft, 'accept')}>✓ Aceptar nueva versión</button>
+
                                   <button type="button" className="reject-button" disabled={revisionBusyIds.includes(draft.id)} onClick={() => void handleDecideRevision(draft, 'reject')}>Conservar original</button>
+
                                 </div>
+
                               </>
+
                             ) : revisions[draft.id]?.status === 'generating' ? (
+
                               <p role="status">La nueva imagen se está generando. No solicites otra hasta confirmar el resultado.</p>
+
                             ) : (
+
                               <>
+
                                 <label htmlFor={`image-instructions-${draft.id}`}>Instrucciones para la IA</label>
+
                                 <textarea id={`image-instructions-${draft.id}`}
+
                                   value={imageInstructions[draft.id] || ''}
+
                                   onChange={(event) => updateImageInstructions(draft.id, event.target.value)}
+
                                   placeholder="Ejemplo: Mejora la iluminación y cambia el fondo por una mesa elegante."
+
                                   rows={4} maxLength={1000} disabled={revisionBusyIds.includes(draft.id)} />
+
                                 <div className="ai-editor-suggestions">
+
                                   {['Mejorar iluminación', 'Cambiar el fondo', 'Estilo más profesional'].map((suggestion) => (
+
                                     <button key={suggestion} type="button" disabled={revisionBusyIds.includes(draft.id)} onClick={() => addImageSuggestion(draft.id, suggestion)}>+ {suggestion}</button>
+
                                   ))}
+
                                 </div>
+
                                 <button type="button" className="primary-button ai-regenerate-button"
+
                                   disabled={revisionBusyIds.includes(draft.id) || !imageInstructions[draft.id]?.trim()}
+
                                   onClick={() => void handleCreateRevision(draft)}>
+
                                   {revisionBusyIds.includes(draft.id) ? 'Generando nueva versión...' : '✦ Generar nueva versión'}
+
                                 </button>
+
                                 <small>La generación con IA puede tener un costo adicional. Se solicitará confirmación antes de continuar.</small>
+
                               </>
+
                             )}
+
                             <button type="button" className="text-button" disabled={revisionBusyIds.includes(draft.id)} onClick={() => void refreshRevision(draft.id)}>Actualizar estado</button>
+
                           </div>
+
                         )}
+
                       </div>
+
                     )}
+
                   </div>
 
                 ))}
