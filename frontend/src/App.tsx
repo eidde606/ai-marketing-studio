@@ -1,6 +1,7 @@
 
 
 import { useEffect, useMemo, useRef, useState, type FC } from 'react';
+import SummaryCard from './components/SummaryCard';
 
 import {
 
@@ -90,37 +91,7 @@ function formatDraftDate(value: string): string {
 
 }
 
-const SummaryCard: FC<{
 
-  icon: string;
-
-  label: string;
-
-  value: string;
-
-  detail: string;
-
-  tone: string;
-
-}> = ({ icon, label, value, detail, tone }) => (
-
-  <article className="summary-card">
-
-    <div className={`summary-icon ${tone}`}>{icon}</div>
-
-    <div>
-
-      <span className="summary-label">{label}</span>
-
-      <strong>{value}</strong>
-
-      <small>{detail}</small>
-
-    </div>
-
-  </article>
-
-);
 
 const App: FC = () => {
 
