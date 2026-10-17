@@ -1,5 +1,6 @@
 import ApprovalPage from "./components/ApprovalPage";
 import DashboardOverview from "./components/DashboardOverview";
+import { useDraftImages } from "./hooks/useDraftImages";
 
 import { useEffect, useMemo, useRef, useState, type FC } from "react";
 
@@ -143,13 +144,14 @@ const App: FC = () => {
 
   const [imageErrors, setImageErrors] = useState<Record<string, string>>({});
 
-  const [imageInstructions, setImageInstructions] = useState<
-    Record<string, string>
-  >({});
-
-  const [showImageEditor, setShowImageEditor] = useState<
-    Record<string, boolean>
-  >({});
+  const {
+    imageInstructions,
+    setImageInstructions,
+    showImageEditor,
+    setShowImageEditor,
+    updateImageInstructions,
+    addImageSuggestion,
+  } = useDraftImages();
 
   const [revisions, setRevisions] = useState<
     Record<string, ImageRevision | null>
@@ -169,14 +171,6 @@ const App: FC = () => {
     selectedBusinessRef.current = selectedBusinessId;
   }, [selectedBusinessId]);
 
-  const updateImageInstructions = (draftId: string, value: string) => {
-    setImageInstructions((current) => ({
-      ...current,
-
-      [draftId]: value,
-    }));
-  };
-
   const toggleImageEditor = (draftId: string) => {
     if (!showImageEditor[draftId]) void refreshRevision(draftId);
 
@@ -185,24 +179,6 @@ const App: FC = () => {
 
       [draftId]: !current[draftId],
     }));
-  };
-
-  const addImageSuggestion = (draftId: string, suggestion: string) => {
-    setImageInstructions((current) => {
-      const existing = current[draftId]?.trim() || "";
-
-      return {
-        ...current,
-
-        [draftId]: [existing, suggestion]
-
-          .filter(Boolean)
-
-          .join(existing ? ". " : "")
-
-          .slice(0, 1000),
-      };
-    });
   };
 
   useEffect(() => {
@@ -339,7 +315,7 @@ const App: FC = () => {
     return () => {
       active = false;
     };
-  }, [selectedBusinessId, userId]);
+  }, [selectedBusinessId, userId, setImageInstructions, setShowImageEditor]);
 
   const visibleDrafts = useMemo(
     () => approvals.filter((draft) => draft.business_id === selectedBusinessId),
