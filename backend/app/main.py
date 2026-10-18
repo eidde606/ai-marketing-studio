@@ -1,5 +1,7 @@
-
 from datetime import datetime, timedelta, timezone
+import os
+import httpx
+from app.facebook_service import get_page_info, publish_text_post, publish_image_post
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
@@ -20,7 +22,6 @@ from app.storage_service import (
     get_marketing_image_url,
     download_marketing_image,
 )
-
 
 app = FastAPI()
 
@@ -43,6 +44,7 @@ app.add_middleware(
 # --------------------------------------------------
 # Request Models
 # --------------------------------------------------
+
 
 class DraftCreate(BaseModel):
     business_id: str
@@ -81,6 +83,7 @@ class ImageRevisionRequest(BaseModel):
 # Helpers
 # --------------------------------------------------
 
+
 def require_draft(db: Session, draft_id: str) -> Draft:
     draft = db.get(Draft, draft_id)
 
@@ -113,13 +116,7 @@ def lock_draft_revisions(db: Session, draft_id: str) -> None:
     for the same draft across concurrent API requests.
     """
 
-    db.execute(
-        select(
-            func.pg_advisory_xact_lock(
-                func.hashtext(draft_id)
-            )
-        )
-    )
+    db.execute(select(func.pg_advisory_xact_lock(func.hashtext(draft_id))))
 
 
 def require_revision(
@@ -144,9 +141,7 @@ def revision_response(revision: ImageRevision) -> dict:
     preview_url = None
 
     if revision.revised_image_path:
-        preview_url = get_marketing_image_url(
-            revision.revised_image_path
-        )
+        preview_url = get_marketing_image_url(revision.revised_image_path)
 
     return {
         "id": revision.id,
@@ -162,14 +157,169 @@ def revision_response(revision: ImageRevision) -> dict:
 # Public Endpoints
 # --------------------------------------------------
 
+
 @app.get("/health")
 def health():
     return {"status": "healthy"}
 
 
 # --------------------------------------------------
+# Facebook Endpoints
+# --------------------------------------------------
+
+
+@protected.get("/facebook/page")
+async def get_facebook_page():
+    page_id = os.getenv("FACEBOOK_PAGE_ID")
+    access_token = os.getenv("FACEBOOK_PAGE_ACCESS_TOKEN")
+
+    if not page_id or not access_token:
+        raise HTTPException(
+            status_code=503,
+            detail="Facebook is not configured",
+        )
+
+    try:
+        return await get_page_info(page_id, access_token)
+
+    except httpx.HTTPStatusError:
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to retrieve Facebook Page",
+        )
+
+    except httpx.RequestError:
+        raise HTTPException(
+            status_code=502,
+            detail="Facebook connection failed",
+        )
+
+
+@protected.post("/drafts/{draft_id}/publish-facebook")
+async def publish_draft_to_facebook(
+    draft_id: str,
+    db: Session = Depends(get_db),
+):
+    page_id = os.getenv("FACEBOOK_PAGE_ID")
+    access_token = os.getenv("FACEBOOK_PAGE_ACCESS_TOKEN")
+    if not page_id or not access_token:
+        raise HTTPException(status_code=503, detail="Facebook is not configured")
+
+    claimed = db.execute(
+        update(Draft)
+        .where(
+            Draft.id == draft_id,
+            Draft.status == "approved",
+            Draft.facebook_publish_status == "not_published",
+            Draft.facebook_post_id.is_(None),
+        )
+        .values(facebook_publish_status="publishing")
+        .returning(Draft.id)
+    )
+    if claimed.scalar_one_or_none() is None:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Draft is not eligible for Facebook publishing")
+    db.commit()
+
+    draft = db.get(Draft, draft_id)
+    try:
+        image_bytes = (
+            download_marketing_image(draft.image_url, draft.business_id)
+            if draft.image_url else None
+        )
+        if image_bytes is not None:
+            # Validate format before sending any request to Facebook.
+            if not (
+                image_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+                or image_bytes.startswith(b"\xff\xd8\xff")
+                or (image_bytes.startswith(b"RIFF") and image_bytes[8:12] == b"WEBP")
+            ):
+                raise ValueError("Unsupported image data")
+    except Exception:
+        db.rollback()
+        draft = db.get(Draft, draft_id)
+        draft.facebook_publish_status = "not_published"
+        db.commit()
+        raise HTTPException(status_code=502, detail="Unable to prepare the marketing image")
+
+    try:
+        if image_bytes is not None:
+            response = await publish_image_post(
+                page_id=page_id, access_token=access_token,
+                message=draft.caption, image_bytes=image_bytes,
+            )
+            post_id = response.get("post_id") or response.get("id")
+        else:
+            response = await publish_text_post(
+                page_id=page_id, access_token=access_token, message=draft.caption,
+            )
+            post_id = response.get("id")
+
+        if not post_id:
+            raise ValueError("Facebook returned no publication ID")
+        draft.facebook_post_id = str(post_id)
+        draft.facebook_publish_status = "published"
+        draft.published_at = datetime.now(timezone.utc)
+        db.commit()
+        return {"status": "published", "facebook_post_id": str(post_id)}
+
+    except httpx.HTTPStatusError as exc:
+        db.rollback()
+        draft = db.get(Draft, draft_id)
+        # Explicit Facebook client rejection: request did not publish.
+        # Rate limits and 5xx are treated conservatively as uncertain.
+        rejected = 400 <= exc.response.status_code < 500 and exc.response.status_code != 429
+        draft.facebook_publish_status = "not_published" if rejected else "needs_review"
+        db.commit()
+        if rejected:
+            raise HTTPException(
+                status_code=502,
+                detail="Facebook rejected the request. Check Page token, permissions and image format.",
+            )
+        raise HTTPException(status_code=502, detail="Facebook publishing outcome requires review")
+    except Exception:
+        db.rollback()
+        draft = db.get(Draft, draft_id)
+        draft.facebook_publish_status = "needs_review"
+        db.commit()
+        raise HTTPException(status_code=502, detail="Facebook publishing outcome requires review")
+
+
+class FacebookRecoveryRequest(BaseModel):
+    confirmed_not_published: bool
+
+
+@protected.post("/drafts/{draft_id}/reset-facebook-publishing")
+def reset_facebook_publishing(
+    draft_id: str,
+    request: FacebookRecoveryRequest,
+    db: Session = Depends(get_db),
+):
+    """Only after manually confirming the post is absent on Facebook."""
+    if not request.confirmed_not_published:
+        raise HTTPException(status_code=400, detail="Confirm the post is absent on Facebook")
+    result = db.execute(
+        update(Draft)
+        .where(
+            Draft.id == draft_id,
+            Draft.status == "approved",
+            Draft.facebook_publish_status == "needs_review",
+            Draft.facebook_post_id.is_(None),
+        )
+        .values(facebook_publish_status="not_published")
+        .returning(Draft.id)
+    )
+    if result.scalar_one_or_none() is None:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Draft cannot be reset")
+    db.commit()
+    return {"status": "not_published"}
+
+
+# --------------------------------------------------
 # Draft Endpoints
 # --------------------------------------------------
+
 
 @protected.post("/drafts", status_code=201)
 def create_draft(
@@ -206,9 +356,7 @@ def list_drafts(
             detail="Business not found",
         )
 
-    return db.scalars(
-        select(Draft).where(Draft.business_id == business_id)
-    ).all()
+    return db.scalars(select(Draft).where(Draft.business_id == business_id)).all()
 
 
 @protected.patch("/drafts/{draft_id}/approve")
@@ -262,11 +410,11 @@ def reject_draft(
 # AI Content Generation
 # --------------------------------------------------
 
+
 @protected.post(
     "/businesses/{business_id}/generate-content",
     status_code=201,
 )
-
 def generate_content(
     business_id: str,
     db: Session = Depends(get_db),
@@ -321,10 +469,10 @@ def generate_content(
     return draft
 
 
-
 # --------------------------------------------------
 # Business Endpoints
 # --------------------------------------------------
+
 
 @protected.post("/businesses", status_code=201)
 def create_business(
@@ -350,6 +498,7 @@ def list_businesses(
 # --------------------------------------------------
 # AI Image Generation
 # --------------------------------------------------
+
 
 @protected.post("/drafts/{draft_id}/generate-image")
 def generate_draft_image(
@@ -479,6 +628,7 @@ def generate_draft_image(
 # Original Image Preview
 # --------------------------------------------------
 
+
 @protected.get("/drafts/{draft_id}/image")
 def get_draft_image(
     draft_id: str,
@@ -508,14 +658,13 @@ def get_draft_image(
 # Recover Interrupted Original Image Generation
 # --------------------------------------------------
 
+
 @protected.post("/drafts/{draft_id}/reset-image")
 def reset_stuck_image(
     draft_id: str,
     db: Session = Depends(get_db),
 ):
-    cutoff = datetime.now(timezone.utc) - timedelta(
-        minutes=15
-    )
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=15)
 
     result = db.execute(
         update(Draft)
@@ -554,8 +703,7 @@ def reset_stuck_image(
         "draft_id": draft_id,
         "image_status": "failed",
         "message": (
-            "Generation marked as failed. "
-            "A new attempt can be requested manually."
+            "Generation marked as failed. " "A new attempt can be requested manually."
         ),
     }
 
@@ -563,6 +711,7 @@ def reset_stuck_image(
 # --------------------------------------------------
 # AI Image Revisions
 # --------------------------------------------------
+
 
 @protected.post(
     "/drafts/{draft_id}/image-revisions",
@@ -663,10 +812,7 @@ def create_image_revision(
 
         raise HTTPException(
             status_code=502,
-            detail=(
-                "Image editing failed. "
-                "The original image was not changed."
-            ),
+            detail=("Image editing failed. " "The original image was not changed."),
         ) from exc
 
     lock_draft_revisions(db, draft_id)
@@ -674,10 +820,7 @@ def create_image_revision(
     db.expire_all()
     draft = require_draft(db, draft_id)
 
-    if (
-        draft.status != "pending"
-        or draft.image_url != original_path
-    ):
+    if draft.status != "pending" or draft.image_url != original_path:
         db.execute(
             update(ImageRevision)
             .where(
@@ -742,15 +885,10 @@ def list_image_revisions(
         .order_by(ImageRevision.created_at.desc())
     ).all()
 
-    return [
-        revision_response(revision)
-        for revision in revisions
-    ]
+    return [revision_response(revision) for revision in revisions]
 
 
-@protected.post(
-    "/drafts/{draft_id}/image-revisions/{revision_id}/accept"
-)
+@protected.post("/drafts/{draft_id}/image-revisions/{revision_id}/accept")
 def accept_image_revision(
     draft_id: str,
     revision_id: str,
@@ -773,10 +911,7 @@ def accept_image_revision(
         revision_id,
     )
 
-    if (
-        revision.status != "ready"
-        or not revision.revised_image_path
-    ):
+    if revision.status != "ready" or not revision.revised_image_path:
         raise HTTPException(
             status_code=409,
             detail="Only ready revisions can be accepted",
@@ -785,10 +920,7 @@ def accept_image_revision(
     if draft.image_url != revision.original_image_path:
         raise HTTPException(
             status_code=409,
-            detail=(
-                "The draft image has changed since this "
-                "revision was created."
-            ),
+            detail=("The draft image has changed since this " "revision was created."),
         )
 
     draft.image_url = revision.revised_image_path
@@ -800,15 +932,11 @@ def accept_image_revision(
         "draft_id": draft_id,
         "revision_id": revision_id,
         "status": "accepted",
-        "image_url": get_marketing_image_url(
-            revision.revised_image_path
-        ),
+        "image_url": get_marketing_image_url(revision.revised_image_path),
     }
 
 
-@protected.post(
-    "/drafts/{draft_id}/image-revisions/{revision_id}/reject"
-)
+@protected.post("/drafts/{draft_id}/image-revisions/{revision_id}/reject")
 def reject_image_revision(
     draft_id: str,
     revision_id: str,

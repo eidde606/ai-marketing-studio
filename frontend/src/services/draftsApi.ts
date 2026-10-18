@@ -1,18 +1,9 @@
+import { supabase } from "./supabaseClient";
 
-import { supabase } from './supabaseClient';
-
-export type ImageStatus =
-  | 'not_started'
-  | 'generating'
-  | 'completed'
-  | 'failed';
+export type ImageStatus = "not_started" | "generating" | "completed" | "failed";
 
 export type ImageRevisionStatus =
-  | 'generating'
-  | 'ready'
-  | 'accepted'
-  | 'rejected'
-  | 'failed';
+  "generating" | "ready" | "accepted" | "rejected" | "failed";
 
 export type Draft = {
   id: string;
@@ -20,7 +11,11 @@ export type Draft = {
   caption: string;
   platform: string;
   status: string;
-  source: 'manual' | 'ai';
+  facebook_post_id: string | null;
+  facebook_publish_status:
+    "not_published" | "publishing" | "published" | "needs_review";
+  published_at: string | null;
+  source: "manual" | "ai";
   created_at: string;
   business_id: string | null;
 
@@ -51,36 +46,27 @@ export type ImageRevision = {
 export type ImageRevisionDecisionResponse = {
   draft_id: string;
   revision_id: string;
-  status: 'accepted' | 'rejected';
+  status: "accepted" | "rejected";
   image_url?: string;
   message?: string;
 };
 
 const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL?.trim() ||
-  'http://127.0.0.1:8000';
+  import.meta.env.VITE_API_BASE_URL?.trim() || "http://127.0.0.1:8000";
 
-async function request<T>(
-  path: string,
-  options?: RequestInit,
-): Promise<T> {
+async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const {
     data: { session },
     error,
   } = await supabase.auth.getSession();
 
   if (error || !session?.access_token) {
-    throw new Error(
-      'Authentication required. Please sign in.',
-    );
+    throw new Error("Authentication required. Please sign in.");
   }
 
   const headers = new Headers(options?.headers);
 
-  headers.set(
-    'Authorization',
-    `Bearer ${session.access_token}`,
-  );
+  headers.set("Authorization", `Bearer ${session.access_token}`);
 
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
@@ -92,7 +78,7 @@ async function request<T>(
 
     throw new Error(
       `Request failed with status ${response.status}: ${
-        details || 'Unknown error'
+        details || "Unknown error"
       }`,
     );
   }
@@ -105,31 +91,38 @@ async function request<T>(
 // --------------------------------------------------
 
 // Get drafts belonging to the selected business.
-export function getDrafts(
-  businessId: string,
-): Promise<Draft[]> {
+export function getDrafts(businessId: string): Promise<Draft[]> {
   return request<Draft[]>(
     `/drafts?business_id=${encodeURIComponent(businessId)}`,
   );
 }
 
 // Approve a pending draft.
-export function approveDraft(
-  id: string,
-): Promise<Draft> {
-  return request<Draft>(
-    `/drafts/${encodeURIComponent(id)}/approve`,
-    { method: 'PATCH' },
-  );
+export function approveDraft(id: string): Promise<Draft> {
+  return request<Draft>(`/drafts/${encodeURIComponent(id)}/approve`, {
+    method: "PATCH",
+  });
 }
 
 // Generate AI marketing content.
-export function generateContent(
-  businessId: string,
-): Promise<Draft> {
+export function generateContent(businessId: string): Promise<Draft> {
   return request<Draft>(
     `/businesses/${encodeURIComponent(businessId)}/generate-content`,
-    { method: 'POST' },
+    { method: "POST" },
+  );
+}
+
+export type FacebookPublishResponse = {
+  status: "published";
+  facebook_post_id: string;
+};
+
+export function publishDraftToFacebook(
+  id: string,
+): Promise<FacebookPublishResponse> {
+  return request<FacebookPublishResponse>(
+    `/drafts/${encodeURIComponent(id)}/publish-facebook`,
+    { method: "POST" },
   );
 }
 
@@ -138,26 +131,20 @@ export function updateDraft(
   id: string,
   data: { title: string; caption: string },
 ): Promise<Draft> {
-  return request<Draft>(
-    `/drafts/${encodeURIComponent(id)}`,
-    {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(data),
+  return request<Draft>(`/drafts/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
     },
-  );
+    body: JSON.stringify(data),
+  });
 }
 
 // Reject a pending draft.
-export function rejectDraft(
-  id: string,
-): Promise<Draft> {
-  return request<Draft>(
-    `/drafts/${encodeURIComponent(id)}/reject`,
-    { method: 'PATCH' },
-  );
+export function rejectDraft(id: string): Promise<Draft> {
+  return request<Draft>(`/drafts/${encodeURIComponent(id)}/reject`, {
+    method: "PATCH",
+  });
 }
 
 // --------------------------------------------------
@@ -166,23 +153,17 @@ export function rejectDraft(
 
 // Generate an image for a pending draft.
 // This endpoint makes a paid OpenAI API request.
-export function generateDraftImage(
-  id: string,
-): Promise<DraftImageResponse> {
+export function generateDraftImage(id: string): Promise<DraftImageResponse> {
   return request<DraftImageResponse>(
     `/drafts/${encodeURIComponent(id)}/generate-image`,
-    { method: 'POST' },
+    { method: "POST" },
   );
 }
 
 // Retrieve a temporary preview URL for an existing image.
 // This does NOT generate a new image.
-export function getDraftImage(
-  id: string,
-): Promise<DraftImageResponse> {
-  return request<DraftImageResponse>(
-    `/drafts/${encodeURIComponent(id)}/image`,
-  );
+export function getDraftImage(id: string): Promise<DraftImageResponse> {
+  return request<DraftImageResponse>(`/drafts/${encodeURIComponent(id)}/image`);
 }
 
 // --------------------------------------------------
@@ -205,22 +186,22 @@ export function createImageRevision(
 
   if (!trimmedInstructions) {
     return Promise.reject(
-      new Error('Escribe las instrucciones para editar la imagen.'),
+      new Error("Escribe las instrucciones para editar la imagen."),
     );
   }
 
   if (trimmedInstructions.length > 1000) {
     return Promise.reject(
-      new Error('Las instrucciones no pueden superar 1000 caracteres.'),
+      new Error("Las instrucciones no pueden superar 1000 caracteres."),
     );
   }
 
   return request<ImageRevision>(
     `/drafts/${encodeURIComponent(draftId)}/image-revisions`,
     {
-      method: 'POST',
+      method: "POST",
       headers: {
-        'Content-Type': 'application/json',
+        "Content-Type": "application/json",
       },
       body: JSON.stringify({
         instructions: trimmedInstructions,
@@ -235,9 +216,7 @@ export function createImageRevision(
  * Includes temporary signed URLs for available images.
  * Does not call the paid OpenAI image API.
  */
-export function getImageRevisions(
-  draftId: string,
-): Promise<ImageRevision[]> {
+export function getImageRevisions(draftId: string): Promise<ImageRevision[]> {
   return request<ImageRevision[]>(
     `/drafts/${encodeURIComponent(draftId)}/image-revisions`,
   );
@@ -258,7 +237,7 @@ export function acceptImageRevision(
   return request<ImageRevisionDecisionResponse>(
     `/drafts/${encodeURIComponent(draftId)}/image-revisions/${encodeURIComponent(revisionId)}/accept`,
     {
-      method: 'POST',
+      method: "POST",
     },
   );
 }
@@ -276,7 +255,7 @@ export function rejectImageRevision(
   return request<ImageRevisionDecisionResponse>(
     `/drafts/${encodeURIComponent(draftId)}/image-revisions/${encodeURIComponent(revisionId)}/reject`,
     {
-      method: 'POST',
+      method: "POST",
     },
   );
 }

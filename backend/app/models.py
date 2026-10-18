@@ -1,4 +1,3 @@
-
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -55,6 +54,24 @@ class Draft(Base):
     business_id: Mapped[str | None] = mapped_column(
         String(36),
         ForeignKey("businesses.id"),
+        nullable=True,
+    )
+
+    # Facebook publishing
+    facebook_post_id: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
+    facebook_publish_status: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="not_published",
+        server_default="not_published",
+    )
+
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
         nullable=True,
     )
 
