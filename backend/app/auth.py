@@ -1,4 +1,3 @@
-
 import os
 from pathlib import Path
 
@@ -47,9 +46,8 @@ def verify_token(
             algorithms=["ES256", "RS256"],
             audience="authenticated",
             issuer=SUPABASE_ISSUER,
-            options={
-                "require": ["exp", "iat", "iss", "aud", "sub"]
-            },
+            leeway=30,
+            options={"require": ["exp", "iat", "iss", "aud", "sub"]},
         )
 
         # Only Ángela's Supabase account is authorized.
@@ -60,7 +58,6 @@ def verify_token(
             )
 
         return payload
-
 
     except HTTPException:
         raise
