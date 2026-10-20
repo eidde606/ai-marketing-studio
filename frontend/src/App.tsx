@@ -1,30 +1,3 @@
-import ApprovalPage from "./components/ApprovalPage";
-import DashboardOverview from "./components/DashboardOverview";
-import { useDraftImages } from "./hooks/useDraftImages";
-import { useEffect, useMemo, useRef, useState, type FC } from "react";
-import {
-  approveDraft,
-  publishDraftToFacebook,
-  generateContent,
-  generateDraftImage,
-  getDraftImage,
-  getDrafts,
-  rejectDraft,
-  updateDraft,
-  type Draft,
-  type ImageRevision,
-  createImageRevision,
-  getImageRevisions,
-  acceptImageRevision,
-  rejectImageRevision,
-} from "./services/draftsApi";
-import Sidebar, { type Section } from "./components/Sidebar";
-import { getBusinesses, type Business } from "./services/businessesApi";
-import BusinessForm from "./components/BusinessForm";
-import type { Session } from "@supabase/supabase-js";
-import { supabase } from "./services/supabaseClient";
-import AuthPage from "./components/AuthPage";
-import { ChevronDown, LogOut } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -33,6 +6,34 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import type { Session } from "@supabase/supabase-js";
+import { ChevronDown, LogOut } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type FC } from "react";
+import ApprovalPage from "./components/ApprovalPage";
+import AuthPage from "./components/AuthPage";
+import BusinessForm from "./components/BusinessForm";
+import DashboardOverview from "./components/DashboardOverview";
+import FacebookConnection from "./components/FacebookConnection";
+import Sidebar, { type Section } from "./components/Sidebar";
+import { useDraftImages } from "./hooks/useDraftImages";
+import { getBusinesses, type Business } from "./services/businessesApi";
+import {
+  acceptImageRevision,
+  approveDraft,
+  createImageRevision,
+  generateContent,
+  generateDraftImage,
+  getDraftImage,
+  getDrafts,
+  getImageRevisions,
+  publishDraftToFacebook,
+  rejectDraft,
+  rejectImageRevision,
+  updateDraft,
+  type Draft,
+  type ImageRevision,
+} from "./services/draftsApi";
+import { supabase } from "./services/supabaseClient";
 function formatDraftDate(value: string): string {
   if (!value) return "Fecha no disponible";
   const normalized = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value)
@@ -762,6 +763,9 @@ const App: FC = () => {
             )}
           </div>
         </header>
+
+        <FacebookConnection businessId={selectedBusinessId} />
+
         {showBusinessForm ? (
           <BusinessForm
             onCreated={handleBusinessCreated}

@@ -5,6 +5,7 @@ from app.facebook_service import get_page_info, publish_text_post, publish_image
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
+from app.facebook_auth_routes import router as facebook_auth_router
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, update
@@ -981,3 +982,4 @@ def reject_image_revision(
 # --------------------------------------------------
 
 app.include_router(protected)
+app.include_router(facebook_auth_router)

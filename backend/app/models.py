@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, String
+from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -189,4 +189,98 @@ class ImageRevision(Base):
 
     draft: Mapped["Draft"] = relationship(
         back_populates="image_revisions",
+    )
+
+
+class SocialAccount(Base):
+    __tablename__ = "social_accounts"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "platform",
+            "platform_account_id",
+            name="uq_social_accounts_platform_account",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+
+    business_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("businesses.id"),
+        nullable=False,
+        index=True,
+    )
+
+    platform: Mapped[str] = mapped_column(String, nullable=False)
+
+    platform_account_id: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+    )
+
+    account_name: Mapped[str] = mapped_column(String, nullable=False)
+
+    encrypted_access_token: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+    )
+
+    token_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    connection_status: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="connected",
+        server_default="connected",
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    business: Mapped["Business"] = relationship()
+
+
+class FacebookOAuthState(Base):
+    __tablename__ = "facebook_oauth_states"
+
+    state_hash: Mapped[str] = mapped_column(
+        String(64),
+        primary_key=True,
+    )
+
+    business_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("businesses.id"),
+        nullable=False,
+    )
+
+    user_id: Mapped[str] = mapped_column(
+        String(36),
+        nullable=False,
+    )
+
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+
+    encrypted_pages: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
+    selection_token_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        unique=True,
     )
