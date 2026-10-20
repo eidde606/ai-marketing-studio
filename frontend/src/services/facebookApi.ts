@@ -73,6 +73,14 @@ export type FacebookConnectionResult = {
   page_name: string;
 };
 
+export type ConnectedFacebookAccount = {
+  id: string;
+  platform: string;
+  page_id: string;
+  page_name: string;
+  connection_status: string;
+};
+
 async function getFacebookAccessToken(): Promise<string> {
   const {
     data: { session },
@@ -132,4 +140,28 @@ export async function selectFacebookPage(
   }
 
   return response.json() as Promise<FacebookConnectionResult>;
+}
+
+export async function getConnectedFacebookAccounts(
+  businessId: string,
+): Promise<ConnectedFacebookAccount[]> {
+  const accessToken = await getFacebookAccessToken();
+
+  const url = new URL(`${API_BASE_URL}/auth/facebook/accounts`);
+  url.searchParams.set("business_id", businessId);
+
+  const response = await fetch(url.toString(), {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error("No se pudieron recuperar las cuentas de Facebook.");
+  }
+
+  const data: { accounts: ConnectedFacebookAccount[] } =
+    await response.json();
+
+  return data.accounts;
 }

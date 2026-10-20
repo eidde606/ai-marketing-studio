@@ -1,9 +1,11 @@
 import { ChevronRight, Facebook } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
+  getConnectedFacebookAccounts,
   getFacebookHandoff,
   selectFacebookPage,
   startFacebookConnection,
+  type ConnectedFacebookAccount,
   type FacebookPage,
 } from "../services/facebookApi";
 
@@ -13,15 +15,43 @@ type Props = {
 
 export default function FacebookConnection({ businessId }: Props) {
   const [pages, setPages] = useState<FacebookPage[]>([]);
-  const [handoffToken, setHandoffToken] = useState<string | null>(null);
+
+  const [connectedAccounts, setConnectedAccounts] = useState<
+    ConnectedFacebookAccount[]
+  >([]);
+
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [handoffToken, setHandoffToken] = useState<string | null>(() => {
+    const hash = window.location.hash;
+    console.log(
+      "Facebook handoff present:",
+      hash.startsWith("#facebook_handoff="),
+    );
+
+    if (!hash.startsWith("#facebook_handoff=")) {
+      return null;
+    }
+
+    const token = hash.substring("#facebook_handoff=".length);
+
+    return token || null;
+  });
+
   const [handoffBusinessId, setHandoffBusinessId] = useState<string | null>(
     null,
   );
 
   useEffect(() => {
     if (!handoffToken) return;
+
+    if (window.location.hash.startsWith("#facebook_handoff=")) {
+      window.history.replaceState(
+        null,
+        "",
+        window.location.pathname + window.location.search,
+      );
+    }
 
     const token = handoffToken;
     let active = true;
@@ -53,6 +83,32 @@ export default function FacebookConnection({ businessId }: Props) {
       active = false;
     };
   }, [handoffToken]);
+
+  useEffect(() => {
+    if (!businessId) return;
+
+    let active = true;
+
+    async function loadConnectedAccounts() {
+      try {
+        const accounts = await getConnectedFacebookAccounts(businessId);
+
+        if (active) {
+          setConnectedAccounts(accounts);
+        }
+      } catch {
+        if (active) {
+          setMessage("No se pudo verificar la conexión de Facebook.");
+        }
+      }
+    }
+
+    void loadConnectedAccounts();
+
+    return () => {
+      active = false;
+    };
+  }, [businessId]);
 
   async function handleConnect() {
     if (!businessId) return;
@@ -140,6 +196,15 @@ export default function FacebookConnection({ businessId }: Props) {
           Procesando conexión...
         </p>
       )}
+
+      {connectedAccounts.map((account) => (
+        <p key={account.id} className="facebook-connection-message">
+          {account.page_name} —{" "}
+          {account.connection_status === "connected"
+            ? "Conectada"
+            : account.connection_status}
+        </p>
+      ))}
 
       {message && (
         <p className="facebook-connection-message" role="status">

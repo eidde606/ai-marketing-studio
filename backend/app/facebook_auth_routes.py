@@ -33,6 +33,43 @@ from fastapi.responses import RedirectResponse
 router = APIRouter(prefix="/auth/facebook", tags=["Facebook OAuth"])
 
 
+@router.get("/accounts")
+def get_connected_facebook_accounts(
+    business_id: str,
+    user: dict = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
+    """Return connected Facebook Pages without exposing access tokens."""
+
+    business = db.get(Business, business_id)
+
+    if business is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Business not found",
+        )
+
+    accounts = db.scalars(
+        select(SocialAccount).where(
+            SocialAccount.business_id == business_id,
+            SocialAccount.platform == "facebook",
+        )
+    ).all()
+
+    return {
+        "accounts": [
+            {
+                "id": account.id,
+                "platform": account.platform,
+                "page_id": account.platform_account_id,
+                "page_name": account.account_name,
+                "connection_status": account.connection_status,
+            }
+            for account in accounts
+        ]
+    }
+
+
 @router.get("/start")
 def start_facebook_connection(
     business_id: str,
