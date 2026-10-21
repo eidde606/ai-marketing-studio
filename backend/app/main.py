@@ -3,6 +3,7 @@ import os
 import httpx
 from app.facebook_service import get_page_info, publish_text_post, publish_image_post
 from uuid import uuid4
+from app.facebook_service import get_post_insights
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from app.facebook_auth_routes import router as facebook_auth_router
@@ -997,6 +998,79 @@ def reject_image_revision(
         "revision_id": revision_id,
         "status": "rejected",
         "message": "Original image preserved",
+    }
+
+
+@protected.get("/drafts/{draft_id}/analytics/facebook")
+async def get_facebook_draft_analytics(
+    draft_id: str,
+    db: Session = Depends(get_db),
+):
+    # Find the draft.
+    draft = db.get(Draft, draft_id)
+
+    if draft is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Draft not found",
+        )
+
+    # Only published drafts have Facebook analytics.
+    if (
+        draft.facebook_publish_status != "published"
+        or not draft.facebook_post_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Draft has not been published to Facebook",
+        )
+
+    # Find the connected Facebook account for this business.
+    account = db.scalar(
+        select(SocialAccount).where(
+            SocialAccount.business_id == draft.business_id,
+            SocialAccount.platform == "facebook",
+            SocialAccount.connection_status == "connected",
+        )
+    )
+
+    if account is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Connect a Facebook Page to this business first",
+        )
+
+    access_token = decrypt_token(account.encrypted_access_token)
+
+    # Request engagement information from Facebook.
+    try:
+        data = await get_post_insights(
+            post_id=draft.facebook_post_id,
+            access_token=access_token,
+        )
+    except httpx.HTTPStatusError:
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to retrieve Facebook analytics",
+        )
+    except httpx.RequestError:
+        raise HTTPException(
+            status_code=502,
+            detail="Facebook analytics service is unavailable",
+        )
+
+    return {
+        "draft_id": draft.id,
+        "platform": "facebook",
+        "post_id": draft.facebook_post_id,
+        "reactions": data.get("reactions", {}).get(
+            "summary", {}
+        ).get("total_count", 0),
+        "comments": data.get("comments", {}).get(
+            "summary", {}
+        ).get("total_count", 0),
+        "shares": data.get("shares", {}).get("count", 0),
+        "permalink_url": data.get("permalink_url"),
     }
 
 

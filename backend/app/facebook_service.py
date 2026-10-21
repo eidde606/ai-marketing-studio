@@ -66,3 +66,22 @@ async def publish_image_post(
         )
         response.raise_for_status()
         return response.json()
+
+
+async def get_post_insights(
+    post_id: str,
+    access_token: str,
+) -> dict:
+    """Retrieve basic engagement information for a Facebook post."""
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await client.get(
+            f"{GRAPH_API_URL}/{post_id}",
+            params={
+                "fields": "id,created_time,permalink_url,shares,"
+                "reactions.limit(0).summary(true),"
+                "comments.limit(0).summary(true)",
+                "access_token": access_token,
+            },
+        )
+        response.raise_for_status()
+        return response.json()
