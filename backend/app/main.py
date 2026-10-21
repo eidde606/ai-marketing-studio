@@ -13,7 +13,8 @@ from sqlalchemy.orm import Session
 
 from app.auth import verify_token
 from app.database import get_db
-from app.models import Business, Draft, ImageRevision
+from app.models import Business, Draft, ImageRevision, SocialAccount
+from app.token_service import decrypt_token
 from app.ai_service import generate_marketing_content
 from app.image_service import (
     generate_marketing_image,
@@ -173,27 +174,15 @@ def health():
 async def get_facebook_page():
     page_id = os.getenv("FACEBOOK_PAGE_ID")
     access_token = os.getenv("FACEBOOK_PAGE_ACCESS_TOKEN")
-
     if not page_id or not access_token:
-        raise HTTPException(
-            status_code=503,
-            detail="Facebook is not configured",
-        )
+        raise HTTPException(status_code=503, detail="Facebook is not configured")
 
     try:
         return await get_page_info(page_id, access_token)
-
     except httpx.HTTPStatusError:
-        raise HTTPException(
-            status_code=502,
-            detail="Unable to retrieve Facebook Page",
-        )
-
+        raise HTTPException(status_code=502, detail="Unable to retrieve Facebook Page")
     except httpx.RequestError:
-        raise HTTPException(
-            status_code=502,
-            detail="Facebook connection failed",
-        )
+        raise HTTPException(status_code=502, detail="Facebook connection failed")
 
 
 @protected.post("/drafts/{draft_id}/publish-facebook")
@@ -201,10 +190,27 @@ async def publish_draft_to_facebook(
     draft_id: str,
     db: Session = Depends(get_db),
 ):
-    page_id = os.getenv("FACEBOOK_PAGE_ID")
-    access_token = os.getenv("FACEBOOK_PAGE_ACCESS_TOKEN")
-    if not page_id or not access_token:
-        raise HTTPException(status_code=503, detail="Facebook is not configured")
+    draft = db.get(Draft, draft_id)
+
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Draft not found")
+
+    account = db.scalar(
+        select(SocialAccount).where(
+            SocialAccount.business_id == draft.business_id,
+            SocialAccount.platform == "facebook",
+            SocialAccount.connection_status == "connected",
+        )
+    )
+
+    if account is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Connect a Facebook Page to this business first",
+        )
+
+    page_id = account.platform_account_id
+    access_token = decrypt_token(account.encrypted_access_token)
 
     claimed = db.execute(
         update(Draft)
@@ -219,14 +225,17 @@ async def publish_draft_to_facebook(
     )
     if claimed.scalar_one_or_none() is None:
         db.rollback()
-        raise HTTPException(status_code=409, detail="Draft is not eligible for Facebook publishing")
+        raise HTTPException(
+            status_code=409, detail="Draft is not eligible for Facebook publishing"
+        )
     db.commit()
 
     draft = db.get(Draft, draft_id)
     try:
         image_bytes = (
             download_marketing_image(draft.image_url, draft.business_id)
-            if draft.image_url else None
+            if draft.image_url
+            else None
         )
         if image_bytes is not None:
             # Validate format before sending any request to Facebook.
@@ -241,18 +250,24 @@ async def publish_draft_to_facebook(
         draft = db.get(Draft, draft_id)
         draft.facebook_publish_status = "not_published"
         db.commit()
-        raise HTTPException(status_code=502, detail="Unable to prepare the marketing image")
+        raise HTTPException(
+            status_code=502, detail="Unable to prepare the marketing image"
+        )
 
     try:
         if image_bytes is not None:
             response = await publish_image_post(
-                page_id=page_id, access_token=access_token,
-                message=draft.caption, image_bytes=image_bytes,
+                page_id=page_id,
+                access_token=access_token,
+                message=draft.caption,
+                image_bytes=image_bytes,
             )
             post_id = response.get("post_id") or response.get("id")
         else:
             response = await publish_text_post(
-                page_id=page_id, access_token=access_token, message=draft.caption,
+                page_id=page_id,
+                access_token=access_token,
+                message=draft.caption,
             )
             post_id = response.get("id")
 
@@ -269,7 +284,9 @@ async def publish_draft_to_facebook(
         draft = db.get(Draft, draft_id)
         # Explicit Facebook client rejection: request did not publish.
         # Rate limits and 5xx are treated conservatively as uncertain.
-        rejected = 400 <= exc.response.status_code < 500 and exc.response.status_code != 429
+        rejected = (
+            400 <= exc.response.status_code < 500 and exc.response.status_code != 429
+        )
         draft.facebook_publish_status = "not_published" if rejected else "needs_review"
         db.commit()
         if rejected:
@@ -277,13 +294,17 @@ async def publish_draft_to_facebook(
                 status_code=502,
                 detail="Facebook rejected the request. Check Page token, permissions and image format.",
             )
-        raise HTTPException(status_code=502, detail="Facebook publishing outcome requires review")
+        raise HTTPException(
+            status_code=502, detail="Facebook publishing outcome requires review"
+        )
     except Exception:
         db.rollback()
         draft = db.get(Draft, draft_id)
         draft.facebook_publish_status = "needs_review"
         db.commit()
-        raise HTTPException(status_code=502, detail="Facebook publishing outcome requires review")
+        raise HTTPException(
+            status_code=502, detail="Facebook publishing outcome requires review"
+        )
 
 
 class FacebookRecoveryRequest(BaseModel):
@@ -298,7 +319,9 @@ def reset_facebook_publishing(
 ):
     """Only after manually confirming the post is absent on Facebook."""
     if not request.confirmed_not_published:
-        raise HTTPException(status_code=400, detail="Confirm the post is absent on Facebook")
+        raise HTTPException(
+            status_code=400, detail="Confirm the post is absent on Facebook"
+        )
     result = db.execute(
         update(Draft)
         .where(
