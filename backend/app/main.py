@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
+import logging
 
 from app.auth import verify_token
 from app.database import get_db
@@ -43,6 +44,7 @@ app.add_middleware(
     allow_headers=["Content-Type", "Authorization"],
 )
 
+logger = logging.getLogger(__name__)
 
 # --------------------------------------------------
 # Request Models
@@ -1016,10 +1018,7 @@ async def get_facebook_draft_analytics(
         )
 
     # Only published drafts have Facebook analytics.
-    if (
-        draft.facebook_publish_status != "published"
-        or not draft.facebook_post_id
-    ):
+    if draft.facebook_publish_status != "published" or not draft.facebook_post_id:
         raise HTTPException(
             status_code=409,
             detail="Draft has not been published to Facebook",
@@ -1043,16 +1042,36 @@ async def get_facebook_draft_analytics(
     access_token = decrypt_token(account.encrypted_access_token)
 
     # Request engagement information from Facebook.
+    # Request engagement information from Facebook.
     try:
         data = await get_post_insights(
             post_id=draft.facebook_post_id,
             access_token=access_token,
         )
-    except httpx.HTTPStatusError:
+
+    except httpx.HTTPStatusError as exc:
+        error_data = exc.response.json().get("error", {})
+
+        logger.warning(
+            "Facebook analytics error: status=%s, code=%s, message=%s",
+            exc.response.status_code,
+            error_data.get("code"),
+            error_data.get("message"),
+        )
+
         raise HTTPException(
             status_code=502,
             detail="Unable to retrieve Facebook analytics",
         )
+        logger.warning(
+            "Facebook analytics failed: status=%s",
+            exc.response.status_code,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to retrieve Facebook analytics",
+        )
+
     except httpx.RequestError:
         raise HTTPException(
             status_code=502,
@@ -1063,12 +1082,8 @@ async def get_facebook_draft_analytics(
         "draft_id": draft.id,
         "platform": "facebook",
         "post_id": draft.facebook_post_id,
-        "reactions": data.get("reactions", {}).get(
-            "summary", {}
-        ).get("total_count", 0),
-        "comments": data.get("comments", {}).get(
-            "summary", {}
-        ).get("total_count", 0),
+        "reactions": data.get("reactions", {}).get("summary", {}).get("total_count", 0),
+        "comments": data.get("comments", {}).get("summary", {}).get("total_count", 0),
         "shares": data.get("shares", {}).get("count", 0),
         "permalink_url": data.get("permalink_url"),
     }
