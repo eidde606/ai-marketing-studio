@@ -77,7 +77,8 @@ async def get_post_insights(
         response = await client.get(
             f"{GRAPH_API_URL}/{post_id}",
             params={
-               "fields": "id",
+                "fields": "id",
+                "access_token": access_token,
             },
         )
         response.raise_for_status()
