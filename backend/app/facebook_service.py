@@ -77,7 +77,11 @@ async def get_post_insights(
         response = await client.get(
             f"{GRAPH_API_URL}/{post_id}",
             params={
-                "fields": "id",
+                "fields": (
+                    "id,created_time,permalink_url,shares,"
+                    "reactions.limit(0).summary(true),"
+                    "comments.limit(0).summary(true)"
+                ),
                 "access_token": access_token,
             },
         )
