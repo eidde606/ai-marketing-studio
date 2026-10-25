@@ -1042,7 +1042,6 @@ async def get_facebook_draft_analytics(
     access_token = decrypt_token(account.encrypted_access_token)
 
     # Request engagement information from Facebook.
-    # Request engagement information from Facebook.
     try:
         data = await get_post_insights(
             post_id=draft.facebook_post_id,
@@ -1050,33 +1049,33 @@ async def get_facebook_draft_analytics(
         )
 
     except httpx.HTTPStatusError as exc:
-        error_data = exc.response.json().get("error", {})
+        try:
+            error_data = exc.response.json().get("error", {})
+            if not isinstance(error_data, dict):
+                error_data = {}
+        except ValueError:
+            error_data = {}
 
         logger.warning(
-            "Facebook analytics error: status=%s, code=%s, message=%s",
+            "Facebook analytics error: status=%s, code=%s",
             exc.response.status_code,
             error_data.get("code"),
-            error_data.get("message"),
         )
 
         raise HTTPException(
             status_code=502,
             detail="Unable to retrieve Facebook analytics",
-        )
+        ) from exc
+
+    except httpx.RequestError as exc:
         logger.warning(
-            "Facebook analytics failed: status=%s",
-            exc.response.status_code,
+            "Facebook analytics connection error: %s",
+            type(exc).__name__,
         )
-        raise HTTPException(
-            status_code=502,
-            detail="Unable to retrieve Facebook analytics",
-        )
-
-    except httpx.RequestError:
         raise HTTPException(
             status_code=502,
             detail="Facebook analytics service is unavailable",
-        )
+        ) from exc
 
     return {
         "draft_id": draft.id,
