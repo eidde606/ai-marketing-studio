@@ -1,4 +1,3 @@
-
 import base64
 import os
 from io import BytesIO
@@ -47,7 +46,7 @@ def generate_marketing_image(
         raise ValueError("Business ID cannot be empty.")
 
     result = client.images.generate(
-        model="gpt-image-1",
+        model="gpt-image-2.5-flare",
         prompt=image_prompt.strip(),
         size="1024x1024",
         quality="medium",
@@ -109,7 +108,7 @@ def edit_marketing_image(
     )
 
     result = client.images.edit(
-        model="gpt-image-1",
+        model="gpt-image-2.5-flare",
         image=original_image,
         prompt=prompt,
         size="1024x1024",
