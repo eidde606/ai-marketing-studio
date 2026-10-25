@@ -579,6 +579,12 @@ def generate_draft_image(
         )
 
     except Exception as exc:
+
+        logger.exception(
+            "Image generation failed for draft %s: error_type=%s",
+            draft_id,
+            type(exc).__name__,
+        )
         db.rollback()
 
         db.execute(
