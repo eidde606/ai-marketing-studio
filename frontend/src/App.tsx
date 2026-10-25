@@ -14,6 +14,7 @@ import AuthPage from "./components/AuthPage";
 import BusinessForm from "./components/BusinessForm";
 import DashboardOverview from "./components/DashboardOverview";
 import FacebookConnection from "./components/FacebookConnection";
+import { getConnectedFacebookAccounts } from "./services/facebookApi";
 import Sidebar, { type Section } from "./components/Sidebar";
 import { useDraftImages } from "./hooks/useDraftImages";
 import { getBusinesses, type Business } from "./services/businessesApi";
@@ -34,6 +35,8 @@ import {
   type ImageRevision,
 } from "./services/draftsApi";
 import { supabase } from "./services/supabaseClient";
+import ContentPage from "./components/ContentPage";
+
 function formatDraftDate(value: string): string {
   if (!value) return "Fecha no disponible";
   const normalized = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value)
@@ -81,6 +84,50 @@ const App: FC = () => {
   const [editCaption, setEditCaption] = useState("");
   const [businesses, setBusinesses] = useState<Business[]>([]);
   const [selectedBusinessId, setSelectedBusinessId] = useState("");
+
+  type FacebookConnectionStatus = "connected" | "disconnected" | "error";
+
+  const [facebookConnection, setFacebookConnection] = useState<{
+    businessId: string;
+    status: FacebookConnectionStatus;
+  } | null>(null);
+
+  const facebookConnectionStatus =
+    facebookConnection?.businessId === selectedBusinessId
+      ? facebookConnection.status
+      : "loading";
+
+  useEffect(() => {
+    if (!session?.user.id || !selectedBusinessId) return;
+
+    let active = true;
+
+    async function checkFacebookConnection() {
+      try {
+        const accounts = await getConnectedFacebookAccounts(selectedBusinessId);
+
+        if (active) {
+          setFacebookConnection({
+            businessId: selectedBusinessId,
+            status: accounts.length > 0 ? "connected" : "disconnected",
+          });
+        }
+      } catch {
+        if (active) {
+          setFacebookConnection({
+            businessId: selectedBusinessId,
+            status: "error",
+          });
+        }
+      }
+    }
+
+    void checkFacebookConnection();
+
+    return () => {
+      active = false;
+    };
+  }, [session?.user.id, selectedBusinessId]);
   // Save navigation locally; business selection is saved separately per user.
   useEffect(() => {
     try {
@@ -284,8 +331,20 @@ const App: FC = () => {
     {
       name: "Mía",
       role: "Analista de marketing",
-      state: "Pendiente",
-      activity: "Esperando conexión de datos de rendimiento",
+      state:
+        facebookConnectionStatus === "connected"
+          ? "Disponible"
+          : facebookConnectionStatus === "disconnected"
+            ? "Pendiente"
+            : "Sin verificar",
+      activity:
+        facebookConnectionStatus === "connected"
+          ? "Análisis de interacciones de Facebook disponible"
+          : facebookConnectionStatus === "disconnected"
+            ? "Conecta una página de Facebook para consultar estadísticas"
+            : facebookConnectionStatus === "loading"
+              ? "Verificando conexión de Facebook..."
+              : "No se pudo verificar la conexión de Facebook",
     },
   ];
   const handleSectionChange = (section: Section) => {
@@ -793,6 +852,13 @@ const App: FC = () => {
             startEditing={startEditing}
             setActiveSection={setActiveSection}
           />
+        ) : activeSection === "Contenido" ? (
+          <ContentPage
+            key={selectedBusinessId}
+            drafts={visibleDrafts}
+            loading={loadingDrafts}
+            error={loadError}
+          />
         ) : activeSection === "Aprobaciones" ? (
           <ApprovalPage
             loadingDrafts={loadingDrafts}
@@ -851,7 +917,11 @@ const App: FC = () => {
                   <div className="agent-status">
                     <span
                       className={`status-dot ${
-                        agent.state === "Contenido generado" ? "available" : ""
+                        ["Contenido generado", "Disponible"].includes(
+                          agent.state,
+                        )
+                          ? "available"
+                          : ""
                       }`}
                     />
                     {agent.state}

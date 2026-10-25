@@ -259,3 +259,22 @@ export function rejectImageRevision(
     },
   );
 }
+
+
+export type FacebookAnalytics = {
+  draft_id: string;
+  platform: string;
+  post_id: string;
+  reactions: number;
+  comments: number;
+  shares: number;
+  permalink_url: string | null;
+};
+
+export function getFacebookAnalytics(
+  draftId: string,
+): Promise<FacebookAnalytics> {
+  return request<FacebookAnalytics>(
+    `/drafts/${encodeURIComponent(draftId)}/analytics/facebook`,
+  );
+}

@@ -1,7 +1,7 @@
-import type { FC, ReactNode } from 'react';
-import type { Draft } from '../services/draftsApi';
-import type { Section } from './Sidebar';
-import SummaryCard from './SummaryCard';
+import type { FC, ReactNode } from "react";
+import type { Draft } from "../services/draftsApi";
+import type { Section } from "./Sidebar";
+import SummaryCard from "./SummaryCard";
 
 type Agent = {
   name: string;
@@ -51,487 +51,355 @@ const DashboardOverview: FC<DashboardOverviewProps> = ({
   handleApprove,
   handleReject,
   startEditing,
-  setActiveSection
-}) => (
+  setActiveSection,
+}) => {
+  const recentPosts = visibleDrafts
+    .filter(
+      (draft) =>
+        draft.facebook_publish_status === "published" &&
+        draft.published_at !== null &&
+        draft.business_id === selectedBusinessId,
+    )
+    .sort(
+      (a, b) =>
+        new Date(b.published_at ?? "").getTime() -
+        new Date(a.published_at ?? "").getTime(),
+    )
+    .slice(0, 5);
 
+  return (
+    <>
+      <section className="welcome">
+        <div>
+          <h2>
+            Buenos días, Ángela <span>✦</span>
+          </h2>
 
-          <>
+          <p>
+            Aquí tienes una visión general de lo que está pasando en tu
+            marketing.
+          </p>
+        </div>
 
-            <section className="welcome">
+        <button
+          className="primary-button"
 
-              <div>
+          type="button"
 
-                <h2>Buenos días, Ángela <span>✦</span></h2>
+          onClick={() => void handleGenerateContent()}
 
-                <p>
+          disabled={!selectedBusinessId || generating}
+        >
+          {generating ? "Generando contenido..." : "＋ Crear contenido"}
+        </button>
 
-                  Aquí tienes una visión general de lo que está
+        {generationError && <p role="alert">{generationError}</p>}
+      </section>
 
-                  pasando en tu marketing.
+      <section
+        className="summary-grid"
 
-                </p>
+        aria-label="Resumen de métricas"
+      >
+        <SummaryCard
+          icon="◈"
 
-              </div>
+          label="Campañas activas"
 
-              <button
+          value="0"
 
-                className="primary-button"
+          detail="Aún no hay campañas"
 
-                type="button"
+          tone="purple"
+        />
 
-                onClick={() => void handleGenerateContent()}
+        <SummaryCard
+          icon="✧"
 
-                disabled={!selectedBusinessId || generating}
+          label="Contenido generado"
 
-              >
+          value={
+            loadingDrafts || loadError ? "—" : String(visibleDrafts.length)
+          }
 
-                {generating
+          detail="Borradores registrados"
 
-                  ? 'Generando contenido...'
+          tone="orange"
+        />
 
-                  : '＋ Crear contenido'}
+        <SummaryCard
+          icon="✓"
 
-              </button>
+          label="Aprobaciones pendientes"
 
-              {generationError && (
+          value={loadingDrafts || loadError ? "—" : String(pendingCount)}
 
-                <p role="alert">{generationError}</p>
+          detail="Requieren tu atención"
 
-              )}
+          tone="blue"
+        />
 
-            </section>
+        <SummaryCard
+          icon="◒"
 
-            <section
+          label="Alcance estimado"
 
-              className="summary-grid"
+          value="—"
 
-              aria-label="Resumen de métricas"
+          detail="Disponible al conectar redes sociales"
 
+          tone="green"
+        />
+      </section>
+
+      <section className="dashboard-grid">
+        <article className="panel campaigns-panel">
+          <div className="panel-heading">
+            <div>
+              <span className="eyebrow">Rendimiento</span>
+
+              <h2>Resumen de campañas</h2>
+            </div>
+
+            <button
+              className="text-button"
+
+              type="button"
+
+              onClick={() => setActiveSection("Campañas")}
             >
+              Ver todas →
+            </button>
+          </div>
 
-              <SummaryCard
+          <div className="campaign-list">
+            <div style={{ padding: "2rem", textAlign: "center" }}>
+              <p style={{ fontWeight: 600 }}>Aún no hay campañas</p>
 
-                icon="◈"
+              <p style={{ color: "#64748b", marginTop: "0.5rem" }}>
+                Cuando el equipo IA cree campañas para este negocio, aparecerán
+                aquí.
+              </p>
+            </div>
+          </div>
+        </article>
 
-                label="Campañas activas"
+        <article className="panel activity-panel">
+          <div className="panel-heading">
+            <div>
+              <span className="eyebrow">Automatización</span>
 
-                value="0"
+              <h2>Actividad del Equipo IA</h2>
+            </div>
 
-                detail="Aún no hay campañas"
+            <button
+              className="text-button"
 
-                tone="purple"
+              type="button"
 
-              />
+              onClick={() => setActiveSection("Equipo IA")}
+            >
+              Ver equipo →
+            </button>
+          </div>
 
-              <SummaryCard
+          <div className="agent-list">
+            {agents.map((agent) => (
+              <div className="agent-row" key={agent.name}>
+                <div className="agent-avatar">{agent.name[0]}</div>
 
-                icon="✧"
+                <div className="agent-info">
+                  <strong>{agent.name}</strong>
 
-                label="Contenido generado"
-
-                value={
-
-                  loadingDrafts || loadError
-
-                    ? '—'
-
-                    : String(visibleDrafts.length)
-
-                }
-
-                detail="Borradores registrados"
-
-                tone="orange"
-
-              />
-
-              <SummaryCard
-
-                icon="✓"
-
-                label="Aprobaciones pendientes"
-
-                value={
-
-                  loadingDrafts || loadError
-
-                    ? '—'
-
-                    : String(pendingCount)
-
-                }
-
-                detail="Requieren tu atención"
-
-                tone="blue"
-
-              />
-
-              <SummaryCard
-
-                icon="◒"
-
-                label="Alcance estimado"
-
-                value="—"
-
-                detail="Disponible al conectar redes sociales"
-
-                tone="green"
-
-              />
-
-            </section>
-
-            <section className="dashboard-grid">
-
-              <article className="panel campaigns-panel">
-
-                <div className="panel-heading">
-
-                  <div>
-
-                    <span className="eyebrow">Rendimiento</span>
-
-                    <h2>Resumen de campañas</h2>
-
-                  </div>
-
-                  <button
-
-                    className="text-button"
-
-                    type="button"
-
-                    onClick={() => setActiveSection('Campañas')}
-
-                  >
-
-                    Ver todas →
-
-                  </button>
-
+                  <span>{agent.role}</span>
                 </div>
 
-                <div className="campaign-list">
+                <div className="agent-status">
+                  <span
+                    className={`status-dot ${
+                      ["Contenido generado", "Disponible"].includes(agent.state)
+                        ? "available"
+                        : ""
+                    }`}
+                  />
 
-                  <div style={{ padding: '2rem', textAlign: 'center' }}>
+                  {agent.state}
 
-                    <p style={{ fontWeight: 600 }}>
-
-                      Aún no hay campañas
-
-                    </p>
-
-                    <p style={{ color: '#64748b', marginTop: '0.5rem' }}>
-
-                      Cuando el equipo IA cree campañas para este negocio,
-
-                      aparecerán aquí.
-
-                    </p>
-
-                  </div>
-
+                  <small>{agent.activity}</small>
                 </div>
+              </div>
+            ))}
+          </div>
+        </article>
+      </section>
 
-              </article>
+      <section className="bottom-grid">
+        <article className="panel">
+          <div className="panel-heading">
+            <div>
+              <span className="eyebrow">Contenido reciente</span>
 
-              <article className="panel activity-panel">
+              <h2>Publicaciones sociales</h2>
+            </div>
 
-                <div className="panel-heading">
+            <button
+              className="text-button"
 
-                  <div>
+              type="button"
 
-                    <span className="eyebrow">Automatización</span>
+              onClick={() => setActiveSection("Contenido")}
+            >
+              Ver contenido →
+            </button>
+          </div>
 
-                    <h2>Actividad del Equipo IA</h2>
+          <div className="post-list">
+            {loadingDrafts ? (
+              <p className="empty-state">Cargando publicaciones...</p>
+            ) : loadError ? (
+              <p className="empty-state">
+                No se pudieron cargar las publicaciones.
+              </p>
+            ) : recentPosts.length > 0 ? (
+              recentPosts.map((post) => (
+                <div className="approval-row" key={post.id}>
+                  <div className="approval-content">
+                    <strong>{post.title}</strong>
 
+                    <span>
+                      Facebook ·{" "}
+                      {post.published_at
+                        ? formatDraftDate(post.published_at)
+                        : "Fecha no disponible"}
+                    </span>
+
+                    <span>
+                      {post.caption.length > 120
+                        ? `${post.caption.slice(0, 120).trimEnd()}...`
+                        : post.caption}
+                    </span>
                   </div>
-
-                  <button
-
-                    className="text-button"
-
-                    type="button"
-
-                    onClick={() => setActiveSection('Equipo IA')}
-
-                  >
-
-                    Ver equipo →
-
-                  </button>
-
                 </div>
+              ))
+            ) : (
+              <div style={{ padding: "2rem", textAlign: "center" }}>
+                <p style={{ fontWeight: 600 }}>Aún no hay publicaciones</p>
 
-                <div className="agent-list">
+                <p style={{ color: "#64748b", marginTop: "0.5rem" }}>
+                  Las publicaciones aparecerán aquí cuando sean publicadas en
+                  las redes sociales.
+                </p>
+              </div>
+            )}
+          </div>
+        </article>
 
-                  {agents.map((agent) => (
+        <article className="panel approval-panel">
+          <div className="panel-heading">
+            <div>
+              <span className="eyebrow">Tu bandeja</span>
 
-                    <div className="agent-row" key={agent.name}>
+              <h2>Aprobaciones pendientes</h2>
+            </div>
 
-                      <div className="agent-avatar">
+            <button
+              className="text-button"
 
-                        {agent.name[0]}
+              type="button"
 
-                      </div>
+              onClick={() => setActiveSection("Aprobaciones")}
+            >
+              Ver todas →
+            </button>
+          </div>
 
-                      <div className="agent-info">
+          <div className="approval-list">
+            {draftMessages}
 
-                        <strong>{agent.name}</strong>
+            {!loadingDrafts &&
+              !loadError &&
+              visibleDrafts
 
-                        <span>{agent.role}</span>
+                .filter((draft) => draft.status === "pending")
 
-                      </div>
+                .slice(0, 2)
 
-                      <div className="agent-status">
+                .map((draft) => (
+                  <div className="approval-row" key={draft.id}>
+                    <div className="approval-content">
+                      <strong>{draft.title}</strong>
 
-                        <span
+                      <span>
+                        {draft.platform} · {formatDraftDate(draft.created_at)}
+                      </span>
 
-                          className={`status-dot ${
-
-                            agent.state === 'Contenido generado'
-
-                              ? 'available'
-
-                              : ''
-
-                          }`}
-
-                        />
-
-                        {agent.state}
-
-                        <small>{agent.activity}</small>
-
-                      </div>
-
+                      <span>{draft.caption}</span>
                     </div>
 
-                  ))}
+                    <div className="approval-actions">
+                      <button
+                        className="approve-button"
 
-                </div>
+                        type="button"
 
-              </article>
+                        disabled={
+                          approvingIds.includes(draft.id) ||
+                          busyDraftIds.includes(draft.id) ||
+                          imageBusyIds.includes(draft.id) ||
+                          editingId === draft.id
+                        }
 
-            </section>
+                        onClick={() => void handleApprove(draft.id)}
+                      >
+                        {approvingIds.includes(draft.id)
+                          ? "Aprobando..."
+                          : "Aprobar"}
+                      </button>
 
-            <section className="bottom-grid">
+                      <button
+                        className="text-button"
 
-              <article className="panel">
+                        type="button"
 
-                <div className="panel-heading">
+                        disabled={
+                          busyDraftIds.includes(draft.id) ||
+                          approvingIds.includes(draft.id)
+                        }
 
-                  <div>
+                        onClick={() => startEditing(draft)}
+                      >
+                        Editar
+                      </button>
 
-                    <span className="eyebrow">Contenido reciente</span>
+                      <button
+                        className="reject-button"
 
-                    <h2>Publicaciones sociales</h2>
+                        type="button"
 
+                        disabled={
+                          busyDraftIds.includes(draft.id) ||
+                          approvingIds.includes(draft.id) ||
+                          imageBusyIds.includes(draft.id)
+                        }
+
+                        onClick={() => void handleReject(draft.id)}
+                      >
+                        Rechazar
+                      </button>
+                    </div>
                   </div>
-
-                  <button
-
-                    className="text-button"
-
-                    type="button"
-
-                    onClick={() => setActiveSection('Contenido')}
-
-                  >
-
-                    Ver contenido →
-
-                  </button>
-
-                </div>
-
-                <div className="post-list">
-
-                  <div style={{ padding: '2rem', textAlign: 'center' }}>
-
-                    <p style={{ fontWeight: 600 }}>
-
-                      Aún no hay publicaciones
-
-                    </p>
-
-                    <p style={{ color: '#64748b', marginTop: '0.5rem' }}>
-
-                      Las publicaciones aparecerán aquí cuando sean
-
-                      creadas y publicadas en las redes sociales.
-
-                    </p>
-
-                  </div>
-
-                </div>
-
-              </article>
-
-              <article className="panel approval-panel">
-
-                <div className="panel-heading">
-
-                  <div>
-
-                    <span className="eyebrow">Tu bandeja</span>
-
-                    <h2>Aprobaciones pendientes</h2>
-
-                  </div>
-
-                  <button
-
-                    className="text-button"
-
-                    type="button"
-
-                    onClick={() => setActiveSection('Aprobaciones')}
-
-                  >
-
-                    Ver todas →
-
-                  </button>
-
-                </div>
-
-                <div className="approval-list">
-
-                  {draftMessages}
-
-                  {!loadingDrafts && !loadError &&
-
-                    visibleDrafts
-
-                      .filter((draft) => draft.status === 'pending')
-
-                      .slice(0, 2)
-
-                      .map((draft) => (
-
-                        <div className="approval-row" key={draft.id}>
-
-                          <div className="approval-content">
-
-                            <strong>{draft.title}</strong>
-
-                            <span>
-
-                              {draft.platform} ·{' '}
-
-                              {formatDraftDate(draft.created_at)}
-
-                            </span>
-
-                            <span>{draft.caption}</span>
-
-                          </div>
-
-                          <div className="approval-actions">
-
-                            <button
-
-                              className="approve-button"
-
-                              type="button"
-
-                              disabled={
-
-                                approvingIds.includes(draft.id) ||
-
-                                busyDraftIds.includes(draft.id) ||
-
-                                imageBusyIds.includes(draft.id) ||
-
-                                editingId === draft.id
-
-                              }
-
-                              onClick={() => void handleApprove(draft.id)}
-
-                            >
-
-                              {approvingIds.includes(draft.id)
-
-                                ? 'Aprobando...'
-
-                                : 'Aprobar'}
-
-                            </button>
-
-                            <button
-
-                              className="text-button"
-
-                              type="button"
-
-                              disabled={
-
-                                busyDraftIds.includes(draft.id) ||
-
-                                approvingIds.includes(draft.id)
-
-                              }
-
-                              onClick={() => startEditing(draft)}
-
-                            >
-
-                              Editar
-
-                            </button>
-
-                            <button
-
-                              className="reject-button"
-
-                              type="button"
-
-                              disabled={
-
-                                busyDraftIds.includes(draft.id) ||
-
-                                approvingIds.includes(draft.id) ||
-
-                                imageBusyIds.includes(draft.id)
-
-                              }
-
-                              onClick={() => void handleReject(draft.id)}
-
-                            >
-
-                              Rechazar
-
-                            </button>
-
-                          </div>
-
-                        </div>
-
-                      ))}
-
-                  {!loadingDrafts && !loadError && pendingCount === 0 && (
-
-                    <p className="empty-state">
-
-                      Todo está al día. No hay aprobaciones pendientes.
-
-                    </p>
-
-                  )}
-
-                </div>
-
-              </article>
-
-            </section>
-
-          </>
-);
+                ))}
+
+            {!loadingDrafts && !loadError && pendingCount === 0 && (
+              <p className="empty-state">
+                Todo está al día. No hay aprobaciones pendientes.
+              </p>
+            )}
+          </div>
+        </article>
+      </section>
+    </>
+  );
+};
 
 export default DashboardOverview;
