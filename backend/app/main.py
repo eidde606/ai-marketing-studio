@@ -1063,9 +1063,10 @@ async def get_facebook_draft_analytics(
             error_data = {}
 
         logger.warning(
-            "Facebook analytics error: status=%s, code=%s",
+            "Facebook analytics error: status=%s, code=%s, message=%s",
             exc.response.status_code,
             error_data.get("code"),
+            error_data.get("message"),
         )
 
         raise HTTPException(

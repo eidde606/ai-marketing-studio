@@ -73,7 +73,11 @@ export default function ContentPage({ drafts, loading, error }: Props) {
             return (
               <article className="content-card" key={draft.id}>
                 <div className="content-card-header">
-                  <span className="content-platform">{draft.platform}</span>
+                  <span className="content-platform">
+                    {draft.facebook_publish_status === "published"
+                      ? "Facebook"
+                      : draft.platform}
+                  </span>
 
                   <span
                     className={`content-status ${

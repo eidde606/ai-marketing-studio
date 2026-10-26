@@ -6,6 +6,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import AnalyticsPage from "./components/AnalyticsPage";
 import type { Session } from "@supabase/supabase-js";
 import { ChevronDown, LogOut } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FC } from "react";
@@ -854,6 +855,13 @@ const App: FC = () => {
           />
         ) : activeSection === "Contenido" ? (
           <ContentPage
+            key={selectedBusinessId}
+            drafts={visibleDrafts}
+            loading={loadingDrafts}
+            error={loadError}
+          />
+        ) : activeSection === "Analíticas" ? (
+          <AnalyticsPage
             key={selectedBusinessId}
             drafts={visibleDrafts}
             loading={loadingDrafts}
