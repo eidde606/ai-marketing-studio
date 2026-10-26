@@ -187,7 +187,9 @@ export default function FacebookConnection({ businessId }: Props) {
           disabled={loading || !businessId}
         >
           <Facebook size={18} />
-          Conectar Facebook
+          {connectedAccounts.length > 0
+            ? "Reconectar Facebook"
+            : "Conectar Facebook"}
         </button>
       </div>
 
