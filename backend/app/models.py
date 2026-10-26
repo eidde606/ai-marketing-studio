@@ -197,9 +197,10 @@ class SocialAccount(Base):
 
     __table_args__ = (
         UniqueConstraint(
+            "business_id",
             "platform",
             "platform_account_id",
-            name="uq_social_accounts_platform_account",
+            name="uq_social_accounts_business_platform_account",
         ),
     )
 

@@ -255,9 +255,10 @@ def select_facebook_page(
             detail="Facebook did not provide a Page access token",
         )
 
-    # Check whether this Facebook Page is already connected.
+    # Check whether this business already has this Facebook Page connected.
     account = db.execute(
         select(SocialAccount).where(
+            SocialAccount.business_id == pending.business_id,
             SocialAccount.platform == "facebook",
             SocialAccount.platform_account_id == selected_page["id"],
         )
@@ -274,17 +275,10 @@ def select_facebook_page(
         )
         db.add(account)
     else:
-        # A Facebook Page cannot belong to two businesses.
-        if account.business_id != pending.business_id:
-            raise HTTPException(
-                status_code=409,
-                detail="This Facebook Page is already connected to another business",
-            )
-
-    # Reconnect the Page to the same business.
-    account.account_name = selected_page["name"]
-    account.encrypted_access_token = encrypt_token(page_token)
-    account.connection_status = "connected"
+        # Reconnect the Page to the same business.
+        account.account_name = selected_page["name"]
+        account.encrypted_access_token = encrypt_token(page_token)
+        account.connection_status = "connected"
 
     business_id = pending.business_id
     page_name = selected_page["name"]
