@@ -3,7 +3,7 @@ import os
 import httpx
 from app.facebook_service import get_page_info, publish_text_post, publish_image_post
 from uuid import uuid4
-from app.facebook_service import get_post_insights
+from app.facebook_service import get_post_insights, get_post_reach
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from app.facebook_auth_routes import router as facebook_auth_router
@@ -1093,6 +1093,64 @@ async def get_facebook_draft_analytics(
         "shares": data.get("shares", {}).get("count", 0),
         "permalink_url": data.get("permalink_url"),
     }
+
+
+@protected.get("/drafts/{draft_id}/analytics/facebook/reach")
+async def test_facebook_reach(
+    draft_id: str,
+    db: Session = Depends(get_db),
+):
+    draft = db.get(Draft, draft_id)
+
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Draft not found")
+
+    if draft.facebook_publish_status != "published" or not draft.facebook_post_id:
+        raise HTTPException(status_code=409, detail="Draft is not published")
+
+    account = db.scalar(
+        select(SocialAccount).where(
+            SocialAccount.business_id == draft.business_id,
+            SocialAccount.platform == "facebook",
+            SocialAccount.connection_status == "connected",
+        )
+    )
+
+    if account is None:
+        raise HTTPException(status_code=409, detail="Facebook not connected")
+
+    access_token = decrypt_token(account.encrypted_access_token)
+
+    try:
+        data = await get_post_reach(draft.facebook_post_id, access_token)
+
+        unique_media_viewers = next(
+            (
+                metric["values"][0]["value"]
+                for metric in data.get("data", [])
+                if metric.get("name") == "post_total_media_view_unique"
+                and metric.get("period") == "lifetime"
+                and metric.get("values")
+            ),
+            None,
+        )
+
+        return {"unique_media_viewers": unique_media_viewers}
+    except httpx.HTTPStatusError as exc:
+        error_data = exc.response.json()
+
+        facebook_error = error_data.get("error", {})
+
+        logger.warning(
+            "Facebook reach error: code=%s, message=%s",
+            facebook_error.get("code"),
+            facebook_error.get("message"),
+        )
+
+        raise HTTPException(
+            status_code=502,
+            detail="Facebook did not return reach data",
+        ) from exc
 
 
 # --------------------------------------------------

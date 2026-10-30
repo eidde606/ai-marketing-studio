@@ -833,6 +833,7 @@ const App: FC = () => {
           />
         ) : activeSection === "Resumen" ? (
           <DashboardOverview
+            key={selectedBusinessId}
             selectedBusinessId={selectedBusinessId}
             generating={generating}
             generationError={generationError}

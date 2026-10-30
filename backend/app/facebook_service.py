@@ -87,3 +87,22 @@ async def get_post_insights(
         )
         response.raise_for_status()
         return response.json()
+
+
+async def get_post_reach(
+    post_id: str,
+    access_token: str,
+) -> dict:
+    """Retrieve unique reach for a Facebook post, if available."""
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await client.get(
+            f"{GRAPH_API_URL}/{post_id}/insights",
+            params={
+                "metric": "post_total_media_view_unique",
+                "access_token": access_token,
+            },
+        )
+
+        response.raise_for_status()
+        return response.json()

@@ -1,5 +1,5 @@
-import type { FC, ReactNode } from "react";
-import type { Draft } from "../services/draftsApi";
+import { useEffect, useState, type FC, type ReactNode } from "react";
+import { getFacebookReach, type Draft } from "../services/draftsApi";
 import type { Section } from "./Sidebar";
 import SummaryCard from "./SummaryCard";
 
@@ -53,6 +53,66 @@ const DashboardOverview: FC<DashboardOverviewProps> = ({
   startEditing,
   setActiveSection,
 }) => {
+  const [uniqueMediaViews, setUniqueMediaViews] = useState<number | null>(null);
+  const [unavailableReachCount, setUnavailableReachCount] = useState(0);
+  const [reachLoading, setReachLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadReach() {
+      const published = visibleDrafts.filter(
+        (draft) =>
+          draft.business_id === selectedBusinessId &&
+          draft.facebook_publish_status === "published" &&
+          draft.facebook_post_id,
+      );
+
+      try {
+        const results = await Promise.allSettled(
+          published.map((draft) => getFacebookReach(draft.id)),
+        );
+
+        if (cancelled) return;
+
+        const unavailable = results.filter(
+          (result) =>
+            result.status === "rejected" ||
+            result.value.unique_media_viewers === null,
+        ).length;
+
+        setUnavailableReachCount(unavailable);
+
+        const values: number[] = [];
+
+        for (const result of results) {
+          if (
+            result.status === "fulfilled" &&
+            result.value.unique_media_viewers !== null
+          ) {
+            values.push(result.value.unique_media_viewers);
+          }
+        }
+
+        setUniqueMediaViews(
+          values.length > 0
+            ? values.reduce((total, value) => total + value, 0)
+            : null,
+        );
+      } finally {
+        if (!cancelled) setReachLoading(false);
+      }
+    }
+
+    if (!loadingDrafts && !loadError && selectedBusinessId) {
+      void loadReach();
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [visibleDrafts, selectedBusinessId, loadingDrafts, loadError]);
+
   const recentPosts = visibleDrafts
     .filter(
       (draft) =>
@@ -141,13 +201,19 @@ const DashboardOverview: FC<DashboardOverviewProps> = ({
 
         <SummaryCard
           icon="◒"
-
-          label="Alcance estimado"
-
-          value="—"
-
-          detail="Disponible al conectar redes sociales"
-
+          label="Espectadores únicos"
+          value={
+            reachLoading
+              ? "..."
+              : uniqueMediaViews === null
+                ? "—"
+                : String(uniqueMediaViews)
+          }
+          detail={
+            unavailableReachCount > 0
+              ? `Datos parciales · ${unavailableReachCount} publicaciones sin métricas`
+              : "Suma de espectadores únicos por publicación en Facebook"
+          }
           tone="green"
         />
       </section>

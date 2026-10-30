@@ -260,7 +260,6 @@ export function rejectImageRevision(
   );
 }
 
-
 export type FacebookAnalytics = {
   draft_id: string;
   platform: string;
@@ -276,5 +275,15 @@ export function getFacebookAnalytics(
 ): Promise<FacebookAnalytics> {
   return request<FacebookAnalytics>(
     `/drafts/${encodeURIComponent(draftId)}/analytics/facebook`,
+  );
+}
+
+export type FacebookReach = {
+  unique_media_viewers: number | null;
+};
+
+export function getFacebookReach(draftId: string): Promise<FacebookReach> {
+  return request<FacebookReach>(
+    `/drafts/${encodeURIComponent(draftId)}/analytics/facebook/reach`,
   );
 }
