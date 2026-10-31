@@ -6,16 +6,16 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import AnalyticsPage from "./components/AnalyticsPage";
 import type { Session } from "@supabase/supabase-js";
 import { ChevronDown, LogOut } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FC } from "react";
+import AnalyticsPage from "./components/AnalyticsPage";
 import ApprovalPage from "./components/ApprovalPage";
 import AuthPage from "./components/AuthPage";
 import BusinessForm from "./components/BusinessForm";
+import ContentPage from "./components/ContentPage";
 import DashboardOverview from "./components/DashboardOverview";
 import FacebookConnection from "./components/FacebookConnection";
-import { getConnectedFacebookAccounts } from "./services/facebookApi";
 import Sidebar, { type Section } from "./components/Sidebar";
 import { useDraftImages } from "./hooks/useDraftImages";
 import { getBusinesses, type Business } from "./services/businessesApi";
@@ -35,8 +35,8 @@ import {
   type Draft,
   type ImageRevision,
 } from "./services/draftsApi";
+import { getConnectedFacebookAccounts } from "./services/facebookApi";
 import { supabase } from "./services/supabaseClient";
-import ContentPage from "./components/ContentPage";
 
 function formatDraftDate(value: string): string {
   if (!value) return "Fecha no disponible";
@@ -54,6 +54,8 @@ function formatDraftDate(value: string): string {
 }
 const App: FC = () => {
   const [session, setSession] = useState<Session | null>(null);
+  const [isRecoveringPassword, setIsRecoveringPassword] = useState(false);
+
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [activeSection, setActiveSection] = useState<Section>(() => {
     try {
@@ -196,8 +198,12 @@ const App: FC = () => {
       });
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    } = supabase.auth.onAuthStateChange((event, nextSession) => {
       if (active) {
+        if (event === "PASSWORD_RECOVERY") {
+          setIsRecoveringPassword(true);
+        }
+
         setSession(nextSession);
         setCheckingAuth(false);
       }
@@ -744,9 +750,20 @@ const App: FC = () => {
   if (checkingAuth) {
     return <div className="auth-loading">Cargando...</div>;
   }
+
+  if (isRecoveringPassword) {
+    return (
+      <AuthPage
+        recoveryMode
+        onRecoveryComplete={() => setIsRecoveringPassword(false)}
+      />
+    );
+  }
+
   if (!session) {
     return <AuthPage />;
   }
+
   return (
     <div className="app-shell">
       <Sidebar
