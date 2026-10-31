@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+sqlalchemy>=2.0
+psycopg[binary]>=3.2
+alembic>=1.13
+python-dotenv>=1.0
+PyJWT[crypto]>=2.10,<3
+httpx>=0.27,<1
+openai>=2.0,<3.0
+supabase
+cryptography==46.0.3
