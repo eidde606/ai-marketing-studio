@@ -40,6 +40,7 @@ app.add_middleware(
         "http://localhost:5174",
         "http://127.0.0.1:5174",
         "https://nazbort-ai-marketing-studio.netlify.app",
+        "https://nazbort-ai-studio.netlify.app",
     ],
     allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
