@@ -240,9 +240,12 @@ const App: FC = () => {
         });
         setBusinessError(null);
       })
-      .catch(() => {
+      .catch((error) => {
         if (active) {
-          setBusinessError("No se pudieron cargar los negocios.");
+          const message =
+            error instanceof Error ? error.message : String(error);
+
+          setBusinessError(`No se pudieron cargar los negocios: ${message}`);
         }
       });
     return () => {
