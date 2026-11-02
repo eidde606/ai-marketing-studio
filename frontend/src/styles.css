@@ -1,4 +1,5 @@
 @import "tailwindcss";
+
 :root {
     --background: 210 40% 98%;
     --foreground: 222 47% 11%;
@@ -559,7 +560,7 @@ h1 {
     background: #dbeafe;
 }
 
-.post-row>div:nth-child(2) {
+.post-row > div:nth-child(2) {
     flex: 1;
 }
 
@@ -618,6 +619,7 @@ h1 {
     .summary-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
+
     .dashboard-grid,
     .bottom-grid {
         grid-template-columns: 1fr;
@@ -628,17 +630,21 @@ h1 {
     #root {
         padding: 0;
     }
+
     .app-shell {
         min-height: 100vh;
         border: 0;
         border-radius: 0;
     }
+
     .main-content {
         padding: 1.25rem;
     }
+
     .summary-grid {
         grid-template-columns: 1fr;
     }
+
     .welcome {
         align-items: flex-start;
         flex-direction: column;
@@ -756,6 +762,7 @@ h1 {
         flex-direction: column;
         gap: 0.4rem;
     }
+
     .approval-card {
         padding: 1rem;
     }
@@ -783,7 +790,7 @@ h1 {
     color: #111827;
 }
 
-.business-form-panel>p {
+.business-form-panel > p {
     margin: 0 0 2rem;
     color: #6b7280;
     font-size: 0.95rem;
@@ -893,12 +900,15 @@ h1 {
         margin: 1rem auto;
         padding: 1.25rem;
     }
+
     .business-form-panel h2 {
         font-size: 1.35rem;
     }
+
     .business-form-actions {
         flex-direction: column-reverse;
     }
+
     .business-form-actions button {
         width: 100%;
     }
@@ -913,7 +923,7 @@ h1 {
     align-items: center;
     justify-content: center;
     padding: 32px 20px;
-    background: radial-gradient( circle at 15% 20%, rgba(167, 139, 250, 0.25), transparent 35%), radial-gradient( circle at 85% 80%, rgba(196, 181, 253, 0.3), transparent 35%), #f6f5fb;
+    background: radial-gradient(circle at 15% 20%, rgba(167, 139, 250, 0.25), transparent 35%), radial-gradient(circle at 85% 80%, rgba(196, 181, 253, 0.3), transparent 35%), #f6f5fb;
 }
 
 .auth-card {
@@ -996,7 +1006,7 @@ h1 {
     box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.12);
 }
 
-.auth-card form>button {
+.auth-card form > button {
     width: 100%;
     padding: 15px;
     margin-top: 8px;
@@ -1011,12 +1021,12 @@ h1 {
     transition: opacity 0.2s, transform 0.2s;
 }
 
-.auth-card form>button:hover:not(:disabled) {
+.auth-card form > button:hover:not(:disabled) {
     transform: translateY(-1px);
     box-shadow: 0 8px 20px rgba(109, 40, 217, 0.2);
 }
 
-.auth-card form>button:disabled {
+.auth-card form > button:disabled {
     opacity: 0.6;
     cursor: not-allowed;
 }
@@ -1075,11 +1085,13 @@ h1 {
     .auth-page {
         padding: 20px 16px;
     }
+
     .auth-card {
         max-width: none;
         padding: 30px 24px;
         border-radius: 20px;
     }
+
     .auth-card h1 {
         font-size: 24px;
     }
@@ -1151,17 +1163,20 @@ h1 {
     #root {
         padding: 0;
     }
+
     .app-shell {
         min-height: 100dvh;
         border: 0;
         border-radius: 0;
     }
+
     .main-content {
         width: 100%;
         flex: 1 1 100%;
         min-width: 0;
         padding: 76px 16px 24px;
     }
+
     .topbar {
         display: flex;
         flex-direction: column;
@@ -1169,15 +1184,18 @@ h1 {
         gap: 18px;
         margin-bottom: 2rem;
     }
+
     .topbar-heading {
         min-width: 0;
     }
+
     .topbar-actions {
         display: grid;
         grid-template-columns: minmax(0, 1fr);
         gap: 12px;
         width: 100%;
     }
+
     .topbar-actions select,
     .topbar-actions .add-business-button {
         display: block;
@@ -1186,9 +1204,11 @@ h1 {
         max-width: none;
         min-height: 44px;
     }
+
     .topbar-actions .add-business-button {
         white-space: nowrap;
     }
+
     .topbar-account {
         position: fixed;
         top: 26px;
@@ -1197,29 +1217,35 @@ h1 {
         width: auto;
         justify-content: flex-end;
     }
+
     .account-trigger {
         padding: 7px 9px;
     }
+
     .welcome {
         align-items: flex-start;
         flex-direction: column;
         gap: 16px;
     }
+
     .summary-grid,
     .dashboard-grid,
     .bottom-grid {
         min-width: 0;
         grid-template-columns: minmax(0, 1fr);
     }
+
     .panel {
         min-width: 0;
     }
+
     .campaign-row,
     .agent-row,
     .post-row,
     .approval-row {
         flex-wrap: wrap;
     }
+
     .progress-wrap {
         max-width: 100%;
     }
@@ -1304,7 +1330,7 @@ h1 {
     background: #faf8ff;
 }
 
-.approval-page .draft-image-section>strong {
+.approval-page .draft-image-section > strong {
     font-size: 0.85rem;
     color: #514369;
 }
@@ -1331,7 +1357,7 @@ h1 {
 
 /* Publication title and caption */
 
-.approval-page .approval-card>h3 {
+.approval-page .approval-card > h3 {
     grid-column: 2;
     grid-row: 2;
     margin: 0;
@@ -1341,7 +1367,7 @@ h1 {
     color: #20182e;
 }
 
-.approval-page .approval-card>p {
+.approval-page .approval-card > p {
     grid-column: 2;
     grid-row: 3;
     margin: 0;
@@ -1385,7 +1411,7 @@ h1 {
 
 /* Action buttons */
 
-.approval-page .approval-card>.approval-actions {
+.approval-page .approval-card > .approval-actions {
     grid-column: 2;
     grid-row: 4;
     display: flex;
@@ -1396,7 +1422,7 @@ h1 {
     border-top: 1px solid #f0edf5;
 }
 
-.approval-page .approval-card>.approval-actions button {
+.approval-page .approval-card > .approval-actions button {
     min-height: 42px;
     padding: 10px 16px;
     border-radius: 10px;
@@ -1414,7 +1440,7 @@ h1 {
     background: #fee2e2;
 }
 
-.approval-page .approval-card>.final-status {
+.approval-page .approval-card > .final-status {
     grid-column: 2;
     grid-row: 4;
     justify-self: start;
@@ -1448,19 +1474,22 @@ h1 {
         grid-template-columns: minmax(0, 1fr);
         row-gap: 18px;
     }
+
     .approval-page .approval-card-top,
     .approval-page .draft-image-section,
-    .approval-page .approval-card>h3,
-    .approval-page .approval-card>p,
+    .approval-page .approval-card > h3,
+    .approval-page .approval-card > p,
     .approval-page .draft-edit-form,
-    .approval-page .approval-card>.approval-actions,
-    .approval-page .approval-card>.final-status {
+    .approval-page .approval-card > .approval-actions,
+    .approval-page .approval-card > .final-status {
         grid-column: 1;
         grid-row: auto;
     }
+
     .approval-page .draft-image-section {
         order: 0;
     }
+
     .approval-page .draft-image-section img {
         max-height: 480px;
     }
@@ -1470,21 +1499,26 @@ h1 {
     .approval-page {
         padding: 16px;
     }
+
     .approval-page .approval-card {
         padding: 14px;
         border-radius: 16px;
     }
+
     .approval-page .draft-image-section {
         padding: 12px;
     }
-    .approval-page .approval-card>h3 {
+
+    .approval-page .approval-card > h3 {
         font-size: 1.15rem;
     }
-    .approval-page .approval-card>p {
+
+    .approval-page .approval-card > p {
         padding: 14px;
         font-size: 0.86rem;
     }
-    .approval-page .approval-card>.approval-actions {
+
+    .approval-page .approval-card > .approval-actions {
         gap: 8px;
     }
 }
@@ -1497,13 +1531,16 @@ h1 {
         grid-template-rows: auto auto auto 1fr;
         align-content: start;
     }
-    .approval-page .approval-card>h3 {
+
+    .approval-page .approval-card > h3 {
         align-self: end;
     }
-    .approval-page .approval-card>p {
+
+    .approval-page .approval-card > p {
         align-self: start;
     }
-    .approval-page .approval-card>.approval-actions {
+
+    .approval-page .approval-card > .approval-actions {
         align-self: start;
     }
 }
@@ -1625,7 +1662,7 @@ h1 {
 
 /* Facebook publishing — scoped to the approvals screen */
 
-.approval-page .approval-card>.approval-actions .facebook-publish-button {
+.approval-page .approval-card > .approval-actions .facebook-publish-button {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -1686,19 +1723,20 @@ h1 {
 /* Approved cards have both an approval label and a publishing action. */
 
 @media (min-width: 951px) {
-    .approval-page .approval-card:has(> .final-status)>.approval-actions {
+    .approval-page .approval-card:has(> .final-status) > .approval-actions {
         grid-column: 2;
         grid-row: 5;
         border-top: 0;
         padding-top: 0;
     }
-    .approval-page .approval-card:has(> .final-status)>.ai-image-editor {
+
+    .approval-page .approval-card:has(> .final-status) > .ai-image-editor {
         grid-row: 6;
     }
 }
 
 @media (max-width: 950px) {
-    .approval-page .approval-card:has(> .final-status)>.approval-actions {
+    .approval-page .approval-card:has(> .final-status) > .approval-actions {
         grid-column: 1;
         grid-row: auto;
         padding-top: 0;
@@ -1707,7 +1745,7 @@ h1 {
 }
 
 @media (max-width: 600px) {
-    .approval-page .approval-card>.approval-actions .facebook-publish-button {
+    .approval-page .approval-card > .approval-actions .facebook-publish-button {
         width: 100%;
     }
 }
@@ -1862,6 +1900,7 @@ h1 {
         align-items: flex-start;
         flex-direction: column;
     }
+
     .facebook-connect-button {
         width: 100%;
     }
@@ -1980,6 +2019,7 @@ h1 {
     .content-grid {
         grid-template-columns: 1fr;
     }
+
     .content-page {
         padding: 18px;
     }
@@ -2052,4 +2092,76 @@ h1 {
     .analytics-grid {
         grid-template-columns: 1fr;
     }
+}
+
+
+/* HeyGen Video Editor */
+
+.heygen-editor {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    margin-top: 1rem;
+    padding: 1.25rem;
+    background: #ffffff;
+    border: 1px solid #e8ddff;
+    border-radius: 14px;
+}
+
+.heygen-editor-header h3 {
+    margin: 0 0 0.4rem;
+    font-size: 1rem;
+    font-weight: 700;
+    color: #241a35;
+}
+
+.heygen-editor-header p {
+    margin: 0;
+    font-size: 0.875rem;
+    color: #716780;
+    line-height: 1.5;
+}
+
+.heygen-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    min-width: 0;
+}
+
+.heygen-field label {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #302344;
+}
+
+.heygen-field select,
+.heygen-field textarea {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0.75rem 0.875rem;
+    border: 1px solid #ddd4ed;
+    border-radius: 10px;
+    background: #fff;
+    color: #302344;
+    font: inherit;
+    font-size: 0.875rem;
+}
+
+.heygen-field textarea {
+    resize: vertical;
+    min-height: 140px;
+    line-height: 1.6;
+}
+
+.heygen-field select:focus,
+.heygen-field textarea:focus {
+    outline: 2px solid #8750f7;
+    outline-offset: 2px;
+}
+
+.heygen-field small {
+    color: #82778e;
+    font-size: 0.75rem;
+    line-height: 1.5;
 }

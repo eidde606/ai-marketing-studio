@@ -18,6 +18,8 @@ from app.database import get_db
 from app.models import Business, Draft, ImageRevision, SocialAccount
 from app.token_service import decrypt_token
 from app.ai_service import generate_marketing_content
+from app.heygen_service import get_available_avatar_looks
+from app.heygen_service import generate_video, get_video_status, get_available_voices
 from app.image_service import (
     generate_marketing_image,
     edit_marketing_image,
@@ -49,9 +51,16 @@ app.add_middleware(
 
 logger = logging.getLogger(__name__)
 
+
 # --------------------------------------------------
 # Request Models
 # --------------------------------------------------
+
+
+class HeyGenVideoRequest(BaseModel):
+    avatar_id: str = Field(min_length=1)
+    voice_id: str = Field(min_length=1)
+    script: str = Field(min_length=1, max_length=5000)
 
 
 class DraftCreate(BaseModel):
@@ -128,9 +137,9 @@ def lock_draft_revisions(db: Session, draft_id: str) -> None:
 
 
 def require_revision(
-    db: Session,
-    draft_id: str,
-    revision_id: str,
+        db: Session,
+        draft_id: str,
+        revision_id: str,
 ) -> ImageRevision:
     revision = db.get(ImageRevision, revision_id)
 
@@ -193,8 +202,8 @@ async def get_facebook_page():
 
 @protected.post("/drafts/{draft_id}/publish-facebook")
 async def publish_draft_to_facebook(
-    draft_id: str,
-    db: Session = Depends(get_db),
+        draft_id: str,
+        db: Session = Depends(get_db),
 ):
     draft = db.get(Draft, draft_id)
 
@@ -246,9 +255,9 @@ async def publish_draft_to_facebook(
         if image_bytes is not None:
             # Validate format before sending any request to Facebook.
             if not (
-                image_bytes.startswith(b"\x89PNG\r\n\x1a\n")
-                or image_bytes.startswith(b"\xff\xd8\xff")
-                or (image_bytes.startswith(b"RIFF") and image_bytes[8:12] == b"WEBP")
+                    image_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+                    or image_bytes.startswith(b"\xff\xd8\xff")
+                    or (image_bytes.startswith(b"RIFF") and image_bytes[8:12] == b"WEBP")
             ):
                 raise ValueError("Unsupported image data")
     except Exception:
@@ -291,7 +300,7 @@ async def publish_draft_to_facebook(
         # Explicit Facebook client rejection: request did not publish.
         # Rate limits and 5xx are treated conservatively as uncertain.
         rejected = (
-            400 <= exc.response.status_code < 500 and exc.response.status_code != 429
+                400 <= exc.response.status_code < 500 and exc.response.status_code != 429
         )
         draft.facebook_publish_status = "not_published" if rejected else "needs_review"
         db.commit()
@@ -319,9 +328,9 @@ class FacebookRecoveryRequest(BaseModel):
 
 @protected.post("/drafts/{draft_id}/reset-facebook-publishing")
 def reset_facebook_publishing(
-    draft_id: str,
-    request: FacebookRecoveryRequest,
-    db: Session = Depends(get_db),
+        draft_id: str,
+        request: FacebookRecoveryRequest,
+        db: Session = Depends(get_db),
 ):
     """Only after manually confirming the post is absent on Facebook."""
     if not request.confirmed_not_published:
@@ -353,8 +362,8 @@ def reset_facebook_publishing(
 
 @protected.post("/drafts", status_code=201)
 def create_draft(
-    request: DraftCreate,
-    db: Session = Depends(get_db),
+        request: DraftCreate,
+        db: Session = Depends(get_db),
 ):
     business = db.get(Business, request.business_id)
 
@@ -375,8 +384,8 @@ def create_draft(
 
 @protected.get("/drafts")
 def list_drafts(
-    business_id: str,
-    db: Session = Depends(get_db),
+        business_id: str,
+        db: Session = Depends(get_db),
 ):
     business = db.get(Business, business_id)
 
@@ -391,8 +400,8 @@ def list_drafts(
 
 @protected.patch("/drafts/{draft_id}/approve")
 def approve_draft(
-    draft_id: str,
-    db: Session = Depends(get_db),
+        draft_id: str,
+        db: Session = Depends(get_db),
 ):
     draft = require_pending_draft(db, draft_id)
 
@@ -406,9 +415,9 @@ def approve_draft(
 
 @protected.patch("/drafts/{draft_id}")
 def update_draft(
-    draft_id: str,
-    request: DraftUpdate,
-    db: Session = Depends(get_db),
+        draft_id: str,
+        request: DraftUpdate,
+        db: Session = Depends(get_db),
 ):
     draft = require_pending_draft(db, draft_id)
 
@@ -423,8 +432,8 @@ def update_draft(
 
 @protected.patch("/drafts/{draft_id}/reject")
 def reject_draft(
-    draft_id: str,
-    db: Session = Depends(get_db),
+        draft_id: str,
+        db: Session = Depends(get_db),
 ):
     draft = require_pending_draft(db, draft_id)
 
@@ -446,8 +455,8 @@ def reject_draft(
     status_code=201,
 )
 def generate_content(
-    business_id: str,
-    db: Session = Depends(get_db),
+        business_id: str,
+        db: Session = Depends(get_db),
 ):
     business = db.get(Business, business_id)
 
@@ -499,6 +508,25 @@ def generate_content(
     return draft
 
 
+@protected.post("/heygen/videos")
+def create_heygen_video(request: HeyGenVideoRequest):
+    return generate_video(
+        avatar_id=request.avatar_id,
+        voice_id=request.voice_id,
+        script=request.script,
+    )
+
+
+@protected.get("/heygen/videos/{video_id}")
+def check_heygen_video(video_id: str):
+    return get_video_status(video_id)
+
+
+@protected.get("/heygen/voices")
+def list_heygen_voices():
+    return get_available_voices()
+
+
 # --------------------------------------------------
 # Business Endpoints
 # --------------------------------------------------
@@ -506,8 +534,8 @@ def generate_content(
 
 @protected.post("/businesses", status_code=201)
 def create_business(
-    request: BusinessCreate,
-    db: Session = Depends(get_db),
+        request: BusinessCreate,
+        db: Session = Depends(get_db),
 ):
     business = Business(**request.model_dump())
 
@@ -520,7 +548,7 @@ def create_business(
 
 @protected.get("/businesses")
 def list_businesses(
-    db: Session = Depends(get_db),
+        db: Session = Depends(get_db),
 ):
     return db.scalars(select(Business)).all()
 
@@ -532,8 +560,8 @@ def list_businesses(
 
 @protected.post("/drafts/{draft_id}/generate-image")
 def generate_draft_image(
-    draft_id: str,
-    db: Session = Depends(get_db),
+        draft_id: str,
+        db: Session = Depends(get_db),
 ):
     generation_id = str(uuid4())
 
@@ -667,8 +695,8 @@ def generate_draft_image(
 
 @protected.get("/drafts/{draft_id}/image")
 def get_draft_image(
-    draft_id: str,
-    db: Session = Depends(get_db),
+        draft_id: str,
+        db: Session = Depends(get_db),
 ):
     draft = require_draft(db, draft_id)
 
@@ -697,8 +725,8 @@ def get_draft_image(
 
 @protected.post("/drafts/{draft_id}/reset-image")
 def reset_stuck_image(
-    draft_id: str,
-    db: Session = Depends(get_db),
+        draft_id: str,
+        db: Session = Depends(get_db),
 ):
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=15)
 
@@ -754,9 +782,9 @@ def reset_stuck_image(
     status_code=201,
 )
 def create_image_revision(
-    draft_id: str,
-    request: ImageRevisionRequest,
-    db: Session = Depends(get_db),
+        draft_id: str,
+        request: ImageRevisionRequest,
+        db: Session = Depends(get_db),
 ):
     """
     Create a proposed edited image.
@@ -778,9 +806,9 @@ def create_image_revision(
     draft = require_pending_draft(db, draft_id)
 
     if (
-        draft.image_status != "completed"
-        or not draft.image_url
-        or not draft.business_id
+            draft.image_status != "completed"
+            or not draft.image_url
+            or not draft.business_id
     ):
         raise HTTPException(
             status_code=409,
@@ -910,8 +938,8 @@ def create_image_revision(
 
 @protected.get("/drafts/{draft_id}/image-revisions")
 def list_image_revisions(
-    draft_id: str,
-    db: Session = Depends(get_db),
+        draft_id: str,
+        db: Session = Depends(get_db),
 ):
     require_draft(db, draft_id)
 
@@ -926,9 +954,9 @@ def list_image_revisions(
 
 @protected.post("/drafts/{draft_id}/image-revisions/{revision_id}/accept")
 def accept_image_revision(
-    draft_id: str,
-    revision_id: str,
-    db: Session = Depends(get_db),
+        draft_id: str,
+        revision_id: str,
+        db: Session = Depends(get_db),
 ):
     """
     Accept the proposed image.
@@ -974,9 +1002,9 @@ def accept_image_revision(
 
 @protected.post("/drafts/{draft_id}/image-revisions/{revision_id}/reject")
 def reject_image_revision(
-    draft_id: str,
-    revision_id: str,
-    db: Session = Depends(get_db),
+        draft_id: str,
+        revision_id: str,
+        db: Session = Depends(get_db),
 ):
     """
     Reject a proposed image.
@@ -1014,8 +1042,8 @@ def reject_image_revision(
 
 @protected.get("/drafts/{draft_id}/analytics/facebook")
 async def get_facebook_draft_analytics(
-    draft_id: str,
-    db: Session = Depends(get_db),
+        draft_id: str,
+        db: Session = Depends(get_db),
 ):
     # Find the draft.
     draft = db.get(Draft, draft_id)
@@ -1100,8 +1128,8 @@ async def get_facebook_draft_analytics(
 
 @protected.get("/drafts/{draft_id}/analytics/facebook/reach")
 async def test_facebook_reach(
-    draft_id: str,
-    db: Session = Depends(get_db),
+        draft_id: str,
+        db: Session = Depends(get_db),
 ):
     draft = db.get(Draft, draft_id)
 
@@ -1132,8 +1160,8 @@ async def test_facebook_reach(
                 metric["values"][0]["value"]
                 for metric in data.get("data", [])
                 if metric.get("name") == "post_total_media_view_unique"
-                and metric.get("period") == "lifetime"
-                and metric.get("values")
+                   and metric.get("period") == "lifetime"
+                   and metric.get("values")
             ),
             None,
         )
@@ -1154,6 +1182,24 @@ async def test_facebook_reach(
             status_code=502,
             detail="Facebook did not return reach data",
         ) from exc
+
+
+@protected.get("/heygen/avatars")
+def list_heygen_avatars():
+    try:
+        return get_available_avatar_looks()
+
+    except httpx.HTTPStatusError:
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to retrieve HeyGen avatars",
+        )
+
+    except httpx.RequestError:
+        raise HTTPException(
+            status_code=502,
+            detail="HeyGen connection failed",
+        )
 
 
 # --------------------------------------------------

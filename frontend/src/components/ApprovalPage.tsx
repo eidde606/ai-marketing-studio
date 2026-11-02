@@ -1,6 +1,14 @@
-import type { FC, ReactNode, Dispatch, SetStateAction } from "react";
+import {
+  useState,
+  type FC,
+  type ReactNode,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 
 import type { Draft, ImageRevision } from "../services/draftsApi";
+
+import { HeyGenVideoEditor } from "./HeyGenVideoEditor";
 
 type ApprovalPageProps = {
   loadingDrafts: boolean;
@@ -63,7 +71,6 @@ type ApprovalPageProps = {
 
   handleDecideRevision: (
     draft: Draft,
-
     decision: "accept" | "reject",
   ) => Promise<void>;
 
@@ -148,83 +155,261 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
   toggleImageEditor,
 
   startEditing,
-}) => (
-  <section className="panel approval-page">
-    <div className="panel-heading">
-      <div>
-        <span className="eyebrow">Revisión de contenido</span>
+}) => {
+  const [openVideoEditorId, setOpenVideoEditorId] = useState<string | null>(
+    null,
+  );
 
-        <h2>Cola de aprobaciones</h2>
+  return (
+    <section className="panel approval-page">
+      <div className="panel-heading">
+        <div>
+          <span className="eyebrow">Revisión de contenido</span>
+
+          <h2>Cola de aprobaciones</h2>
+        </div>
+
+        <span className="approval-counter">
+          {loadingDrafts || loadError ? "—" : pendingCount} pendientes
+        </span>
       </div>
 
-      <span className="approval-counter">
-        {loadingDrafts || loadError ? "—" : pendingCount} pendientes
-      </span>
-    </div>
+      <div className="approval-page-list">
+        {draftMessages}
 
-    <div className="approval-page-list">
-      {draftMessages}
+        {!loadingDrafts &&
+          !loadError &&
+          visibleDrafts.map((draft) => (
+            <div className="approval-card" key={draft.id}>
+              <div className="approval-card-top">
+                <span className="channel-tag">{draft.platform}</span>
 
-      {!loadingDrafts &&
-        !loadError &&
-        visibleDrafts.map((draft) => (
-          <div className="approval-card" key={draft.id}>
-            <div className="approval-card-top">
-              <span className="channel-tag">{draft.platform}</span>
+                <time>{formatDraftDate(draft.created_at)}</time>
+              </div>
 
-              <time>{formatDraftDate(draft.created_at)}</time>
-            </div>
+              {editingId === draft.id ? (
+                <div
+                  className="draft-edit-form"
 
-            {editingId === draft.id ? (
+                  style={{
+                    display: "grid",
+
+                    gap: "0.75rem",
+
+                    marginTop: "1rem",
+                  }}
+                >
+                  <label htmlFor={`edit-title-${draft.id}`}>Título</label>
+
+                  <input
+                    id={`edit-title-${draft.id}`}
+
+                    value={editTitle}
+
+                    onChange={(event) => setEditTitle(event.target.value)}
+
+                    maxLength={200}
+
+                    style={{
+                      width: "100%",
+
+                      padding: "0.6rem",
+                    }}
+                  />
+
+                  <label htmlFor={`edit-caption-${draft.id}`}>
+                    Texto de la publicación
+                  </label>
+
+                  <textarea
+                    id={`edit-caption-${draft.id}`}
+
+                    value={editCaption}
+
+                    onChange={(event) => setEditCaption(event.target.value)}
+
+                    rows={6}
+
+                    style={{
+                      width: "100%",
+
+                      padding: "0.6rem",
+                    }}
+                  />
+
+                  <div className="approval-actions">
+                    <button
+                      className="approve-button"
+
+                      type="button"
+
+                      disabled={
+                        busyDraftIds.includes(draft.id) ||
+                        !editTitle.trim() ||
+                        !editCaption.trim()
+                      }
+
+                      onClick={() => void handleSaveEdit(draft.id)}
+                    >
+                      {busyDraftIds.includes(draft.id)
+                        ? "Guardando..."
+                        : "Guardar cambios"}
+                    </button>
+
+                    <button
+                      className="text-button"
+
+                      type="button"
+
+                      disabled={busyDraftIds.includes(draft.id)}
+
+                      onClick={() => setEditingId(null)}
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <h3>{draft.title}</h3>
+
+                  <p>{draft.caption}</p>
+                </>
+              )}
+
               <div
-                className="draft-edit-form"
+                className="draft-image-section"
 
                 style={{
+                  marginTop: "1.25rem",
+
+                  marginBottom: "1.25rem",
+
                   display: "grid",
 
                   gap: "0.75rem",
-
-                  marginTop: "1rem",
                 }}
               >
-                <label htmlFor={`edit-title-${draft.id}`}>Título</label>
+                <strong>Imagen de la publicación</strong>
 
-                <input
-                  id={`edit-title-${draft.id}`}
+                {imageUrls[draft.id] && (
+                  <img
+                    src={imageUrls[draft.id]}
 
-                  value={editTitle}
+                    alt={`Imagen para ${draft.title}`}
 
-                  onChange={(event) => setEditTitle(event.target.value)}
+                    style={{
+                      width: "100%",
 
-                  maxLength={200}
+                      maxWidth: "420px",
 
-                  style={{
-                    width: "100%",
+                      borderRadius: "12px",
 
-                    padding: "0.6rem",
-                  }}
-                />
+                      objectFit: "contain",
+                    }}
+                  />
+                )}
 
-                <label htmlFor={`edit-caption-${draft.id}`}>
-                  Texto de la publicación
-                </label>
+                {draft.image_status === "generating" && (
+                  <p role="status">
+                    La imagen se está generando. Esto puede tardar unos minutos.
+                  </p>
+                )}
 
-                <textarea
-                  id={`edit-caption-${draft.id}`}
+                {draft.image_status === "failed" && (
+                  <p role="status">La generación anterior no se completó.</p>
+                )}
 
-                  value={editCaption}
+                {draft.image_status === "completed" && !imageUrls[draft.id] && (
+                  <p>La imagen está guardada y lista para visualizar.</p>
+                )}
 
-                  onChange={(event) => setEditCaption(event.target.value)}
+                {imageErrors[draft.id] && (
+                  <p
+                    role="alert"
 
-                  rows={6}
+                    style={{ color: "#b91c1c" }}
+                  >
+                    {imageErrors[draft.id]}
+                  </p>
+                )}
 
-                  style={{
-                    width: "100%",
+                <div className="approval-actions">
+                  {draft.status === "pending" &&
+                    !!draft.image_prompt &&
+                    !draft.image_url &&
+                    ["not_started", "failed"].includes(draft.image_status) && (
+                      <button
+                        className="primary-button"
 
-                    padding: "0.6rem",
-                  }}
-                />
+                        type="button"
 
+                        disabled={
+                          imageBusyIds.includes(draft.id) ||
+                          busyDraftIds.includes(draft.id) ||
+                          approvingIds.includes(draft.id)
+                        }
+
+                        onClick={() => void handleGenerateImage(draft)}
+                      >
+                        {imageBusyIds.includes(draft.id)
+                          ? "Generando imagen..."
+                          : draft.image_status === "failed"
+                            ? "Reintentar imagen"
+                            : "✦ Generar imagen"}
+                      </button>
+                    )}
+
+                  {draft.image_status === "completed" && !!draft.image_url && (
+                    <button
+                      className="text-button"
+
+                      type="button"
+
+                      disabled={imageBusyIds.includes(draft.id)}
+
+                      onClick={() => void handlePreviewImage(draft)}
+                    >
+                      {imageBusyIds.includes(draft.id)
+                        ? "Cargando imagen..."
+                        : imageUrls[draft.id]
+                          ? "Actualizar vista previa"
+                          : "Ver imagen"}
+                    </button>
+                  )}
+                </div>
+
+                {draft.status === "pending" && (
+                  <div>
+                    <button
+                      type="button"
+                      className="text-button"
+                      onClick={() =>
+                        setOpenVideoEditorId((current) =>
+                          current === draft.id ? null : draft.id,
+                        )
+                      }
+                    >
+                      {openVideoEditorId === draft.id
+                        ? "Cerrar editor de video"
+                        : "🎬 Crear video con HeyGen"}
+                    </button>
+
+                    {openVideoEditorId === draft.id && (
+                      <HeyGenVideoEditor draft={draft} />
+                    )}
+                  </div>
+                )}
+
+                {!draft.image_prompt && !draft.image_url && (
+                  <small>
+                    Este borrador no tiene una descripción de imagen generada
+                    por IA.
+                  </small>
+                )}
+              </div>
+
+              {draft.status === "pending" && editingId !== draft.id ? (
                 <div className="approval-actions">
                   <button
                     className="approve-button"
@@ -232,499 +417,352 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                     type="button"
 
                     disabled={
+                      approvingIds.includes(draft.id) ||
                       busyDraftIds.includes(draft.id) ||
-                      !editTitle.trim() ||
-                      !editCaption.trim()
+                      imageBusyIds.includes(draft.id)
                     }
 
-                    onClick={() => void handleSaveEdit(draft.id)}
+                    onClick={() => void handleApprove(draft.id)}
+                  >
+                    {approvingIds.includes(draft.id)
+                      ? "Aprobando..."
+                      : "✓ Aprobar"}
+                  </button>
+
+                  <button
+                    className="text-button"
+
+                    type="button"
+
+                    disabled={
+                      busyDraftIds.includes(draft.id) ||
+                      approvingIds.includes(draft.id)
+                    }
+
+                    onClick={() => startEditing(draft)}
+                  >
+                    Editar
+                  </button>
+
+                  <button
+                    className="reject-button"
+
+                    type="button"
+
+                    disabled={
+                      busyDraftIds.includes(draft.id) ||
+                      approvingIds.includes(draft.id) ||
+                      imageBusyIds.includes(draft.id)
+                    }
+
+                    onClick={() => void handleReject(draft.id)}
                   >
                     {busyDraftIds.includes(draft.id)
-                      ? "Guardando..."
-                      : "Guardar cambios"}
-                  </button>
-
-                  <button
-                    className="text-button"
-
-                    type="button"
-
-                    disabled={busyDraftIds.includes(draft.id)}
-
-                    onClick={() => setEditingId(null)}
-                  >
-                    Cancelar
+                      ? "Procesando..."
+                      : "Rechazar"}
                   </button>
                 </div>
-              </div>
-            ) : (
-              <>
-                <h3>{draft.title}</h3>
-
-                <p>{draft.caption}</p>
-              </>
-            )}
-
-            <div
-              className="draft-image-section"
-
-              style={{
-                marginTop: "1.25rem",
-
-                marginBottom: "1.25rem",
-
-                display: "grid",
-
-                gap: "0.75rem",
-              }}
-            >
-              <strong>Imagen de la publicación</strong>
-
-              {imageUrls[draft.id] && (
-                <img
-                  src={imageUrls[draft.id]}
-
-                  alt={`Imagen para ${draft.title}`}
-
-                  style={{
-                    width: "100%",
-
-                    maxWidth: "420px",
-
-                    borderRadius: "12px",
-
-                    objectFit: "contain",
-                  }}
-                />
-              )}
-
-              {draft.image_status === "generating" && (
-                <p role="status">
-                  La imagen se está generando. Esto puede tardar unos minutos.
-                </p>
-              )}
-
-              {draft.image_status === "failed" && (
-                <p role="status">La generación anterior no se completó.</p>
-              )}
-
-              {draft.image_status === "completed" && !imageUrls[draft.id] && (
-                <p>La imagen está guardada y lista para visualizar.</p>
-              )}
-
-              {imageErrors[draft.id] && (
-                <p
-                  role="alert"
-
-                  style={{ color: "#b91c1c" }}
+              ) : draft.status !== "pending" ? (
+                <span
+                  className={`final-status ${
+                    draft.status === "approved" ? "aprobado" : ""
+                  }`}
                 >
-                  {imageErrors[draft.id]}
-                </p>
-              )}
+                  {draft.status === "approved"
+                    ? "✓ Aprobado"
+                    : draft.status === "rejected"
+                      ? "✕ Rechazado"
+                      : draft.status}
+                </span>
+              ) : null}
 
-              <div className="approval-actions">
-                {draft.status === "pending" &&
-                  !!draft.image_prompt &&
-                  !draft.image_url &&
-                  ["not_started", "failed"].includes(draft.image_status) && (
+              {draft.status === "approved" && (
+                <div className="approval-actions">
+                  {draft.facebook_publish_status === "not_published" && (
                     <button
-                      className="primary-button"
-
+                      className="primary-button facebook-publish-button"
                       type="button"
-
-                      disabled={
-                        imageBusyIds.includes(draft.id) ||
-                        busyDraftIds.includes(draft.id) ||
-                        approvingIds.includes(draft.id)
-                      }
-
-                      onClick={() => void handleGenerateImage(draft)}
+                      disabled={publishingIds.includes(draft.id)}
+                      onClick={() => {
+                        if (
+                          window.confirm(
+                            "¿Publicar este texto ahora en la página de Facebook conectada? La imagen no se incluirá.",
+                          )
+                        ) {
+                          void handlePublishFacebook(draft.id);
+                        }
+                      }}
                     >
-                      {imageBusyIds.includes(draft.id)
-                        ? "Generando imagen..."
-                        : draft.image_status === "failed"
-                          ? "Reintentar imagen"
-                          : "✦ Generar imagen"}
+                      {publishingIds.includes(draft.id)
+                        ? "Publicando..."
+                        : "Publicar en Facebook"}
                     </button>
                   )}
-
-                {draft.image_status === "completed" && !!draft.image_url && (
-                  <button
-                    className="text-button"
-
-                    type="button"
-
-                    disabled={imageBusyIds.includes(draft.id)}
-
-                    onClick={() => void handlePreviewImage(draft)}
-                  >
-                    {imageBusyIds.includes(draft.id)
-                      ? "Cargando imagen..."
-                      : imageUrls[draft.id]
-                        ? "Actualizar vista previa"
-                        : "Ver imagen"}
-                  </button>
-                )}
-              </div>
-
-              {!draft.image_prompt && !draft.image_url && (
-                <small>
-                  Este borrador no tiene una descripción de imagen generada por
-                  IA.
-                </small>
-              )}
-            </div>
-
-            {draft.status === "pending" && editingId !== draft.id ? (
-              <div className="approval-actions">
-                <button
-                  className="approve-button"
-
-                  type="button"
-
-                  disabled={
-                    approvingIds.includes(draft.id) ||
-                    busyDraftIds.includes(draft.id) ||
-                    imageBusyIds.includes(draft.id)
-                  }
-
-                  onClick={() => void handleApprove(draft.id)}
-                >
-                  {approvingIds.includes(draft.id)
-                    ? "Aprobando..."
-                    : "✓ Aprobar"}
-                </button>
-
-                <button
-                  className="text-button"
-
-                  type="button"
-
-                  disabled={
-                    busyDraftIds.includes(draft.id) ||
-                    approvingIds.includes(draft.id)
-                  }
-
-                  onClick={() => startEditing(draft)}
-                >
-                  Editar
-                </button>
-
-                <button
-                  className="reject-button"
-
-                  type="button"
-
-                  disabled={
-                    busyDraftIds.includes(draft.id) ||
-                    approvingIds.includes(draft.id) ||
-                    imageBusyIds.includes(draft.id)
-                  }
-
-                  onClick={() => void handleReject(draft.id)}
-                >
-                  {busyDraftIds.includes(draft.id)
-                    ? "Procesando..."
-                    : "Rechazar"}
-                </button>
-              </div>
-            ) : draft.status !== "pending" ? (
-              <span
-                className={`final-status ${
-                  draft.status === "approved" ? "aprobado" : ""
-                }`}
-              >
-                {draft.status === "approved"
-                  ? "✓ Aprobado"
-                  : draft.status === "rejected"
-                    ? "✕ Rechazado"
-                    : draft.status}
-              </span>
-            ) : null}
-
-            {draft.status === "approved" && (
-              <div className="approval-actions">
-                {draft.facebook_publish_status === "not_published" && (
-                  <button
-                    className="primary-button facebook-publish-button"
-                    type="button"
-                    disabled={publishingIds.includes(draft.id)}
-                    onClick={() => {
-                      if (
-                        window.confirm(
-                          "¿Publicar este texto ahora en la página de Facebook conectada? La imagen no se incluirá.",
-                        )
-                      ) {
-                        void handlePublishFacebook(draft.id);
-                      }
-                    }}
-                  >
-                    {publishingIds.includes(draft.id)
-                      ? "Publicando..."
-                      : "Publicar en Facebook"}
-                  </button>
-                )}
-                {draft.facebook_publish_status === "published" && (
-                  <span
-                    className="facebook-publish-status is-published"
-                    role="status"
-                  >
-                    ✓ Publicado en Facebook
-                  </span>
-                )}
-                {draft.facebook_publish_status === "publishing" && (
-                  <span
-                    className="facebook-publish-status is-publishing"
-                    role="status"
-                  >
-                    Publicación en proceso. Actualiza para verificar.
-                  </span>
-                )}
-                {draft.facebook_publish_status === "needs_review" && (
-                  <span
-                    className="facebook-publish-status needs-review"
-                    role="alert"
-                  >
-                    Publicación por verificar. Revisa Facebook antes de volver a
-                    intentar.
-                  </span>
-                )}
-              </div>
-            )}
-
-            {/* Spanish AI image editor */}
-
-            {draft.status === "pending" &&
-              draft.image_status === "completed" &&
-              !!draft.image_url && (
-                <div className="ai-image-editor">
-                  <button
-                    type="button"
-
-                    className="ai-editor-toggle"
-
-                    onClick={() => toggleImageEditor(draft.id)}
-
-                    aria-expanded={!!showImageEditor[draft.id]}
-
-                    aria-controls={`ai-editor-content-${draft.id}`}
-                  >
-                    <span>✦ Editar imagen con IA</span>
-
-                    <span aria-hidden="true">
-                      {showImageEditor[draft.id] ? "−" : "+"}
-                    </span>
-                  </button>
-
-                  {showImageEditor[draft.id] && (
-                    <div
-                      id={`ai-editor-content-${draft.id}`}
-
-                      className="ai-editor-content"
+                  {draft.facebook_publish_status === "published" && (
+                    <span
+                      className="facebook-publish-status is-published"
+                      role="status"
                     >
-                      <p>
-                        Describe en español los cambios. La imagen original se
-                        conservará hasta que aceptes una versión nueva.
-                      </p>
+                      ✓ Publicado en Facebook
+                    </span>
+                  )}
+                  {draft.facebook_publish_status === "publishing" && (
+                    <span
+                      className="facebook-publish-status is-publishing"
+                      role="status"
+                    >
+                      Publicación en proceso. Actualiza para verificar.
+                    </span>
+                  )}
+                  {draft.facebook_publish_status === "needs_review" && (
+                    <span
+                      className="facebook-publish-status needs-review"
+                      role="alert"
+                    >
+                      Publicación por verificar. Revisa Facebook antes de volver
+                      a intentar.
+                    </span>
+                  )}
+                </div>
+              )}
 
-                      {revisionErrors[draft.id] && (
-                        <p role="alert" style={{ color: "#b91c1c" }}>
-                          {revisionErrors[draft.id]}
+              {/* Spanish AI image editor */}
+
+              {draft.status === "pending" &&
+                draft.image_status === "completed" &&
+                !!draft.image_url && (
+                  <div className="ai-image-editor">
+                    <button
+                      type="button"
+
+                      className="ai-editor-toggle"
+
+                      onClick={() => toggleImageEditor(draft.id)}
+
+                      aria-expanded={!!showImageEditor[draft.id]}
+
+                      aria-controls={`ai-editor-content-${draft.id}`}
+                    >
+                      <span>✦ Editar imagen con IA</span>
+
+                      <span aria-hidden="true">
+                        {showImageEditor[draft.id] ? "−" : "+"}
+                      </span>
+                    </button>
+
+                    {showImageEditor[draft.id] && (
+                      <div
+                        id={`ai-editor-content-${draft.id}`}
+
+                        className="ai-editor-content"
+                      >
+                        <p>
+                          Describe en español los cambios. La imagen original se
+                          conservará hasta que aceptes una versión nueva.
                         </p>
-                      )}
 
-                      {revisions[draft.id]?.status === "ready" ? (
-                        <>
-                          <p>
-                            <strong>Versión nueva lista para revisar</strong>
+                        {revisionErrors[draft.id] && (
+                          <p role="alert" style={{ color: "#b91c1c" }}>
+                            {revisionErrors[draft.id]}
                           </p>
+                        )}
 
-                          <div
-                            style={{
-                              display: "grid",
+                        {revisions[draft.id]?.status === "ready" ? (
+                          <>
+                            <p>
+                              <strong>Versión nueva lista para revisar</strong>
+                            </p>
 
-                              gridTemplateColumns:
-                                "repeat(auto-fit, minmax(200px, 1fr))",
+                            <div
+                              style={{
+                                display: "grid",
 
-                              gap: "1rem",
-                            }}
-                          >
-                            <div>
-                              <strong>Original</strong>
+                                gridTemplateColumns:
+                                  "repeat(auto-fit, minmax(200px, 1fr))",
 
-                              {imageUrls[draft.id] ? (
-                                <img
-                                  src={imageUrls[draft.id]}
+                                gap: "1rem",
+                              }}
+                            >
+                              <div>
+                                <strong>Original</strong>
 
-                                  alt="Imagen original"
+                                {imageUrls[draft.id] ? (
+                                  <img
+                                    src={imageUrls[draft.id]}
 
-                                  style={{ width: "100%", borderRadius: 12 }}
-                                />
-                              ) : (
-                                <button
-                                  type="button"
+                                    alt="Imagen original"
 
-                                  onClick={() => void handlePreviewImage(draft)}
-                                >
-                                  Ver original
-                                </button>
-                              )}
+                                    style={{ width: "100%", borderRadius: 12 }}
+                                  />
+                                ) : (
+                                  <button
+                                    type="button"
+
+                                    onClick={() =>
+                                      void handlePreviewImage(draft)
+                                    }
+                                  >
+                                    Ver original
+                                  </button>
+                                )}
+                              </div>
+
+                              <div>
+                                <strong>Nueva versión</strong>
+
+                                {revisions[draft.id]?.image_url ? (
+                                  <img
+                                    src={revisions[draft.id]!.image_url!}
+
+                                    alt="Versión editada"
+
+                                    style={{ width: "100%", borderRadius: 12 }}
+                                  />
+                                ) : (
+                                  <p>
+                                    No se recibió una vista previa. Actualiza el
+                                    estado.
+                                  </p>
+                                )}
+                              </div>
                             </div>
 
-                            <div>
-                              <strong>Nueva versión</strong>
-
-                              {revisions[draft.id]?.image_url ? (
-                                <img
-                                  src={revisions[draft.id]!.image_url!}
-
-                                  alt="Versión editada"
-
-                                  style={{ width: "100%", borderRadius: 12 }}
-                                />
-                              ) : (
-                                <p>
-                                  No se recibió una vista previa. Actualiza el
-                                  estado.
-                                </p>
-                              )}
-                            </div>
-                          </div>
-
-                          <div className="approval-actions">
-                            <button
-                              type="button"
-
-                              className="approve-button"
-
-                              disabled={revisionBusyIds.includes(draft.id)}
-
-                              onClick={() =>
-                                void handleDecideRevision(draft, "accept")
-                              }
-                            >
-                              ✓ Aceptar nueva versión
-                            </button>
-
-                            <button
-                              type="button"
-
-                              className="reject-button"
-
-                              disabled={revisionBusyIds.includes(draft.id)}
-
-                              onClick={() =>
-                                void handleDecideRevision(draft, "reject")
-                              }
-                            >
-                              Conservar original
-                            </button>
-                          </div>
-                        </>
-                      ) : revisions[draft.id]?.status === "generating" ? (
-                        <p role="status">
-                          La nueva imagen se está generando. No solicites otra
-                          hasta confirmar el resultado.
-                        </p>
-                      ) : (
-                        <>
-                          <label htmlFor={`image-instructions-${draft.id}`}>
-                            Instrucciones para la IA
-                          </label>
-
-                          <textarea
-                            id={`image-instructions-${draft.id}`}
-
-                            value={imageInstructions[draft.id] || ""}
-
-                            onChange={(event) =>
-                              updateImageInstructions(
-                                draft.id,
-
-                                event.target.value,
-                              )
-                            }
-
-                            placeholder="Ejemplo: Mejora la iluminación y cambia el fondo por una mesa elegante."
-
-                            rows={4}
-
-                            maxLength={1000}
-
-                            disabled={revisionBusyIds.includes(draft.id)}
-                          />
-
-                          <div className="ai-editor-suggestions">
-                            {[
-                              "Mejorar iluminación",
-
-                              "Cambiar el fondo",
-
-                              "Estilo más profesional",
-                            ].map((suggestion) => (
+                            <div className="approval-actions">
                               <button
-                                key={suggestion}
-
                                 type="button"
+
+                                className="approve-button"
 
                                 disabled={revisionBusyIds.includes(draft.id)}
 
                                 onClick={() =>
-                                  addImageSuggestion(draft.id, suggestion)
+                                  void handleDecideRevision(draft, "accept")
                                 }
                               >
-                                \+ {suggestion}
+                                ✓ Aceptar nueva versión
                               </button>
-                            ))}
-                          </div>
 
-                          <button
-                            type="button"
+                              <button
+                                type="button"
 
-                            className="primary-button ai-regenerate-button"
+                                className="reject-button"
 
-                            disabled={
-                              revisionBusyIds.includes(draft.id) ||
-                              !imageInstructions[draft.id]?.trim()
-                            }
+                                disabled={revisionBusyIds.includes(draft.id)}
 
-                            onClick={() => void handleCreateRevision(draft)}
-                          >
-                            {revisionBusyIds.includes(draft.id)
-                              ? "Generando nueva versión..."
-                              : "✦ Generar nueva versión"}
-                          </button>
+                                onClick={() =>
+                                  void handleDecideRevision(draft, "reject")
+                                }
+                              >
+                                Conservar original
+                              </button>
+                            </div>
+                          </>
+                        ) : revisions[draft.id]?.status === "generating" ? (
+                          <p role="status">
+                            La nueva imagen se está generando. No solicites otra
+                            hasta confirmar el resultado.
+                          </p>
+                        ) : (
+                          <>
+                            <label htmlFor={`image-instructions-${draft.id}`}>
+                              Instrucciones para la IA
+                            </label>
 
-                          <small>
-                            La generación con IA puede tener un costo adicional.
-                            Se solicitará confirmación antes de continuar.
-                          </small>
-                        </>
-                      )}
+                            <textarea
+                              id={`image-instructions-${draft.id}`}
 
-                      <button
-                        type="button"
+                              value={imageInstructions[draft.id] || ""}
 
-                        className="text-button"
+                              onChange={(event) =>
+                                updateImageInstructions(
+                                  draft.id,
 
-                        disabled={revisionBusyIds.includes(draft.id)}
+                                  event.target.value,
+                                )
+                              }
 
-                        onClick={() => void refreshRevision(draft.id)}
-                      >
-                        Actualizar estado
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-          </div>
-        ))}
+                              placeholder="Ejemplo: Mejora la iluminación y cambia el fondo por una mesa elegante."
 
-      {!loadingDrafts && !loadError && visibleDrafts.length === 0 && (
-        <p className="empty-state">Todavía no hay borradores para revisar.</p>
-      )}
-    </div>
-  </section>
-);
+                              rows={4}
+
+                              maxLength={1000}
+
+                              disabled={revisionBusyIds.includes(draft.id)}
+                            />
+
+                            <div className="ai-editor-suggestions">
+                              {[
+                                "Mejorar iluminación",
+
+                                "Cambiar el fondo",
+
+                                "Estilo más profesional",
+                              ].map((suggestion) => (
+                                <button
+                                  key={suggestion}
+
+                                  type="button"
+
+                                  disabled={revisionBusyIds.includes(draft.id)}
+
+                                  onClick={() =>
+                                    addImageSuggestion(draft.id, suggestion)
+                                  }
+                                >
+                                  \+ {suggestion}
+                                </button>
+                              ))}
+                            </div>
+
+                            <button
+                              type="button"
+
+                              className="primary-button ai-regenerate-button"
+
+                              disabled={
+                                revisionBusyIds.includes(draft.id) ||
+                                !imageInstructions[draft.id]?.trim()
+                              }
+
+                              onClick={() => void handleCreateRevision(draft)}
+                            >
+                              {revisionBusyIds.includes(draft.id)
+                                ? "Generando nueva versión..."
+                                : "✦ Generar nueva versión"}
+                            </button>
+
+                            <small>
+                              La generación con IA puede tener un costo
+                              adicional. Se solicitará confirmación antes de
+                              continuar.
+                            </small>
+                          </>
+                        )}
+
+                        <button
+                          type="button"
+
+                          className="text-button"
+
+                          disabled={revisionBusyIds.includes(draft.id)}
+
+                          onClick={() => void refreshRevision(draft.id)}
+                        >
+                          Actualizar estado
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+            </div>
+          ))}
+
+        {!loadingDrafts && !loadError && visibleDrafts.length === 0 && (
+          <p className="empty-state">Todavía no hay borradores para revisar.</p>
+        )}
+      </div>
+    </section>
+  );
+};
 
 export default ApprovalPage;
