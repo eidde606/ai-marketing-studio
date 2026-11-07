@@ -29,6 +29,7 @@ import {
   getDrafts,
   getImageRevisions,
   publishDraftToFacebook,
+  verifyFacebookVideo,
   rejectDraft,
   rejectImageRevision,
   updateDraft,
@@ -37,6 +38,7 @@ import {
 } from "./services/draftsApi";
 import { getConnectedFacebookAccounts } from "./services/facebookApi";
 import { supabase } from "./services/supabaseClient";
+import SofiaChat from "./components/SofiaChat";
 
 function formatDraftDate(value: string): string {
   if (!value) return "Fecha no disponible";
@@ -431,8 +433,12 @@ const App: FC = () => {
             ? {
                 ...item,
                 facebook_post_id: result.facebook_post_id,
-                facebook_publish_status: "published",
-                published_at: new Date().toISOString(),
+                facebook_publish_status:
+                  result.status === "published" ? "published" : "needs_review",
+                published_at:
+                  result.status === "published"
+                    ? new Date().toISOString()
+                    : null,
               }
             : item,
         ),
@@ -447,6 +453,88 @@ const App: FC = () => {
       setPublishingIds((current) => current.filter((value) => value !== id));
     }
   };
+
+  const handleVerifyFacebookVideo = async (id: string) => {
+    setPublishError(null);
+
+    try {
+      const result = await verifyFacebookVideo(id);
+
+      if (result.status === "published") {
+        setApprovals((current) =>
+          current.map((item) =>
+            item.id === id
+              ? {
+                  ...item,
+                  facebook_publish_status: "published",
+                  published_at: new Date().toISOString(),
+                }
+              : item,
+          ),
+        );
+      }
+    } catch (error) {
+      console.error("Facebook video verification failed:", error);
+      setPublishError(
+        "No se pudo verificar el video. Inténtalo nuevamente más tarde.",
+      );
+    }
+  };
+
+  useEffect(() => {
+    const videosToVerify = visibleDrafts.filter(
+      (draft) =>
+        draft.status === "approved" &&
+        draft.media_type === "video" &&
+        draft.facebook_publish_status === "needs_review" &&
+        !!draft.facebook_post_id,
+    );
+
+    if (videosToVerify.length === 0) return;
+
+    let checking = false;
+
+    const checkVideos = async () => {
+      if (checking) return;
+
+      checking = true;
+
+      try {
+        for (const draft of videosToVerify) {
+          const result = await verifyFacebookVideo(draft.id);
+
+          if (result.status === "published") {
+            setApprovals((current) =>
+              current.map((item) =>
+                item.id === draft.id
+                  ? {
+                      ...item,
+                      facebook_publish_status: "published",
+                      published_at: new Date().toISOString(),
+                    }
+                  : item,
+              ),
+            );
+          }
+        }
+      } catch (error) {
+        console.error("Automatic Facebook verification failed:", error);
+      } finally {
+        checking = false;
+      }
+    };
+
+    void checkVideos();
+
+    const interval = window.setInterval(() => {
+      void checkVideos();
+    }, 30000);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [visibleDrafts]);
+
   const startEditing = (draft: Draft) => {
     setApprovalError(null);
     setEditingId(draft.id);
@@ -912,6 +1000,7 @@ const App: FC = () => {
             formatDraftDate={formatDraftDate}
             handleApprove={handleApprove}
             handlePublishFacebook={handlePublishFacebook}
+            onVerifyFacebookVideo={handleVerifyFacebookVideo}
             handleReject={handleReject}
             handleSaveEdit={handleSaveEdit}
             handleGenerateImage={handleGenerateImage}
@@ -925,38 +1014,51 @@ const App: FC = () => {
             startEditing={startEditing}
           />
         ) : activeSection === "Equipo IA" ? (
-          <section className="panel activity-panel">
-            <div className="panel-heading">
-              <div>
-                <span className="eyebrow">Automatización</span>
-                <h2>Actividad del Equipo IA</h2>
-              </div>
-            </div>
-            <div className="agent-list">
-              {agents.map((agent) => (
-                <div className="agent-row" key={agent.name}>
-                  <div className="agent-avatar">{agent.name[0]}</div>
-                  <div className="agent-info">
-                    <strong>{agent.name}</strong>
-                    <span>{agent.role}</span>
-                  </div>
-                  <div className="agent-status">
-                    <span
-                      className={`status-dot ${
-                        ["Contenido generado", "Disponible"].includes(
-                          agent.state,
-                        )
-                          ? "available"
-                          : ""
-                      }`}
-                    />
-                    {agent.state}
-                    <small>{agent.activity}</small>
-                  </div>
+          <div className="ai-team-section">
+            {selectedBusinessId && (
+              <SofiaChat
+                key={selectedBusinessId}
+                businessId={selectedBusinessId}
+                onDraftCreated={(draft) => {
+                  setApprovals((current) => [draft as Draft, ...current]);
+                  setActiveSection("Aprobaciones");
+                }}
+              />
+            )}
+
+            <section className="panel activity-panel">
+              <div className="panel-heading">
+                <div>
+                  <span className="eyebrow">Automatización</span>
+                  <h2>Actividad del Equipo IA</h2>
                 </div>
-              ))}
-            </div>
-          </section>
+              </div>
+              <div className="agent-list">
+                {agents.map((agent) => (
+                  <div className="agent-row" key={agent.name}>
+                    <div className="agent-avatar">{agent.name[0]}</div>
+                    <div className="agent-info">
+                      <strong>{agent.name}</strong>
+                      <span>{agent.role}</span>
+                    </div>
+                    <div className="agent-status">
+                      <span
+                        className={`status-dot ${
+                          ["Contenido generado", "Disponible"].includes(
+                            agent.state,
+                          )
+                            ? "available"
+                            : ""
+                        }`}
+                      />
+                      {agent.state}
+                      <small>{agent.activity}</small>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
         ) : (
           <section className="panel placeholder-panel">
             <div className="placeholder-icon">✦</div>

@@ -18,11 +18,21 @@ export type Draft = {
   source: "manual" | "ai";
   created_at: string;
   business_id: string | null;
+  video_script?: string | null;
 
   // AI image fields
   image_prompt: string | null;
   image_url: string | null;
   image_status: ImageStatus;
+  media_type: "text" | "image" | "video";
+  video_status:
+    | "not_started"
+    | "generating"
+    | "uploading"
+    | "completed"
+    | "failed"
+    | "needs_review";
+  video_url: string | null;
 };
 
 export type DraftImageResponse = {
@@ -113,7 +123,7 @@ export function generateContent(businessId: string): Promise<Draft> {
 }
 
 export type FacebookPublishResponse = {
-  status: "published";
+  status: "published" | "processing";
   facebook_post_id: string;
 };
 
@@ -285,5 +295,14 @@ export type FacebookReach = {
 export function getFacebookReach(draftId: string): Promise<FacebookReach> {
   return request<FacebookReach>(
     `/drafts/${encodeURIComponent(draftId)}/analytics/facebook/reach`,
+  );
+}
+
+export function verifyFacebookVideo(
+  id: string,
+): Promise<FacebookPublishResponse> {
+  return request<FacebookPublishResponse>(
+    `/drafts/${encodeURIComponent(id)}/verify-facebook-video`,
+    { method: "POST" },
   );
 }

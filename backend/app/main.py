@@ -1,11 +1,17 @@
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 import os
 import httpx
-from app.facebook_service import get_page_info, publish_text_post, publish_image_post
+from app.facebook_service import get_page_info, publish_text_post, publish_image_post, publish_video_post
 from uuid import uuid4
 from app.facebook_service import get_post_insights, get_post_reach
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException
+from app.facebook_service import get_video_status as get_facebook_video_status
+
+from app.models import Conversation, ConversationMessage
+from app.sofia_service import chat_with_sofia
+
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, UploadFile, File
 from app.facebook_auth_routes import router as facebook_auth_router
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -18,6 +24,8 @@ from app.database import get_db
 from app.models import Business, Draft, ImageRevision, SocialAccount
 from app.token_service import decrypt_token
 from app.ai_service import generate_marketing_content
+from app.heygen_service import get_available_avatar_looks
+from app.heygen_service import generate_video, get_video_status, get_available_voices
 from app.image_service import (
     generate_marketing_image,
     edit_marketing_image,
@@ -25,6 +33,7 @@ from app.image_service import (
 from app.storage_service import (
     get_marketing_image_url,
     download_marketing_image,
+    upload_marketing_video,
 )
 
 app = FastAPI()
@@ -49,9 +58,21 @@ app.add_middleware(
 
 logger = logging.getLogger(__name__)
 
+
 # --------------------------------------------------
 # Request Models
 # --------------------------------------------------
+
+
+class HeyGenVideoRequest(BaseModel):
+    avatar_id: str = Field(min_length=1)
+    voice_id: str = Field(min_length=1)
+    script: str = Field(min_length=1, max_length=5000)
+
+
+class SofiaChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+    conversation_id: str | None = None
 
 
 class DraftCreate(BaseModel):
@@ -59,6 +80,7 @@ class DraftCreate(BaseModel):
     title: str
     caption: str
     platform: str
+    media_type: Literal["text", "image", "video"] = "text"
 
 
 class DraftUpdate(BaseModel):
@@ -128,9 +150,9 @@ def lock_draft_revisions(db: Session, draft_id: str) -> None:
 
 
 def require_revision(
-    db: Session,
-    draft_id: str,
-    revision_id: str,
+        db: Session,
+        draft_id: str,
+        revision_id: str,
 ) -> ImageRevision:
     revision = db.get(ImageRevision, revision_id)
 
@@ -193,8 +215,8 @@ async def get_facebook_page():
 
 @protected.post("/drafts/{draft_id}/publish-facebook")
 async def publish_draft_to_facebook(
-    draft_id: str,
-    db: Session = Depends(get_db),
+        draft_id: str,
+        db: Session = Depends(get_db),
 ):
     draft = db.get(Draft, draft_id)
 
@@ -237,6 +259,102 @@ async def publish_draft_to_facebook(
     db.commit()
 
     draft = db.get(Draft, draft_id)
+
+    # ----------------------------------------
+    # Facebook VIDEO publishing
+    # ----------------------------------------
+    if draft.media_type == "video":
+        if draft.video_status != "completed" or not draft.video_url:
+            draft.facebook_publish_status = "not_published"
+            db.commit()
+            raise HTTPException(
+                status_code=409,
+                detail="A completed MP4 is required",
+            )
+
+        expected_prefix = f"businesses/{draft.business_id}/"
+
+        if (
+                not draft.video_url.startswith(expected_prefix)
+                or not draft.video_url.endswith(".mp4")
+        ):
+            draft.facebook_publish_status = "not_published"
+            db.commit()
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid video storage path",
+            )
+
+        try:
+            signed_url = get_marketing_image_url(
+                draft.video_url,
+                expires_in=3600,
+            )
+
+            response = await publish_video_post(
+                page_id=page_id,
+                access_token=access_token,
+                message=draft.caption,
+                video_url=signed_url,
+            )
+
+            video_id = response.get("id")
+
+            if not video_id:
+                raise ValueError("Facebook returned no video ID")
+
+            draft.facebook_post_id = str(video_id)
+            draft.facebook_publish_status = "needs_review"
+            db.commit()
+
+            return {
+                "status": "processing",
+                "facebook_post_id": str(video_id),
+            }
+
+        except httpx.HTTPStatusError as exc:
+            db.rollback()
+            draft = db.get(Draft, draft_id)
+
+            rejected = (
+                    400 <= exc.response.status_code < 500
+                    and exc.response.status_code != 429
+            )
+
+            draft.facebook_publish_status = (
+                "not_published" if rejected else "needs_review"
+            )
+            db.commit()
+
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Facebook rejected the video request"
+                    if rejected
+                    else "Facebook video submission requires review"
+                ),
+            ) from exc
+
+        except Exception as exc:
+            db.rollback()
+            draft = db.get(Draft, draft_id)
+            draft.facebook_publish_status = "needs_review"
+            db.commit()
+
+            logger.exception(
+                "Facebook video publishing outcome uncertain for draft %s",
+                draft_id,
+            )
+
+            raise HTTPException(
+                status_code=502,
+                detail="Check Facebook before retrying the video",
+            ) from exc
+
+    # ----------------------------------------
+    # Existing IMAGE / TEXT publishing
+    # ----------------------------------------
+
     try:
         image_bytes = (
             download_marketing_image(draft.image_url, draft.business_id)
@@ -246,9 +364,9 @@ async def publish_draft_to_facebook(
         if image_bytes is not None:
             # Validate format before sending any request to Facebook.
             if not (
-                image_bytes.startswith(b"\x89PNG\r\n\x1a\n")
-                or image_bytes.startswith(b"\xff\xd8\xff")
-                or (image_bytes.startswith(b"RIFF") and image_bytes[8:12] == b"WEBP")
+                    image_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+                    or image_bytes.startswith(b"\xff\xd8\xff")
+                    or (image_bytes.startswith(b"RIFF") and image_bytes[8:12] == b"WEBP")
             ):
                 raise ValueError("Unsupported image data")
     except Exception:
@@ -291,7 +409,7 @@ async def publish_draft_to_facebook(
         # Explicit Facebook client rejection: request did not publish.
         # Rate limits and 5xx are treated conservatively as uncertain.
         rejected = (
-            400 <= exc.response.status_code < 500 and exc.response.status_code != 429
+                400 <= exc.response.status_code < 500 and exc.response.status_code != 429
         )
         draft.facebook_publish_status = "not_published" if rejected else "needs_review"
         db.commit()
@@ -313,15 +431,89 @@ async def publish_draft_to_facebook(
         )
 
 
+@protected.post("/drafts/{draft_id}/verify-facebook-video")
+async def verify_facebook_video(
+        draft_id: str,
+        db: Session = Depends(get_db),
+):
+    draft = db.get(Draft, draft_id)
+
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Draft not found")
+
+    if draft.media_type != "video" or not draft.facebook_post_id:
+        raise HTTPException(
+            status_code=409,
+            detail="No submitted Facebook video to verify",
+        )
+
+    if draft.facebook_publish_status == "published":
+        return {
+            "status": "published",
+            "facebook_post_id": draft.facebook_post_id,
+        }
+
+    if draft.facebook_publish_status != "needs_review":
+        raise HTTPException(
+            status_code=409,
+            detail="Video is not awaiting verification",
+        )
+
+    account = db.scalar(
+        select(SocialAccount).where(
+            SocialAccount.business_id == draft.business_id,
+            SocialAccount.platform == "facebook",
+            SocialAccount.connection_status == "connected",
+        )
+    )
+
+    if account is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Facebook Page is not connected",
+        )
+
+    access_token = decrypt_token(account.encrypted_access_token)
+
+    try:
+        result = await get_facebook_video_status(
+            video_id=draft.facebook_post_id,
+            access_token=access_token,
+        )
+    except httpx.HTTPError:
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to verify Facebook video status",
+        )
+
+    status = result.get("status", {})
+    video_status = status.get("video_status", "") if isinstance(status, dict) else ""
+
+    if video_status == "ready":
+        draft.facebook_publish_status = "published"
+        draft.published_at = datetime.now(timezone.utc)
+        db.commit()
+
+        return {
+            "status": "published",
+            "facebook_post_id": draft.facebook_post_id,
+        }
+
+    return {
+        "status": "processing",
+        "facebook_post_id": draft.facebook_post_id,
+    }
+
+
 class FacebookRecoveryRequest(BaseModel):
     confirmed_not_published: bool
 
 
 @protected.post("/drafts/{draft_id}/reset-facebook-publishing")
 def reset_facebook_publishing(
-    draft_id: str,
-    request: FacebookRecoveryRequest,
-    db: Session = Depends(get_db),
+        draft_id: str,
+        request: FacebookRecoveryRequest,
+        db: Session = Depends(get_db),
 ):
     """Only after manually confirming the post is absent on Facebook."""
     if not request.confirmed_not_published:
@@ -353,8 +545,8 @@ def reset_facebook_publishing(
 
 @protected.post("/drafts", status_code=201)
 def create_draft(
-    request: DraftCreate,
-    db: Session = Depends(get_db),
+        request: DraftCreate,
+        db: Session = Depends(get_db),
 ):
     business = db.get(Business, request.business_id)
 
@@ -375,8 +567,8 @@ def create_draft(
 
 @protected.get("/drafts")
 def list_drafts(
-    business_id: str,
-    db: Session = Depends(get_db),
+        business_id: str,
+        db: Session = Depends(get_db),
 ):
     business = db.get(Business, business_id)
 
@@ -390,11 +582,19 @@ def list_drafts(
 
 
 @protected.patch("/drafts/{draft_id}/approve")
+@protected.patch("/drafts/{draft_id}/approve")
 def approve_draft(
-    draft_id: str,
-    db: Session = Depends(get_db),
+        draft_id: str,
+        db: Session = Depends(get_db),
 ):
     draft = require_pending_draft(db, draft_id)
+
+    if draft.media_type == "video":
+        if draft.video_status != "completed" or not draft.video_url:
+            raise HTTPException(
+                status_code=409,
+                detail="Video must be completed before approval",
+            )
 
     draft.status = "approved"
 
@@ -406,9 +606,9 @@ def approve_draft(
 
 @protected.patch("/drafts/{draft_id}")
 def update_draft(
-    draft_id: str,
-    request: DraftUpdate,
-    db: Session = Depends(get_db),
+        draft_id: str,
+        request: DraftUpdate,
+        db: Session = Depends(get_db),
 ):
     draft = require_pending_draft(db, draft_id)
 
@@ -423,8 +623,8 @@ def update_draft(
 
 @protected.patch("/drafts/{draft_id}/reject")
 def reject_draft(
-    draft_id: str,
-    db: Session = Depends(get_db),
+        draft_id: str,
+        db: Session = Depends(get_db),
 ):
     draft = require_pending_draft(db, draft_id)
 
@@ -446,8 +646,8 @@ def reject_draft(
     status_code=201,
 )
 def generate_content(
-    business_id: str,
-    db: Session = Depends(get_db),
+        business_id: str,
+        db: Session = Depends(get_db),
 ):
     business = db.get(Business, business_id)
 
@@ -483,6 +683,509 @@ def generate_content(
     )
 
     draft = Draft(
+        video_script=generated["video_script"],
+        business_id=business.id,
+        title=generated["title"],
+        caption=generated["caption"],
+        platform=generated["platform"],
+        image_prompt=generated["image_prompt"],
+        status="pending",
+        source="ai",
+    )
+
+    db.add(draft)
+    db.commit()
+    db.refresh(draft)
+
+    return draft
+
+
+@protected.post("/heygen/videos")
+def create_heygen_video(request: HeyGenVideoRequest):
+    return generate_video(
+        avatar_id=request.avatar_id,
+        voice_id=request.voice_id,
+        script=request.script,
+    )
+
+
+@protected.post("/drafts/{draft_id}/upload-video")
+def upload_draft_video(
+        draft_id: str,
+        file: UploadFile = File(...),
+        db: Session = Depends(get_db),
+):
+    draft = require_pending_draft(db, draft_id)
+
+    if draft.video_status in ("generating", "completed", "uploading"):
+        raise HTTPException(
+            status_code=409,
+            detail="This draft already has a video or an active video operation",
+        )
+
+    if file.content_type != "video/mp4":
+        raise HTTPException(
+            status_code=415,
+            detail="Only MP4 videos are supported",
+        )
+
+    max_size = 100 * 1024 * 1024
+
+    video_bytes = file.file.read(max_size + 1)
+
+    if len(video_bytes) > max_size:
+        raise HTTPException(
+            status_code=413,
+            detail="Video exceeds the 100 MB limit",
+        )
+
+    try:
+        storage_path = upload_marketing_video(
+            video_bytes=video_bytes,
+            business_id=draft.business_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    draft.media_type = "video"
+    draft.video_url = storage_path
+    draft.video_status = "completed"
+    draft.video_generation_id = None
+
+    db.commit()
+    db.refresh(draft)
+
+    return {
+        "draft_id": draft.id,
+        "media_type": draft.media_type,
+        "video_status": draft.video_status,
+    }
+
+
+@protected.post("/drafts/{draft_id}/generate-video")
+def generate_draft_video(
+        draft_id: str,
+        request: HeyGenVideoRequest,
+        db: Session = Depends(get_db),
+):
+    # Prevent concurrent generation requests for this Draft.
+    lock_draft_revisions(db, draft_id)
+
+    draft = require_pending_draft(db, draft_id)
+
+    if draft.video_status in ("pending", "generating", "completed"):
+        raise HTTPException(
+            status_code=409,
+            detail="Video generation already started or completed",
+        )
+
+    # Reserve the Draft before calling HeyGen.
+    draft.media_type = "video"
+    draft.video_status = "generating"
+    draft.video_generation_id = None
+    db.commit()
+
+    try:
+        job = generate_video(
+            avatar_id=request.avatar_id,
+            voice_id=request.voice_id,
+            script=request.script,
+        )
+
+        video_id = job.get("video_id")
+
+        if not video_id:
+            raise ValueError("HeyGen did not return a video ID")
+
+        draft.video_generation_id = video_id
+        db.commit()
+
+        return {
+            "draft_id": draft.id,
+            "video_id": video_id,
+            "status": "generating",
+        }
+
+    except Exception:
+        db.rollback()
+        draft.video_status = "needs_review"
+        db.commit()
+        logger.exception(
+            "Unable to start HeyGen video generation for draft %s",
+            draft_id,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to start video generation; review before retrying",
+        )
+
+
+@protected.get("/drafts/{draft_id}/video-preview")
+def get_draft_video_preview(
+        draft_id: str,
+        db: Session = Depends(get_db),
+):
+    draft = require_draft(db, draft_id)
+
+    if (
+            draft.media_type != "video"
+            or draft.video_status != "completed"
+            or not draft.video_url
+    ):
+        raise HTTPException(
+            status_code=404,
+            detail="No completed video available for this draft",
+        )
+
+    expected_prefix = f"businesses/{draft.business_id}/"
+
+    if (
+            not draft.video_url.startswith(expected_prefix)
+            or not draft.video_url.endswith(".mp4")
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid video storage path",
+        )
+
+    signed_url = get_marketing_image_url(
+        draft.video_url,
+        expires_in=900,
+    )
+
+    return {
+        "draft_id": draft.id,
+        "video_url": signed_url,
+    }
+
+
+@protected.get("/heygen/videos/{video_id}")
+def check_heygen_video(video_id: str):
+    return get_video_status(video_id)
+
+
+@protected.get("/heygen/voices")
+def list_heygen_voices():
+    return get_available_voices()
+
+
+@protected.get("/businesses/{business_id}/sofia/conversations")
+def list_sofia_conversations(
+        business_id: str,
+        db: Session = Depends(get_db),
+):
+    business = db.get(Business, business_id)
+
+    if business is None:
+        raise HTTPException(status_code=404, detail="Business not found")
+
+    conversations = db.scalars(
+        select(Conversation)
+        .where(Conversation.business_id == business.id)
+        .order_by(
+            Conversation.created_at.desc(),
+            Conversation.id.desc(),
+        )
+    ).all()
+
+    results = []
+
+    for conversation in conversations:
+        first_message = db.scalar(
+            select(ConversationMessage)
+            .where(
+                ConversationMessage.conversation_id == conversation.id,
+                ConversationMessage.role == "user",
+            )
+            .order_by(
+                ConversationMessage.created_at.asc(),
+                ConversationMessage.id.asc(),
+            )
+            .limit(1)
+        )
+
+        title = (
+            first_message.content.strip()[:60]
+            if first_message
+            else "Nueva campaña"
+        )
+
+        results.append({
+            "id": conversation.id,
+            "created_at": conversation.created_at,
+            "title": title,
+        })
+
+    return results
+
+
+@protected.get(
+    "/businesses/{business_id}/sofia/conversations/{conversation_id}"
+)
+def get_sofia_conversation(
+        business_id: str,
+        conversation_id: str,
+        db: Session = Depends(get_db),
+):
+    conversation = db.scalar(
+        select(Conversation)
+        .join(Business, Conversation.business_id == Business.id)
+        .where(
+            Conversation.id == conversation_id,
+            Business.id == business_id,
+        )
+    )
+
+    if conversation is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation not found for this business",
+        )
+
+    messages = db.scalars(
+        select(ConversationMessage)
+        .where(ConversationMessage.conversation_id == conversation.id)
+        .order_by(
+            ConversationMessage.created_at.asc(),
+            ConversationMessage.id.asc(),
+        )
+    ).all()
+
+    return {
+        "conversation_id": conversation.id,
+        "messages": [
+            {"role": message.role, "content": message.content}
+            for message in messages
+        ],
+    }
+
+
+@protected.get("/businesses/{business_id}/sofia/conversation/latest")
+def get_latest_sofia_conversation(
+        business_id: str,
+        db: Session = Depends(get_db),
+):
+    """Retrieve the latest Sofía conversation for a business."""
+
+    business = db.get(Business, business_id)
+
+    if business is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Business not found",
+        )
+
+    conversation = db.scalar(
+        select(Conversation)
+        .where(Conversation.business_id == business.id)
+        .order_by(
+            Conversation.created_at.desc(),
+            Conversation.id.desc(),
+        )
+        .limit(1)
+    )
+
+    if conversation is None:
+        return None
+
+    messages = db.scalars(
+        select(ConversationMessage)
+        .where(
+            ConversationMessage.conversation_id == conversation.id
+        )
+        .order_by(
+            ConversationMessage.created_at.asc(),
+            ConversationMessage.id.asc(),
+        )
+    ).all()
+
+    return {
+        "conversation_id": conversation.id,
+        "messages": [
+            {
+                "role": message.role,
+                "content": message.content,
+            }
+            for message in messages
+        ],
+    }
+
+
+@protected.post("/businesses/{business_id}/sofia/chat")
+def sofia_chat(
+        business_id: str,
+        request: SofiaChatRequest,
+        db: Session = Depends(get_db),
+):
+    """Start or continue a conversation with Sofía."""
+
+    business = db.get(Business, business_id)
+
+    if business is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Business not found",
+        )
+
+    # Continue an existing conversation or start a new one.
+    if request.conversation_id:
+        conversation = db.scalar(
+            select(Conversation).where(
+                Conversation.id == request.conversation_id,
+                Conversation.business_id == business.id,
+            )
+        )
+
+        if conversation is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Conversation not found for this business",
+            )
+    else:
+        conversation = Conversation(business_id=business.id)
+        db.add(conversation)
+        db.flush()
+
+    # Save the owner's message.
+    user_message = ConversationMessage(
+        conversation_id=conversation.id,
+        role="user",
+        content=request.message.strip(),
+    )
+
+    db.add(user_message)
+    db.flush()
+
+    # Retrieve the conversation history in order.
+    messages = db.scalars(
+        select(ConversationMessage)
+        .where(
+            ConversationMessage.conversation_id == conversation.id
+        )
+        .order_by(
+            ConversationMessage.created_at.asc(),
+            ConversationMessage.id.asc(),
+        )
+    ).all()
+
+    # Ask Sofía to respond using the business profile and history.
+    try:
+        reply = chat_with_sofia(business, messages)
+    except Exception:
+        db.rollback()
+        logger.exception("Sofía chat generation failed")
+        raise HTTPException(
+            status_code=502,
+            detail="Sofía could not respond. Please try again.",
+        )
+
+    # Save Sofía's reply.
+    assistant_message = ConversationMessage(
+        conversation_id=conversation.id,
+        role="assistant",
+        content=reply,
+    )
+
+    db.add(assistant_message)
+    db.commit()
+
+    return {
+        "conversation_id": conversation.id,
+        "reply": reply,
+    }
+
+
+@protected.post(
+    "/businesses/{business_id}/sofia/conversations/{conversation_id}/generate-draft"
+)
+def generate_sofia_conversation_draft(
+        business_id: str,
+        conversation_id: str,
+        db: Session = Depends(get_db),
+):
+    """Generate a pending draft using Sofía's conversation and Leo."""
+
+    business = db.get(Business, business_id)
+
+    if business is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Business not found",
+        )
+
+    conversation = db.scalar(
+        select(Conversation).where(
+            Conversation.id == conversation_id,
+            Conversation.business_id == business.id,
+        )
+    )
+
+    if conversation is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation not found for this business",
+        )
+
+    messages = db.scalars(
+        select(ConversationMessage)
+        .where(
+            ConversationMessage.conversation_id == conversation.id
+        )
+        .order_by(
+            ConversationMessage.created_at.asc(),
+            ConversationMessage.id.asc(),
+        )
+    ).all()
+
+    user_messages = [
+        message.content
+        for message in messages
+        if message.role == "user"
+    ]
+
+    if not user_messages:
+        raise HTTPException(
+            status_code=400,
+            detail="The conversation has no campaign instructions",
+        )
+
+    # Use the owner's conversation to guide Sofía and Leo.
+    campaign_instructions = "\n".join(user_messages[-10:])
+
+    recent_drafts = db.scalars(
+        select(Draft)
+        .where(Draft.business_id == business.id)
+        .order_by(Draft.created_at.desc())
+        .limit(10)
+    ).all()
+
+    recent_posts = [
+        {
+            "title": draft.title,
+            "caption": draft.caption,
+            "platform": draft.platform,
+        }
+        for draft in recent_drafts
+    ]
+
+    try:
+        generated = generate_marketing_content(
+            business,
+            recent_posts=recent_posts,
+            campaign_instructions=campaign_instructions,
+        )
+    except Exception:
+        logger.exception("Conversational draft generation failed")
+        raise HTTPException(
+            status_code=502,
+            detail="Sofía and Leo could not generate the draft",
+        )
+
+    draft = Draft(
+        video_script=generated["video_script"],
         business_id=business.id,
         title=generated["title"],
         caption=generated["caption"],
@@ -506,8 +1209,8 @@ def generate_content(
 
 @protected.post("/businesses", status_code=201)
 def create_business(
-    request: BusinessCreate,
-    db: Session = Depends(get_db),
+        request: BusinessCreate,
+        db: Session = Depends(get_db),
 ):
     business = Business(**request.model_dump())
 
@@ -520,7 +1223,7 @@ def create_business(
 
 @protected.get("/businesses")
 def list_businesses(
-    db: Session = Depends(get_db),
+        db: Session = Depends(get_db),
 ):
     return db.scalars(select(Business)).all()
 
@@ -532,8 +1235,8 @@ def list_businesses(
 
 @protected.post("/drafts/{draft_id}/generate-image")
 def generate_draft_image(
-    draft_id: str,
-    db: Session = Depends(get_db),
+        draft_id: str,
+        db: Session = Depends(get_db),
 ):
     generation_id = str(uuid4())
 
@@ -624,6 +1327,7 @@ def generate_draft_image(
         )
         .values(
             image_url=storage_path,
+            media_type="image",
             image_status="completed",
             image_started_at=None,
             image_generation_id=None,
@@ -667,8 +1371,8 @@ def generate_draft_image(
 
 @protected.get("/drafts/{draft_id}/image")
 def get_draft_image(
-    draft_id: str,
-    db: Session = Depends(get_db),
+        draft_id: str,
+        db: Session = Depends(get_db),
 ):
     draft = require_draft(db, draft_id)
 
@@ -697,8 +1401,8 @@ def get_draft_image(
 
 @protected.post("/drafts/{draft_id}/reset-image")
 def reset_stuck_image(
-    draft_id: str,
-    db: Session = Depends(get_db),
+        draft_id: str,
+        db: Session = Depends(get_db),
 ):
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=15)
 
@@ -754,9 +1458,9 @@ def reset_stuck_image(
     status_code=201,
 )
 def create_image_revision(
-    draft_id: str,
-    request: ImageRevisionRequest,
-    db: Session = Depends(get_db),
+        draft_id: str,
+        request: ImageRevisionRequest,
+        db: Session = Depends(get_db),
 ):
     """
     Create a proposed edited image.
@@ -778,9 +1482,9 @@ def create_image_revision(
     draft = require_pending_draft(db, draft_id)
 
     if (
-        draft.image_status != "completed"
-        or not draft.image_url
-        or not draft.business_id
+            draft.image_status != "completed"
+            or not draft.image_url
+            or not draft.business_id
     ):
         raise HTTPException(
             status_code=409,
@@ -910,8 +1614,8 @@ def create_image_revision(
 
 @protected.get("/drafts/{draft_id}/image-revisions")
 def list_image_revisions(
-    draft_id: str,
-    db: Session = Depends(get_db),
+        draft_id: str,
+        db: Session = Depends(get_db),
 ):
     require_draft(db, draft_id)
 
@@ -926,9 +1630,9 @@ def list_image_revisions(
 
 @protected.post("/drafts/{draft_id}/image-revisions/{revision_id}/accept")
 def accept_image_revision(
-    draft_id: str,
-    revision_id: str,
-    db: Session = Depends(get_db),
+        draft_id: str,
+        revision_id: str,
+        db: Session = Depends(get_db),
 ):
     """
     Accept the proposed image.
@@ -974,9 +1678,9 @@ def accept_image_revision(
 
 @protected.post("/drafts/{draft_id}/image-revisions/{revision_id}/reject")
 def reject_image_revision(
-    draft_id: str,
-    revision_id: str,
-    db: Session = Depends(get_db),
+        draft_id: str,
+        revision_id: str,
+        db: Session = Depends(get_db),
 ):
     """
     Reject a proposed image.
@@ -1014,8 +1718,8 @@ def reject_image_revision(
 
 @protected.get("/drafts/{draft_id}/analytics/facebook")
 async def get_facebook_draft_analytics(
-    draft_id: str,
-    db: Session = Depends(get_db),
+        draft_id: str,
+        db: Session = Depends(get_db),
 ):
     # Find the draft.
     draft = db.get(Draft, draft_id)
@@ -1055,6 +1759,7 @@ async def get_facebook_draft_analytics(
         data = await get_post_insights(
             post_id=draft.facebook_post_id,
             access_token=access_token,
+            media_type=draft.media_type,
         )
 
     except httpx.HTTPStatusError as exc:
@@ -1087,21 +1792,33 @@ async def get_facebook_draft_analytics(
             detail="Facebook analytics service is unavailable",
         ) from exc
 
+    def metric_count(name: str):
+        metric = data.get(name)
+        if not isinstance(metric, dict):
+            return None
+        summary = metric.get("summary")
+        if not isinstance(summary, dict):
+            return None
+        return summary.get("total_count")
+
+    shares = data.get("shares")
+    share_count = shares.get("count") if isinstance(shares, dict) else None
+
     return {
         "draft_id": draft.id,
         "platform": "facebook",
         "post_id": draft.facebook_post_id,
-        "reactions": data.get("reactions", {}).get("summary", {}).get("total_count", 0),
-        "comments": data.get("comments", {}).get("summary", {}).get("total_count", 0),
-        "shares": data.get("shares", {}).get("count", 0),
+        "reactions": metric_count("reactions"),
+        "comments": metric_count("comments"),
+        "shares": share_count,
         "permalink_url": data.get("permalink_url"),
     }
 
 
 @protected.get("/drafts/{draft_id}/analytics/facebook/reach")
 async def test_facebook_reach(
-    draft_id: str,
-    db: Session = Depends(get_db),
+        draft_id: str,
+        db: Session = Depends(get_db),
 ):
     draft = db.get(Draft, draft_id)
 
@@ -1132,8 +1849,8 @@ async def test_facebook_reach(
                 metric["values"][0]["value"]
                 for metric in data.get("data", [])
                 if metric.get("name") == "post_total_media_view_unique"
-                and metric.get("period") == "lifetime"
-                and metric.get("values")
+                   and metric.get("period") == "lifetime"
+                   and metric.get("values")
             ),
             None,
         )
@@ -1154,6 +1871,24 @@ async def test_facebook_reach(
             status_code=502,
             detail="Facebook did not return reach data",
         ) from exc
+
+
+@protected.get("/heygen/avatars")
+def list_heygen_avatars():
+    try:
+        return get_available_avatar_looks()
+
+    except httpx.HTTPStatusError:
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to retrieve HeyGen avatars",
+        )
+
+    except httpx.RequestError:
+        raise HTTPException(
+            status_code=502,
+            detail="HeyGen connection failed",
+        )
 
 
 # --------------------------------------------------
