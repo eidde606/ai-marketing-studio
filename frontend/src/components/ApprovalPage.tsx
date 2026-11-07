@@ -7,165 +7,175 @@ import {
 } from "react";
 
 import type { Draft, ImageRevision } from "../services/draftsApi";
-
-import { HeyGenVideoEditor } from "./HeyGenVideoEditor";
+import { VideoUpload } from "./VideoUpload";
+import { supabase } from "../services/supabaseClient";
 
 type ApprovalPageProps = {
   loadingDrafts: boolean;
-
   loadError: string | null;
-
   pendingCount: number;
-
   draftMessages: ReactNode;
-
   visibleDrafts: Draft[];
-
   approvingIds: string[];
   publishingIds: string[];
-
   busyDraftIds: string[];
-
   editingId: string | null;
-
   editTitle: string;
-
   editCaption: string;
-
   setEditTitle: Dispatch<SetStateAction<string>>;
-
   setEditCaption: Dispatch<SetStateAction<string>>;
-
   setEditingId: Dispatch<SetStateAction<string | null>>;
-
   imageUrls: Record<string, string>;
-
   imageBusyIds: string[];
-
   imageErrors: Record<string, string>;
-
   imageInstructions: Record<string, string>;
-
   showImageEditor: Record<string, boolean>;
-
   revisions: Record<string, ImageRevision | null>;
-
   revisionBusyIds: string[];
-
   revisionErrors: Record<string, string>;
-
   formatDraftDate: (date: string) => string;
-
   handleApprove: (id: string) => Promise<void>;
   handlePublishFacebook: (id: string) => Promise<void>;
-
+  onVerifyFacebookVideo: (id: string) => void;
   handleReject: (id: string) => Promise<void>;
-
   handleSaveEdit: (id: string) => Promise<void>;
-
   handleGenerateImage: (draft: Draft) => Promise<void>;
-
   handlePreviewImage: (draft: Draft) => Promise<void>;
-
   handleCreateRevision: (draft: Draft) => Promise<void>;
-
   handleDecideRevision: (
     draft: Draft,
     decision: "accept" | "reject",
   ) => Promise<void>;
-
   refreshRevision: (draftId: string) => Promise<void>;
-
   addImageSuggestion: (draftId: string, suggestion: string) => void;
-
   updateImageInstructions: (draftId: string, value: string) => void;
-
   toggleImageEditor: (draftId: string) => void;
-
   startEditing: (draft: Draft) => void;
 };
 
 const ApprovalPage: FC<ApprovalPageProps> = ({
   loadingDrafts,
-
   loadError,
-
   pendingCount,
-
   draftMessages,
-
   visibleDrafts,
-
   approvingIds,
   publishingIds,
-
   busyDraftIds,
-
   editingId,
-
   editTitle,
-
   editCaption,
-
   setEditTitle,
-
   setEditCaption,
-
   setEditingId,
-
   imageUrls,
-
   imageBusyIds,
-
   imageErrors,
-
   imageInstructions,
-
   showImageEditor,
-
   revisions,
-
   revisionBusyIds,
-
   revisionErrors,
-
   formatDraftDate,
-
   handleApprove,
   handlePublishFacebook,
-
+  onVerifyFacebookVideo,
   handleReject,
-
   handleSaveEdit,
-
   handleGenerateImage,
-
   handlePreviewImage,
-
   handleCreateRevision,
-
   handleDecideRevision,
-
   refreshRevision,
-
   addImageSuggestion,
-
   updateImageInstructions,
-
   toggleImageEditor,
-
   startEditing,
 }) => {
   const [openVideoEditorId, setOpenVideoEditorId] = useState<string | null>(
     null,
   );
 
+  const [videoUrls, setVideoUrls] = useState<Record<string, string>>({});
+
+  const [videoLoadingId, setVideoLoadingId] = useState<string | null>(null);
+
+  const [videoErrors, setVideoErrors] = useState<Record<string, string>>({});
+
+  const [copiedScriptId, setCopiedScriptId] = useState<string | null>(null);
+
+  async function handleCopyScript(draft: Draft) {
+    if (!draft.video_script) return;
+
+    try {
+      await navigator.clipboard.writeText(draft.video_script);
+      setCopiedScriptId(draft.id);
+    } catch {
+      setCopiedScriptId(null);
+      window.alert(
+        "No se pudo copiar el guion. Selecciona el texto para copiarlo.",
+      );
+    }
+  }
+
+  async function handlePreviewVideo(draft: Draft) {
+    if (!draft.video_url || videoLoadingId === draft.id) return;
+
+    setVideoLoadingId(draft.id);
+    setVideoErrors((current) => ({
+      ...current,
+      [draft.id]: "",
+    }));
+
+    try {
+      const { data, error } = await supabase.auth.getSession();
+
+      if (error || !data.session?.access_token) {
+        throw new Error("Debes iniciar sesión.");
+      }
+
+      const apiBaseUrl =
+        import.meta.env.VITE_API_BASE_URL?.trim() || "http://127.0.0.1:8000";
+
+      const response = await fetch(
+        `${apiBaseUrl}/drafts/${encodeURIComponent(draft.id)}/video-preview`,
+        {
+          headers: {
+            Authorization: `Bearer ${data.session.access_token}`,
+          },
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(`No se pudo cargar el video (${response.status}).`);
+      }
+
+      const result: { video_url: string } = await response.json();
+
+      if (!result.video_url) {
+        throw new Error("No se recibió la URL del video.");
+      }
+
+      setVideoUrls((current) => ({
+        ...current,
+        [draft.id]: result.video_url,
+      }));
+    } catch (err) {
+      setVideoErrors((current) => ({
+        ...current,
+        [draft.id]:
+          err instanceof Error ? err.message : "Error al cargar el video.",
+      }));
+    } finally {
+      setVideoLoadingId(null);
+    }
+  }
+
   return (
     <section className="panel approval-page">
       <div className="panel-heading">
         <div>
           <span className="eyebrow">Revisión de contenido</span>
-
           <h2>Cola de aprobaciones</h2>
         </div>
 
@@ -183,19 +193,15 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
             <div className="approval-card" key={draft.id}>
               <div className="approval-card-top">
                 <span className="channel-tag">{draft.platform}</span>
-
                 <time>{formatDraftDate(draft.created_at)}</time>
               </div>
 
               {editingId === draft.id ? (
                 <div
                   className="draft-edit-form"
-
                   style={{
                     display: "grid",
-
                     gap: "0.75rem",
-
                     marginTop: "1rem",
                   }}
                 >
@@ -203,16 +209,11 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
 
                   <input
                     id={`edit-title-${draft.id}`}
-
                     value={editTitle}
-
                     onChange={(event) => setEditTitle(event.target.value)}
-
                     maxLength={200}
-
                     style={{
                       width: "100%",
-
                       padding: "0.6rem",
                     }}
                   />
@@ -223,16 +224,11 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
 
                   <textarea
                     id={`edit-caption-${draft.id}`}
-
                     value={editCaption}
-
                     onChange={(event) => setEditCaption(event.target.value)}
-
                     rows={6}
-
                     style={{
                       width: "100%",
-
                       padding: "0.6rem",
                     }}
                   />
@@ -240,15 +236,12 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                   <div className="approval-actions">
                     <button
                       className="approve-button"
-
                       type="button"
-
                       disabled={
                         busyDraftIds.includes(draft.id) ||
                         !editTitle.trim() ||
                         !editCaption.trim()
                       }
-
                       onClick={() => void handleSaveEdit(draft.id)}
                     >
                       {busyDraftIds.includes(draft.id)
@@ -258,11 +251,8 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
 
                     <button
                       className="text-button"
-
                       type="button"
-
                       disabled={busyDraftIds.includes(draft.id)}
-
                       onClick={() => setEditingId(null)}
                     >
                       Cancelar
@@ -272,21 +262,16 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
               ) : (
                 <>
                   <h3>{draft.title}</h3>
-
                   <p>{draft.caption}</p>
                 </>
               )}
 
               <div
                 className="draft-image-section"
-
                 style={{
                   marginTop: "1.25rem",
-
                   marginBottom: "1.25rem",
-
                   display: "grid",
-
                   gap: "0.75rem",
                 }}
               >
@@ -295,16 +280,11 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                 {imageUrls[draft.id] && (
                   <img
                     src={imageUrls[draft.id]}
-
                     alt={`Imagen para ${draft.title}`}
-
                     style={{
                       width: "100%",
-
                       maxWidth: "420px",
-
                       borderRadius: "12px",
-
                       objectFit: "contain",
                     }}
                   />
@@ -325,11 +305,7 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                 )}
 
                 {imageErrors[draft.id] && (
-                  <p
-                    role="alert"
-
-                    style={{ color: "#b91c1c" }}
-                  >
+                  <p role="alert" style={{ color: "#b91c1c" }}>
                     {imageErrors[draft.id]}
                   </p>
                 )}
@@ -341,15 +317,12 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                     ["not_started", "failed"].includes(draft.image_status) && (
                       <button
                         className="primary-button"
-
                         type="button"
-
                         disabled={
                           imageBusyIds.includes(draft.id) ||
                           busyDraftIds.includes(draft.id) ||
                           approvingIds.includes(draft.id)
                         }
-
                         onClick={() => void handleGenerateImage(draft)}
                       >
                         {imageBusyIds.includes(draft.id)
@@ -363,11 +336,8 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                   {draft.image_status === "completed" && !!draft.image_url && (
                     <button
                       className="text-button"
-
                       type="button"
-
                       disabled={imageBusyIds.includes(draft.id)}
-
                       onClick={() => void handlePreviewImage(draft)}
                     >
                       {imageBusyIds.includes(draft.id)
@@ -379,27 +349,137 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                   )}
                 </div>
 
-                {draft.status === "pending" && (
-                  <div>
-                    <button
-                      type="button"
-                      className="text-button"
-                      onClick={() =>
-                        setOpenVideoEditorId((current) =>
-                          current === draft.id ? null : draft.id,
-                        )
-                      }
+                {draft.media_type === "video" &&
+                  draft.video_status === "completed" &&
+                  !!draft.video_url && (
+                    <div
+                      style={{
+                        display: "grid",
+                        gap: "0.75rem",
+                      }}
                     >
-                      {openVideoEditorId === draft.id
-                        ? "Cerrar editor de video"
-                        : "🎬 Crear video con HeyGen"}
-                    </button>
+                      <strong>Video de la publicación</strong>
 
-                    {openVideoEditorId === draft.id && (
-                      <HeyGenVideoEditor draft={draft} />
-                    )}
+                      <button
+                        type="button"
+                        className="text-button"
+                        disabled={videoLoadingId === draft.id}
+                        onClick={() => {
+                          if (videoUrls[draft.id]) {
+                            setVideoUrls((current) => {
+                              const updated = { ...current };
+                              delete updated[draft.id];
+                              return updated;
+                            });
+                          } else {
+                            void handlePreviewVideo(draft);
+                          }
+                        }}
+                      >
+                        {videoLoadingId === draft.id
+                          ? "Cargando video..."
+                          : videoUrls[draft.id]
+                            ? "Cerrar video"
+                            : "🎬 Ver video"}
+                      </button>
+
+                      {videoUrls[draft.id] && (
+                        <video
+                          key={videoUrls[draft.id]}
+                          src={videoUrls[draft.id]}
+                          controls
+                          playsInline
+                          preload="metadata"
+                          style={{
+                            width: "100%",
+                            maxWidth: "420px",
+                            borderRadius: "12px",
+                          }}
+                        >
+                          Tu navegador no admite la reproducción de video.
+                        </video>
+                      )}
+
+                      {videoErrors[draft.id] && (
+                        <p role="alert">{videoErrors[draft.id]}</p>
+                      )}
+                    </div>
+                  )}
+
+                {draft.video_script && (
+                  <div
+                    className="heygen-script"
+                    style={{
+                      padding: "1rem",
+                      border: "1px solid #e9ddff",
+                      borderRadius: "12px",
+                      background: "#faf7ff",
+                      display: "grid",
+                      gap: "0.75rem",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: "0.75rem",
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      <strong>🎬 Guion para HeyGen</strong>
+
+                      <button
+                        type="button"
+                        className="text-button"
+                        onClick={() => void handleCopyScript(draft)}
+                      >
+                        {copiedScriptId === draft.id
+                          ? "✓ Copiado"
+                          : "Copiar guion"}
+                      </button>
+                    </div>
+
+                    <p
+                      style={{
+                        whiteSpace: "pre-wrap",
+                        lineHeight: 1.6,
+                        margin: 0,
+                      }}
+                    >
+                      {draft.video_script}
+                    </p>
                   </div>
                 )}
+
+                {draft.status === "pending" &&
+                  draft.video_status !== "completed" && (
+                    <div>
+                      <button
+                        type="button"
+                        className="text-button"
+                        onClick={() =>
+                          setOpenVideoEditorId((current) =>
+                            current === draft.id ? null : draft.id,
+                          )
+                        }
+                      >
+                        {openVideoEditorId === draft.id
+                          ? "Cerrar carga de video"
+                          : "🎬 Subir video MP4"}
+                      </button>
+
+                      {openVideoEditorId === draft.id && (
+                        <VideoUpload
+                          draftId={draft.id}
+                          onUploaded={() => {
+                            setOpenVideoEditorId(null);
+                            window.location.reload();
+                          }}
+                        />
+                      )}
+                    </div>
+                  )}
 
                 {!draft.image_prompt && !draft.image_url && (
                   <small>
@@ -413,15 +493,12 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                 <div className="approval-actions">
                   <button
                     className="approve-button"
-
                     type="button"
-
                     disabled={
                       approvingIds.includes(draft.id) ||
                       busyDraftIds.includes(draft.id) ||
                       imageBusyIds.includes(draft.id)
                     }
-
                     onClick={() => void handleApprove(draft.id)}
                   >
                     {approvingIds.includes(draft.id)
@@ -431,14 +508,11 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
 
                   <button
                     className="text-button"
-
                     type="button"
-
                     disabled={
                       busyDraftIds.includes(draft.id) ||
                       approvingIds.includes(draft.id)
                     }
-
                     onClick={() => startEditing(draft)}
                   >
                     Editar
@@ -446,15 +520,12 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
 
                   <button
                     className="reject-button"
-
                     type="button"
-
                     disabled={
                       busyDraftIds.includes(draft.id) ||
                       approvingIds.includes(draft.id) ||
                       imageBusyIds.includes(draft.id)
                     }
-
                     onClick={() => void handleReject(draft.id)}
                   >
                     {busyDraftIds.includes(draft.id)
@@ -486,7 +557,11 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                       onClick={() => {
                         if (
                           window.confirm(
-                            "¿Publicar este texto ahora en la página de Facebook conectada? La imagen no se incluirá.",
+                            draft.media_type === "video"
+                              ? "¿Enviar este video y su descripción a Facebook? Puede tardar en procesarse."
+                              : draft.image_url
+                                ? "¿Publicar esta imagen y su descripción en Facebook?"
+                                : "¿Publicar este texto en Facebook?",
                           )
                         ) {
                           void handlePublishFacebook(draft.id);
@@ -498,6 +573,7 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                         : "Publicar en Facebook"}
                     </button>
                   )}
+
                   {draft.facebook_publish_status === "published" && (
                     <span
                       className="facebook-publish-status is-published"
@@ -506,6 +582,7 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                       ✓ Publicado en Facebook
                     </span>
                   )}
+
                   {draft.facebook_publish_status === "publishing" && (
                     <span
                       className="facebook-publish-status is-publishing"
@@ -514,14 +591,33 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                       Publicación en proceso. Actualiza para verificar.
                     </span>
                   )}
+
                   {draft.facebook_publish_status === "needs_review" && (
-                    <span
-                      className="facebook-publish-status needs-review"
-                      role="alert"
+                    <div
+                      style={{
+                        display: "grid",
+                        gap: "0.5rem",
+                      }}
                     >
-                      Publicación por verificar. Revisa Facebook antes de volver
-                      a intentar.
-                    </span>
+                      <span
+                        className="facebook-publish-status needs-review"
+                        role="alert"
+                      >
+                        Publicación por verificar. Revisa Facebook antes de
+                        volver a intentar.
+                      </span>
+
+                      {draft.media_type === "video" &&
+                        !!draft.facebook_post_id && (
+                          <button
+                            type="button"
+                            className="text-button"
+                            onClick={() => onVerifyFacebookVideo(draft.id)}
+                          >
+                            Verificar publicación en Facebook
+                          </button>
+                        )}
+                    </div>
                   )}
                 </div>
               )}
@@ -534,13 +630,9 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                   <div className="ai-image-editor">
                     <button
                       type="button"
-
                       className="ai-editor-toggle"
-
                       onClick={() => toggleImageEditor(draft.id)}
-
                       aria-expanded={!!showImageEditor[draft.id]}
-
                       aria-controls={`ai-editor-content-${draft.id}`}
                     >
                       <span>✦ Editar imagen con IA</span>
@@ -553,7 +645,6 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                     {showImageEditor[draft.id] && (
                       <div
                         id={`ai-editor-content-${draft.id}`}
-
                         className="ai-editor-content"
                       >
                         <p>
@@ -576,10 +667,8 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                             <div
                               style={{
                                 display: "grid",
-
                                 gridTemplateColumns:
                                   "repeat(auto-fit, minmax(200px, 1fr))",
-
                                 gap: "1rem",
                               }}
                             >
@@ -589,15 +678,15 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                                 {imageUrls[draft.id] ? (
                                   <img
                                     src={imageUrls[draft.id]}
-
                                     alt="Imagen original"
-
-                                    style={{ width: "100%", borderRadius: 12 }}
+                                    style={{
+                                      width: "100%",
+                                      borderRadius: 12,
+                                    }}
                                   />
                                 ) : (
                                   <button
                                     type="button"
-
                                     onClick={() =>
                                       void handlePreviewImage(draft)
                                     }
@@ -613,10 +702,11 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                                 {revisions[draft.id]?.image_url ? (
                                   <img
                                     src={revisions[draft.id]!.image_url!}
-
                                     alt="Versión editada"
-
-                                    style={{ width: "100%", borderRadius: 12 }}
+                                    style={{
+                                      width: "100%",
+                                      borderRadius: 12,
+                                    }}
                                   />
                                 ) : (
                                   <p>
@@ -630,11 +720,8 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                             <div className="approval-actions">
                               <button
                                 type="button"
-
                                 className="approve-button"
-
                                 disabled={revisionBusyIds.includes(draft.id)}
-
                                 onClick={() =>
                                   void handleDecideRevision(draft, "accept")
                                 }
@@ -644,11 +731,8 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
 
                               <button
                                 type="button"
-
                                 className="reject-button"
-
                                 disabled={revisionBusyIds.includes(draft.id)}
-
                                 onClick={() =>
                                   void handleDecideRevision(draft, "reject")
                                 }
@@ -670,60 +754,45 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
 
                             <textarea
                               id={`image-instructions-${draft.id}`}
-
                               value={imageInstructions[draft.id] || ""}
-
                               onChange={(event) =>
                                 updateImageInstructions(
                                   draft.id,
-
                                   event.target.value,
                                 )
                               }
-
                               placeholder="Ejemplo: Mejora la iluminación y cambia el fondo por una mesa elegante."
-
                               rows={4}
-
                               maxLength={1000}
-
                               disabled={revisionBusyIds.includes(draft.id)}
                             />
 
                             <div className="ai-editor-suggestions">
                               {[
                                 "Mejorar iluminación",
-
                                 "Cambiar el fondo",
-
                                 "Estilo más profesional",
                               ].map((suggestion) => (
                                 <button
                                   key={suggestion}
-
                                   type="button"
-
                                   disabled={revisionBusyIds.includes(draft.id)}
-
                                   onClick={() =>
                                     addImageSuggestion(draft.id, suggestion)
                                   }
                                 >
-                                  \+ {suggestion}
+                                  + {suggestion}
                                 </button>
                               ))}
                             </div>
 
                             <button
                               type="button"
-
                               className="primary-button ai-regenerate-button"
-
                               disabled={
                                 revisionBusyIds.includes(draft.id) ||
                                 !imageInstructions[draft.id]?.trim()
                               }
-
                               onClick={() => void handleCreateRevision(draft)}
                             >
                               {revisionBusyIds.includes(draft.id)
@@ -741,11 +810,8 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
 
                         <button
                           type="button"
-
                           className="text-button"
-
                           disabled={revisionBusyIds.includes(draft.id)}
-
                           onClick={() => void refreshRevision(draft.id)}
                         >
                           Actualizar estado

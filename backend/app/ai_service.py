@@ -1,4 +1,3 @@
-
 import json
 import os
 
@@ -13,8 +12,9 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
 def generate_marketing_content(
-    business: Business,
-    recent_posts: list[dict] | None = None,
+        business: Business,
+        recent_posts: list[dict] | None = None,
+        campaign_instructions: str | None = None,
 ) -> dict:
     """Sofía plans varied content; Leo creates the final post."""
 
@@ -33,6 +33,14 @@ def generate_marketing_content(
 
     recent_posts = recent_posts or []
 
+    # Instructions from Sofía's conversation with the business owner.
+    # None means automatic content generation.
+    campaign_context = (
+        campaign_instructions.strip()
+        if campaign_instructions
+        else None
+    )
+
     history_context = json.dumps(
         recent_posts,
         ensure_ascii=False,
@@ -46,6 +54,15 @@ def generate_marketing_content(
             "Analiza el perfil del negocio y crea una estrategia breve "
             "para UNA publicación de redes sociales. "
             "Responde en español. "
+
+            "INSTRUCCIONES DE CAMPAÑA: "
+            "Si se proporcionan instrucciones específicas del propietario, "
+            "respeta el producto, objetivo, plataforma y enfoque solicitados. "
+            "No cambies el producto seleccionado por otro. "
+            "Las instrucciones específicas tienen prioridad sobre las "
+            "reglas de variedad de contenido. "
+            "Si no se proporcionan instrucciones específicas, "
+            "continúa con la selección automática habitual. "
 
             "REGLAS DE VARIEDAD: "
             "Identifica todos los productos y servicios mencionados "
@@ -81,14 +98,21 @@ def generate_marketing_content(
             "pendiente de confirmar, no la presentes como un hecho."
         ),
         input=(
-            "Crea una estrategia de marketing con variedad "
-            "de productos y temas.\n\n"
-            "Perfil del negocio:\n"
-            f"{json.dumps(profile, ensure_ascii=False)}\n\n"
-            "Últimas publicaciones y borradores:\n"
-            f"{history_context}\n\n"
-            "Selecciona preferentemente un tema diferente "
-            "de los utilizados recientemente."
+                "Crea una estrategia de marketing con variedad "
+                "de productos y temas.\n\n"
+                "Perfil del negocio:\n"
+                f"{json.dumps(profile, ensure_ascii=False)}\n\n"
+                "Últimas publicaciones y borradores:\n"
+                f"{history_context}\n\n"
+                + (
+                    "Instrucciones específicas del propietario:\n"
+                    f"{campaign_context}\n\n"
+                    "Prioriza estas instrucciones sobre la variedad."
+                    if campaign_context
+                    else
+                    "Selecciona preferentemente un tema diferente "
+                    "de los utilizados recientemente."
+                )
         ),
     )
 
@@ -115,7 +139,13 @@ def generate_marketing_content(
             "Utiliza un llamado a la acción natural y apropiado. "
 
             "Devuelve exclusivamente un objeto JSON válido "
-            "con estas claves: title, caption, platform, image_prompt. "
+            "con estas claves: title, caption, platform, image_prompt, video_script. "
+            "video_script: guion breve en español, listo para copiar en HeyGen. "
+            "Debe ser natural, conversacional y adecuado para un avatar. "
+            "Duración aproximada de 30 a 45 segundos. "
+            "No incluyas instrucciones de cámara ni etiquetas Markdown. "
+            "Respeta el producto y las instrucciones de la campaña. "
+            "No inventes beneficios, descuentos ni características. "
 
             "title: título breve y atractivo, sin etiquetas Markdown. "
 
@@ -163,12 +193,14 @@ def generate_marketing_content(
                             ],
                         },
                         "image_prompt": {"type": "string"},
+                        "video_script": {"type": "string"},
                     },
                     "required": [
                         "title",
                         "caption",
                         "platform",
                         "image_prompt",
+                        "video_script",
                     ],
                     "additionalProperties": False,
                 },
@@ -187,9 +219,13 @@ def generate_marketing_content(
     if not result["image_prompt"].strip():
         raise ValueError("Leo returned an empty image prompt")
 
+    if not result["video_script"].strip():
+        raise ValueError("Leo returned an empty video script")
+
     return {
         "title": result["title"].strip(),
         "caption": result["caption"].strip(),
         "platform": result["platform"],
         "image_prompt": result["image_prompt"].strip(),
+        "video_script": result["video_script"].strip(),
     }

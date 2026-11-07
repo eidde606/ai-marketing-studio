@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   getHeyGenAvatars,
-  generateHeyGenVideo,
+  generateDraftVideo,
   getHeyGenVideoStatus,
   type HeyGenAvatar,
 } from "../services/heygenApi";
@@ -79,7 +79,7 @@ export function HeyGenVideoEditor({ draft }: HeyGenVideoEditorProps) {
     setVideoStatus(null);
 
     try {
-      const job = await generateHeyGenVideo({
+      const job = await generateDraftVideo(draft.id, {
         avatar_id: selectedAvatarId,
         voice_id: selectedVoiceId,
         script: script.trim(),

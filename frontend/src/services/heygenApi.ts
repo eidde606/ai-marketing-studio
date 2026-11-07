@@ -80,6 +80,32 @@ export async function generateHeyGenVideo(
   return response.json() as Promise<HeyGenVideoJob>;
 }
 
+// Generate a HeyGen video associated with a specific Draft
+export async function generateDraftVideo(
+  draftId: string,
+  request: HeyGenVideoRequest,
+): Promise<HeyGenVideoJob> {
+  const token = await getAccessToken();
+
+  const response = await fetch(
+    `${API_BASE_URL}/drafts/${encodeURIComponent(draftId)}/generate-video`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(`Unable to generate Draft video (${response.status}).`);
+  }
+
+  return response.json() as Promise<HeyGenVideoJob>;
+}
+
 // Check the status of a submitted video
 export async function getHeyGenVideoStatus(
   videoId: string,

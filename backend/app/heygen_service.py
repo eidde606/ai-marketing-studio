@@ -2,6 +2,9 @@ import os
 
 import httpx
 from dotenv import load_dotenv
+import ipaddress
+import socket
+from urllib.parse import urlparse
 
 load_dotenv(".env")
 
@@ -81,6 +84,42 @@ def get_video_status(video_id: str) -> dict:
         raise ValueError(str(result["error"]))
 
     return result["data"]
+
+
+def download_generated_video(video_url: str) -> bytes:
+    """Download a completed HeyGen video with basic URL and size checks."""
+
+    parsed = urlparse(video_url)
+
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError("Invalid video download URL.")
+
+    # Only allow HeyGen's documented video delivery hosts.
+    allowed_hosts = {
+        "resource2.heygen.ai",
+        "files2.heygen.ai",
+    }
+
+    if parsed.hostname not in allowed_hosts:
+        raise ValueError("Untrusted HeyGen video URL.")
+
+    max_size = 100 * 1024 * 1024
+    chunks = []
+    total_size = 0
+
+    with httpx.Client(timeout=120.0, follow_redirects=False) as client:
+        with client.stream("GET", video_url) as response:
+            response.raise_for_status()
+
+            for chunk in response.iter_bytes():
+                total_size += len(chunk)
+
+                if total_size > max_size:
+                    raise ValueError("Video exceeds the 100 MB limit.")
+
+                chunks.append(chunk)
+
+    return b"".join(chunks)
 
 
 def get_available_voices() -> list:

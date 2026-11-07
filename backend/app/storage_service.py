@@ -1,4 +1,3 @@
-
 import os
 from uuid import UUID, uuid4
 
@@ -8,6 +7,7 @@ from supabase import create_client
 load_dotenv(".env")
 
 MAX_IMAGE_SIZE = 20 * 1024 * 1024  # 20 MB
+MAX_VIDEO_SIZE = 100 * 1024 * 1024  # 100 MB
 
 
 def get_storage_client():
@@ -20,8 +20,8 @@ def get_storage_client():
 
 
 def _validate_image_path(
-    storage_path: str,
-    business_id: str,
+        storage_path: str,
+        business_id: str,
 ) -> str:
     """
     Ensure the requested image belongs to the expected
@@ -52,10 +52,10 @@ def _validate_image_path(
     filename = storage_path[len(expected_prefix):]
 
     if (
-        not filename
-        or "/" in filename
-        or "\\" in filename
-        or filename in {".", ".."}
+            not filename
+            or "/" in filename
+            or "\\" in filename
+            or filename in {".", ".."}
     ):
         raise ValueError("Invalid image storage path.")
 
@@ -66,9 +66,9 @@ def _validate_image_path(
 
 
 def upload_marketing_image(
-    image_bytes: bytes,
-    business_id: str,
-    content_type: str = "image/png",
+        image_bytes: bytes,
+        business_id: str,
+        content_type: str = "image/png",
 ) -> str:
     """Upload an image and return its private storage path."""
 
@@ -117,8 +117,8 @@ def upload_marketing_image(
 
 
 def download_marketing_image(
-    storage_path: str,
-    business_id: str,
+        storage_path: str,
+        business_id: str,
 ) -> bytes:
     """
     Download an original image from private Supabase Storage.
@@ -158,8 +158,8 @@ def download_marketing_image(
 
 
 def get_marketing_image_url(
-    storage_path: str,
-    expires_in: int = 3600,
+        storage_path: str,
+        expires_in: int = 3600,
 ) -> str:
     """Create a temporary URL for viewing a private image."""
 
@@ -180,3 +180,43 @@ def get_marketing_image_url(
     )
 
     return response["signedURL"]
+
+
+def upload_marketing_video(
+        video_bytes: bytes,
+        business_id: str,
+) -> str:
+    """Upload an MP4 video to private Supabase storage."""
+
+    if not video_bytes:
+        raise ValueError("Video data cannot be empty.")
+
+    if len(video_bytes) > MAX_VIDEO_SIZE:
+        raise ValueError("Video exceeds the 100 MB limit.")
+
+    # Basic MP4 container signature check.
+    if video_bytes[4:8] != b"ftyp":
+        raise ValueError("Invalid MP4 video format.")
+
+    try:
+        UUID(business_id)
+    except (ValueError, TypeError, AttributeError):
+        raise ValueError("Invalid business ID.") from None
+
+    storage_path = (
+        f"businesses/{business_id}/{uuid4()}.mp4"
+    )
+
+    client = get_storage_client()
+    bucket = os.environ["SUPABASE_STORAGE_BUCKET"]
+
+    client.storage.from_(bucket).upload(
+        path=storage_path,
+        file=video_bytes,
+        file_options={
+            "content-type": "video/mp4",
+            "upsert": "false",
+        },
+    )
+
+    return storage_path
