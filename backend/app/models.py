@@ -78,6 +78,12 @@ class Draft(Base):
     title: Mapped[str] = mapped_column(String)
     caption: Mapped[str] = mapped_column(String)
     platform: Mapped[str] = mapped_column(String)
+    media_type: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="text",
+        server_default="text",
+    )
 
     status: Mapped[str] = mapped_column(
         String,
@@ -96,10 +102,34 @@ class Draft(Base):
         nullable=True,
     )
 
+    # Script for HeyGen video creation
+    video_script: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
     # Private Supabase Storage path, not a public URL
     image_url: Mapped[str | None] = mapped_column(
         String,
         nullable=True,
+    )
+
+    # HeyGen-generated marketing video
+    video_url: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
+    video_generation_id: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
+    video_status: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="not_started",
+        server_default="not_started",
     )
 
     image_status: Mapped[str] = mapped_column(
@@ -284,4 +314,74 @@ class FacebookOAuthState(Base):
         String(64),
         nullable=True,
         unique=True,
+    )
+
+
+class Conversation(Base):
+    """A conversation with Sofía for a specific business."""
+
+    __tablename__ = "conversations"
+
+    id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+
+    business_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("businesses.id"),
+        nullable=False,
+        index=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    business: Mapped["Business"] = relationship()
+
+    messages: Mapped[list["ConversationMessage"]] = relationship(
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+    )
+
+
+class ConversationMessage(Base):
+    """One message sent by the owner or Sofía."""
+
+    __tablename__ = "conversation_messages"
+
+    id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+
+    conversation_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("conversations.id"),
+        nullable=False,
+        index=True,
+    )
+
+    # "user" or "assistant"
+    role: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+    )
+
+    content: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    conversation: Mapped["Conversation"] = relationship(
+        back_populates="messages",
     )
