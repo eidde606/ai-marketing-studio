@@ -261,6 +261,11 @@ class SocialAccount(Base):
         nullable=False,
     )
 
+    encrypted_refresh_token: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
     token_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
@@ -384,4 +389,29 @@ class ConversationMessage(Base):
 
     conversation: Mapped["Conversation"] = relationship(
         back_populates="messages",
+    )
+
+
+class TikTokOAuthState(Base):
+    __tablename__ = "tiktok_oauth_states"
+
+    state_hash: Mapped[str] = mapped_column(
+        String(64),
+        primary_key=True,
+    )
+
+    business_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("businesses.id"),
+        nullable=False,
+    )
+
+    user_id: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+    )
+
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
     )

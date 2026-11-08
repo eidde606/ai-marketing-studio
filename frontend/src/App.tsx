@@ -16,6 +16,7 @@ import BusinessForm from "./components/BusinessForm";
 import ContentPage from "./components/ContentPage";
 import DashboardOverview from "./components/DashboardOverview";
 import FacebookConnection from "./components/FacebookConnection";
+import TikTokConnection from "./components/TikTokConnection";
 import Sidebar, { type Section } from "./components/Sidebar";
 import { useDraftImages } from "./hooks/useDraftImages";
 import { getBusinesses, type Business } from "./services/businessesApi";
@@ -930,6 +931,7 @@ const App: FC = () => {
         </header>
 
         <FacebookConnection businessId={selectedBusinessId} />
+        <TikTokConnection businessId={selectedBusinessId} />
 
         {showBusinessForm ? (
           <BusinessForm
