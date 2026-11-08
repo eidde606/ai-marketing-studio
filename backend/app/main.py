@@ -36,6 +36,8 @@ from app.storage_service import (
     upload_marketing_video,
 )
 
+from app.tiktok_auth_routes import router as tiktok_auth_router
+
 app = FastAPI()
 
 # Only Ángela's authorized Supabase account can access these endpoints.
@@ -1897,3 +1899,5 @@ def list_heygen_avatars():
 
 app.include_router(protected)
 app.include_router(facebook_auth_router)
+
+app.include_router(tiktok_auth_router)
