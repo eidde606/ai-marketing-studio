@@ -1,4 +1,3 @@
-
 import hashlib
 import os
 import secrets
@@ -17,6 +16,7 @@ from app.tiktok_oauth import (
     exchange_code_for_token,
     get_tiktok_login_url,
     get_tiktok_user,
+    refresh_tiktok_token,
 )
 from app.token_service import encrypt_token
 
@@ -28,9 +28,9 @@ router = APIRouter(
 
 @router.get("/start")
 def start_tiktok_connection(
-    business_id: str,
-    user: dict = Depends(verify_token),
-    db: Session = Depends(get_db),
+        business_id: str,
+        user: dict = Depends(verify_token),
+        db: Session = Depends(get_db),
 ):
     business = db.get(Business, business_id)
 
@@ -48,7 +48,7 @@ def start_tiktok_connection(
             business_id=business.id,
             user_id=user["sub"],
             expires_at=datetime.now(timezone.utc)
-            + timedelta(minutes=10),
+                       + timedelta(minutes=10),
         )
     )
     db.commit()
@@ -58,10 +58,10 @@ def start_tiktok_connection(
 
 @router.get("/callback")
 async def tiktok_callback(
-    state: str,
-    code: str | None = None,
-    error: str | None = None,
-    db: Session = Depends(get_db),
+        state: str,
+        code: str | None = None,
+        error: str | None = None,
+        db: Session = Depends(get_db),
 ):
     state_hash = hashlib.sha256(state.encode()).hexdigest()
 
@@ -125,8 +125,8 @@ async def tiktok_callback(
     )
     account.encrypted_refresh_token = encrypt_token(refresh_token)
     account.token_expires_at = (
-        datetime.now(timezone.utc)
-        + timedelta(seconds=expires_in)
+            datetime.now(timezone.utc)
+            + timedelta(seconds=expires_in)
     )
     account.connection_status = "connected"
 
@@ -145,9 +145,9 @@ async def tiktok_callback(
 
 @router.get("/accounts")
 def get_tiktok_accounts(
-    business_id: str,
-    user: dict = Depends(verify_token),
-    db: Session = Depends(get_db),
+        business_id: str,
+        user: dict = Depends(verify_token),
+        db: Session = Depends(get_db),
 ):
     if db.get(Business, business_id) is None:
         raise HTTPException(404, "Business not found")

@@ -30,10 +30,13 @@ import {
   getDrafts,
   getImageRevisions,
   publishDraftToFacebook,
+  publishDraftToTikTok,
   verifyFacebookVideo,
+  verifyTikTokPublication,
   rejectDraft,
   rejectImageRevision,
   updateDraft,
+  updateDraftDestinations,
   type Draft,
   type ImageRevision,
 } from "./services/draftsApi";
@@ -82,6 +85,9 @@ const App: FC = () => {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const [publishingIds, setPublishingIds] = useState<string[]>([]);
+  const [draftDestinations, setDraftDestinations] = useState<
+    Record<string, { facebook: boolean; tiktok: boolean }>
+  >({});
   const [publishError, setPublishError] = useState<string | null>(null);
   const [approvingIds, setApprovingIds] = useState<string[]>([]);
   const [busyDraftIds, setBusyDraftIds] = useState<string[]>([]);
@@ -405,7 +411,27 @@ const App: FC = () => {
     setApprovalError(null);
     setApprovingIds((current) => [...current, id]);
     try {
+      const selection = draftDestinations[id];
+
+      const savedDestinations = draft.publish_destinations ?? ["facebook"];
+
+      const destinations: ("facebook" | "tiktok")[] = [];
+
+      if (selection?.facebook ?? savedDestinations.includes("facebook")) {
+        destinations.push("facebook");
+      }
+
+      if (selection?.tiktok ?? savedDestinations.includes("tiktok")) {
+        destinations.push("tiktok");
+      }
+
+      if (destinations.length === 0) {
+        throw new Error("Select at least one publishing platform.");
+      }
+
+      await updateDraftDestinations(id, destinations);
       const updated = await approveDraft(id);
+
       updateLocalDraft(updated);
     } catch {
       setApprovalError("No se pudo aprobar el borrador. Inténtalo de nuevo.");
@@ -413,6 +439,63 @@ const App: FC = () => {
       setApprovingIds((current) => current.filter((value) => value !== id));
     }
   };
+
+  const handlePublishTikTok = async (
+    id: string,
+    accountId: string,
+    privacyLevel: string,
+    interactions: {
+      disable_comment: boolean;
+      disable_duet: boolean;
+      disable_stitch: boolean;
+    },
+  ) => {
+    const draft = visibleDrafts.find((item) => item.id === id);
+
+    if (
+      !draft ||
+      draft.status !== "approved" ||
+      draft.tiktok_publish_status !== "not_published" ||
+      publishingIds.includes(id)
+    ) {
+      return;
+    }
+
+    setPublishError(null);
+    setPublishingIds((current) => [...current, id]);
+
+    try {
+      const result = await publishDraftToTikTok(id, {
+        account_id: accountId,
+        privacy_level: privacyLevel,
+        ...interactions,
+      });
+
+      setApprovals((current) =>
+        current.map((item) =>
+          item.id === id
+            ? {
+                ...item,
+                tiktok_publish_id: result.tiktok_publish_id,
+                tiktok_publish_status: "needs_review",
+              }
+            : item,
+        ),
+      );
+    } catch (error) {
+      console.error("TikTok publishing failed:", error);
+
+      setPublishError(
+        "No se pudo confirmar la publicación en TikTok. Verifica el estado antes de intentar nuevamente.",
+      );
+
+      // The request may have reached TikTok.
+      // Do not automatically retry.
+    } finally {
+      setPublishingIds((current) => current.filter((value) => value !== id));
+    }
+  };
+
   // Publishing button will use this handler when ApprovalPage is connected.
   const handlePublishFacebook = async (id: string) => {
     const draft = visibleDrafts.find((item) => item.id === id);
@@ -450,6 +533,37 @@ const App: FC = () => {
       );
       // The server may have marked the draft as needing review.
       // Reloading drafts later will retrieve the authoritative status.
+    } finally {
+      setPublishingIds((current) => current.filter((value) => value !== id));
+    }
+  };
+
+  const handleVerifyTikTok = async (id: string) => {
+    if (publishingIds.includes(id)) return;
+
+    setPublishError(null);
+    setPublishingIds((current) => [...current, id]);
+
+    try {
+      const result = await verifyTikTokPublication(id);
+
+      setApprovals((current) =>
+        current.map((draft) =>
+          draft.id === id
+            ? {
+                ...draft,
+                tiktok_publish_status:
+                  result.status === "published" ? "published" : "needs_review",
+              }
+            : draft,
+        ),
+      );
+    } catch (error) {
+      console.error("TikTok verification failed:", error);
+
+      setPublishError(
+        "No se pudo verificar la publicación en TikTok. Inténtalo nuevamente más tarde.",
+      );
     } finally {
       setPublishingIds((current) => current.filter((value) => value !== id));
     }
@@ -977,11 +1091,14 @@ const App: FC = () => {
           />
         ) : activeSection === "Aprobaciones" ? (
           <ApprovalPage
+            businessId={selectedBusinessId}
             loadingDrafts={loadingDrafts}
             loadError={loadError}
             pendingCount={pendingCount}
             draftMessages={draftMessages}
             visibleDrafts={visibleDrafts}
+            draftDestinations={draftDestinations}
+            setDraftDestinations={setDraftDestinations}
             approvingIds={approvingIds}
             publishingIds={publishingIds}
             busyDraftIds={busyDraftIds}
@@ -1003,6 +1120,8 @@ const App: FC = () => {
             handleApprove={handleApprove}
             handlePublishFacebook={handlePublishFacebook}
             onVerifyFacebookVideo={handleVerifyFacebookVideo}
+            handlePublishTikTok={handlePublishTikTok}
+            onVerifyTikTok={handleVerifyTikTok}
             handleReject={handleReject}
             handleSaveEdit={handleSaveEdit}
             handleGenerateImage={handleGenerateImage}

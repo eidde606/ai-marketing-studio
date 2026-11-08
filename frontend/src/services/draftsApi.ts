@@ -10,8 +10,12 @@ export type Draft = {
   title: string;
   caption: string;
   platform: string;
+  publish_destinations: ("facebook" | "tiktok")[];
   status: string;
   facebook_post_id: string | null;
+  tiktok_publish_id: string | null;
+  tiktok_publish_status:
+    "not_published" | "publishing" | "published" | "needs_review";
   facebook_publish_status:
     "not_published" | "publishing" | "published" | "needs_review";
   published_at: string | null;
@@ -114,6 +118,19 @@ export function approveDraft(id: string): Promise<Draft> {
   });
 }
 
+export function updateDraftDestinations(
+  id: string,
+  destinations: ("facebook" | "tiktok")[],
+): Promise<Draft> {
+  return request<Draft>(`/drafts/${encodeURIComponent(id)}/destinations`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ destinations }),
+  });
+}
+
 // Generate AI marketing content.
 export function generateContent(businessId: string): Promise<Draft> {
   return request<Draft>(
@@ -133,6 +150,81 @@ export function publishDraftToFacebook(
   return request<FacebookPublishResponse>(
     `/drafts/${encodeURIComponent(id)}/publish-facebook`,
     { method: "POST" },
+  );
+}
+
+export type TikTokPublishRequest = {
+  account_id: string;
+  privacy_level: string;
+  disable_comment: boolean;
+  disable_duet: boolean;
+  disable_stitch: boolean;
+};
+
+export type TikTokPublishResponse = {
+  status: "processing";
+  tiktok_publish_id: string;
+};
+
+export type TikTokVerificationResponse = {
+  status: "published" | "failed" | "processing";
+  tiktok_status?: string;
+};
+
+export type TikTokCreatorInfo = {
+  privacy_level_options: string[];
+  comment_disabled: boolean;
+  duet_disabled: boolean;
+  stitch_disabled: boolean;
+};
+
+export type TikTokAccount = {
+  id: string;
+  account_name: string;
+  connection_status: string;
+};
+
+export function getTikTokAccounts(
+  businessId: string,
+): Promise<{ accounts: TikTokAccount[] }> {
+  return request<{ accounts: TikTokAccount[] }>(
+    `/tiktok/accounts?business_id=${encodeURIComponent(businessId)}`,
+  );
+}
+
+export function getTikTokCreatorInfo(
+  id: string,
+  accountId: string,
+): Promise<TikTokCreatorInfo> {
+  return request<TikTokCreatorInfo>(
+    `/drafts/${encodeURIComponent(id)}/tiktok-creator-info?account_id=${encodeURIComponent(accountId)}`,
+  );
+}
+
+export function publishDraftToTikTok(
+  id: string,
+  settings: TikTokPublishRequest,
+): Promise<TikTokPublishResponse> {
+  return request<TikTokPublishResponse>(
+    `/drafts/${encodeURIComponent(id)}/publish-tiktok`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(settings),
+    },
+  );
+}
+
+export function verifyTikTokPublication(
+  id: string,
+): Promise<TikTokVerificationResponse> {
+  return request<TikTokVerificationResponse>(
+    `/drafts/${encodeURIComponent(id)}/verify-tiktok`,
+    {
+      method: "POST",
+    },
   );
 }
 

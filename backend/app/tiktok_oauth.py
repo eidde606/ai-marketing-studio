@@ -6,6 +6,27 @@ import httpx
 TIKTOK_AUTHORIZE_URL = "https://www.tiktok.com/v2/auth/authorize/"
 TIKTOK_TOKEN_URL = "https://open.tiktokapis.com/v2/oauth/token/"
 
+
+async def refresh_tiktok_token(refresh_token: str) -> dict:
+    data = {
+        "client_key": os.environ["TIKTOK_CLIENT_KEY"],
+        "client_secret": os.environ["TIKTOK_CLIENT_SECRET"],
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+    }
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await client.post(TIKTOK_TOKEN_URL, data=data)
+        response.raise_for_status()
+
+    result = response.json()
+
+    if "access_token" not in result or "refresh_token" not in result:
+        raise ValueError("TikTok token refresh failed")
+
+    return result
+
+
 SCOPES = [
     "user.info.basic",
     "video.publish",

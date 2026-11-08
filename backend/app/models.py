@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, JSON, String, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -57,6 +57,12 @@ class Draft(Base):
         nullable=True,
     )
 
+    publish_destinations: Mapped[list[str]] = mapped_column(
+        JSON,
+        nullable=False,
+        default=lambda: ["facebook"],
+    )
+
     # Facebook publishing
     facebook_post_id: Mapped[str | None] = mapped_column(
         String,
@@ -68,6 +74,24 @@ class Draft(Base):
         nullable=False,
         default="not_published",
         server_default="not_published",
+    )
+
+    tiktok_publish_status: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="not_published",
+        server_default="not_published",
+    )
+
+    tiktok_publish_id: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
+    tiktok_account_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("social_accounts.id"),
+        nullable=True,
     )
 
     published_at: Mapped[datetime | None] = mapped_column(
