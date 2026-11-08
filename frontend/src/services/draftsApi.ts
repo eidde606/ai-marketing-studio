@@ -188,7 +188,7 @@ export function getTikTokAccounts(
   businessId: string,
 ): Promise<{ accounts: TikTokAccount[] }> {
   return request<{ accounts: TikTokAccount[] }>(
-    `/tiktok/accounts?business_id=${encodeURIComponent(businessId)}`,
+    `/api/integrations/tiktok/accounts?business_id=${encodeURIComponent(businessId)}`,
   );
 }
 

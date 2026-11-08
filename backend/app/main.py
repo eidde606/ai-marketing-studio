@@ -809,7 +809,7 @@ async def verify_tiktok_publication(
     account = db.scalar(
         select(SocialAccount).where(
             SocialAccount.business_id == draft.business_id,
-            SocialAccount.id == draft.tiktok_publish_id,
+            SocialAccount.id == draft.tiktok_account_id,
             SocialAccount.platform == "tiktok",
             SocialAccount.connection_status == "connected",
         )
