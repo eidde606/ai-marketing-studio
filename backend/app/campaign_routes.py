@@ -4,7 +4,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session, selectinload
 
 from app.auth import verify_token
@@ -137,6 +137,22 @@ def update_campaign(business_id: str, campaign_id: str, request: CampaignUpdate,
     db.commit()
     db.refresh(campaign)
     return campaign_response(campaign)
+
+
+@router.delete("/{campaign_id}")
+def delete_campaign(business_id: str, campaign_id: str, db: Session = Depends(get_db)):
+    campaign = require_campaign(db, business_id, campaign_id)
+    db.execute(
+        update(Draft)
+        .where(
+            Draft.business_id == business_id,
+            Draft.campaign_id == campaign.id,
+        )
+        .values(campaign_id=None)
+    )
+    db.delete(campaign)
+    db.commit()
+    return {"message": "Campaña eliminada correctamente."}
 
 
 def change_association(db: Session, business_id: str, campaign_id: str, draft_id: str, attach: bool):
