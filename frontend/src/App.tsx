@@ -1091,7 +1091,6 @@ const App: FC = () => {
         </header>
 
         <FacebookConnection businessId={selectedBusinessId} />
-        <TikTokConnection businessId={selectedBusinessId} />
 
         {showBusinessForm ? (
           <BusinessForm

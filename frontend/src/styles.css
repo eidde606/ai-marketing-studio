@@ -1409,11 +1409,44 @@ h1 {
 }
 
 
-/* Action buttons */
+/* Keep actions and publication badges in separate rows within the card. */
 
-.approval-page .approval-card > .approval-actions {
+.approval-page .approval-card-controls {
     grid-column: 2;
     grid-row: 4;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 0;
+}
+
+.approval-page .approval-card-controls > * {
+    min-width: 0;
+}
+
+.approval-page .draft-edit-form .approval-actions {
+    flex-wrap: wrap;
+}
+
+.approval-page .approval-card-controls button,
+.approval-page .approval-card-controls .facebook-publish-status {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.approval-page .approval-card-controls .approval-delete-actions button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.approval-page .approval-delete-actions svg {
+    flex-shrink: 0;
+}
+
+.approval-page .approval-card-controls > .approval-actions {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
@@ -1422,7 +1455,7 @@ h1 {
     border-top: 1px solid #f0edf5;
 }
 
-.approval-page .approval-card > .approval-actions button {
+.approval-page .approval-card-controls > .approval-actions button {
     min-height: 42px;
     padding: 10px 16px;
     border-radius: 10px;
@@ -1440,10 +1473,8 @@ h1 {
     background: #fee2e2;
 }
 
-.approval-page .approval-card > .final-status {
-    grid-column: 2;
-    grid-row: 4;
-    justify-self: start;
+.approval-page .approval-card-controls > .final-status {
+    align-self: flex-start;
 }
 
 
@@ -1480,8 +1511,7 @@ h1 {
     .approval-page .approval-card > h3,
     .approval-page .approval-card > p,
     .approval-page .draft-edit-form,
-    .approval-page .approval-card > .approval-actions,
-    .approval-page .approval-card > .final-status {
+    .approval-page .approval-card-controls {
         grid-column: 1;
         grid-row: auto;
     }
@@ -1518,8 +1548,13 @@ h1 {
         font-size: 0.86rem;
     }
 
-    .approval-page .approval-card > .approval-actions {
+    .approval-page .approval-card-controls > .approval-actions {
         gap: 8px;
+    }
+
+    .approval-page .approval-card-controls > .approval-actions > button {
+        flex: 1 1 140px;
+        min-width: 0;
     }
 }
 
@@ -1540,9 +1575,6 @@ h1 {
         align-self: start;
     }
 
-    .approval-page .approval-card > .approval-actions {
-        align-self: start;
-    }
 }
 
 
@@ -1662,7 +1694,7 @@ h1 {
 
 /* Facebook publishing — scoped to the approvals screen */
 
-.approval-page .approval-card > .approval-actions .facebook-publish-button {
+.approval-page .approval-card-controls > .approval-actions .facebook-publish-button {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -1720,32 +1752,8 @@ h1 {
 }
 
 
-/* Approved cards have both an approval label and a publishing action. */
-
-@media (min-width: 951px) {
-    .approval-page .approval-card:has(> .final-status) > .approval-actions {
-        grid-column: 2;
-        grid-row: 5;
-        border-top: 0;
-        padding-top: 0;
-    }
-
-    .approval-page .approval-card:has(> .final-status) > .ai-image-editor {
-        grid-row: 6;
-    }
-}
-
-@media (max-width: 950px) {
-    .approval-page .approval-card:has(> .final-status) > .approval-actions {
-        grid-column: 1;
-        grid-row: auto;
-        padding-top: 0;
-        border-top: 0;
-    }
-}
-
 @media (max-width: 600px) {
-    .approval-page .approval-card > .approval-actions .facebook-publish-button {
+    .approval-page .approval-card-controls > .approval-actions .facebook-publish-button {
         width: 100%;
     }
 }
@@ -2744,4 +2752,46 @@ h1 {
 .tiktok-privacy-select option {
     background: #ffffff;
     color: #242033;
+}
+/* Manual TikTok package — separate from Facebook publishing */
+.approval-page .approval-card-controls > .tiktok-manual-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    margin-top: 0 !important;
+    padding: 16px;
+    border: 1px solid #e9e1fa;
+    border-radius: 12px;
+    background: #faf8ff;
+}
+
+.approval-page .approval-card-controls > .tiktok-manual-actions button {
+    min-height: 44px;
+    padding: 10px 16px;
+    border-radius: 10px;
+    font-size: 0.85rem;
+    font-weight: 650;
+}
+
+.approval-page .tiktok-manual-actions .tiktok-download-button {
+    background: #7c3aed;
+    color: #fff;
+    border: 1px solid #7c3aed;
+}
+
+.approval-page .tiktok-manual-actions .tiktok-copy-button {
+    background: #fff;
+    color: #6d28d9;
+    border: 1px solid #c4b5fd;
+}
+
+.approval-page .tiktok-manual-actions button:hover:not(:disabled) {
+    filter: brightness(0.96);
+}
+
+@media (max-width: 600px) {
+    .approval-page .approval-card-controls > .tiktok-manual-actions button {
+        width: 100%;
+    }
 }
