@@ -76,6 +76,21 @@ export const updateCampaign = (
     method: "PATCH",
     body: JSON.stringify(input),
   });
+export const deleteCampaign = async (businessId: string, id: string) => {
+  try {
+    return await request<{ message: string }>(
+      businessId,
+      `/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    );
+  } catch (error) {
+    if (error instanceof TypeError) {
+      error.message =
+        "No se pudo eliminar la campaña. Comprueba tu conexión e inténtalo de nuevo.";
+    }
+    throw error;
+  }
+};
 export const setCampaignDraft = (
   businessId: string,
   campaignId: string,

@@ -120,6 +120,64 @@ def test_business_isolation_and_missing_resources(campaign_client):
     assert client.get(f'/businesses/{businesses[0]}/campaigns/missing').status_code == 404
 
 
+def test_delete_campaign_unlinks_drafts_and_preserves_content_history(campaign_client):
+    client, engine, businesses, drafts = campaign_client
+    campaign = create(client, businesses[0])
+    root = f'/businesses/{businesses[0]}/campaigns'
+    assert client.patch(f'{root}/{campaign["id"]}/drafts/{drafts[0]}').status_code == 200
+    with Session(engine) as db:
+        published = db.get(Draft, drafts[0])
+        published.status = "approved"
+        published.facebook_publish_status = "published"
+        published.facebook_post_id = "historical-post"
+        published.published_at = datetime.now(timezone.utc)
+        approval = Draft(
+            business_id=businesses[0], campaign_id=campaign["id"],
+            title="Aprobado", caption="Conservar", platform="facebook",
+            status="approved",
+        )
+        db.add(approval)
+        db.commit()
+        approval_id = approval.id
+        published_at = published.published_at
+
+    response = client.delete(f'{root}/{campaign["id"]}')
+    assert response.status_code == 200
+    assert response.json() == {"message": "Campaña eliminada correctamente."}
+    assert client.get(root).json() == []
+    assert client.get(f'{root}/{campaign["id"]}').status_code == 404
+    with Session(engine) as db:
+        assert db.get(Campaign, campaign["id"]) is None
+        published = db.get(Draft, drafts[0])
+        approval = db.get(Draft, approval_id)
+        assert published is not None
+        assert published.campaign_id is None
+        assert published.status == "approved"
+        assert published.facebook_publish_status == "published"
+        assert published.facebook_post_id == "historical-post"
+        assert published.published_at == published_at
+        assert approval is not None
+        assert approval.campaign_id is None
+        assert approval.status == "approved"
+        assert approval.title == "Aprobado" and approval.caption == "Conservar"
+    assert client.delete(f'{root}/{campaign["id"]}').status_code == 404
+
+
+def test_delete_campaign_rejects_cross_business_request(campaign_client):
+    client, engine, businesses, drafts = campaign_client
+    campaign = create(client, businesses[0])
+    root = f'/businesses/{businesses[0]}/campaigns'
+    assert client.patch(f'{root}/{campaign["id"]}/drafts/{drafts[0]}').status_code == 200
+
+    response = client.delete(
+        f'/businesses/{businesses[1]}/campaigns/{campaign["id"]}',
+    )
+    assert response.status_code == 404
+    with Session(engine) as db:
+        assert db.get(Campaign, campaign["id"]) is not None
+        assert db.get(Draft, drafts[0]).campaign_id == campaign["id"]
+
+
 def test_associate_detach_preserves_workflow_and_archive(campaign_client):
     client, engine, businesses, drafts = campaign_client
     campaign = create(client, businesses[0])
@@ -213,6 +271,7 @@ def test_all_campaign_endpoints_require_auth(campaign_client, monkeypatch):
     operations = [
         ("GET", root, None), ("POST", root, {"name": "Test", "objective": "Test"}),
         ("GET", detail, None), ("PATCH", detail, {"status": "active"}),
+        ("DELETE", detail, None),
         ("PATCH", f'{detail}/drafts/{drafts[0]}', None),
         ("DELETE", f'{detail}/drafts/{drafts[0]}', None),
     ]

@@ -2850,6 +2850,18 @@ h1 {
     cursor: pointer;
     font: inherit;
 }
+.campaign-page .danger-button {
+    padding: 10px 14px;
+    border: 1px solid #b91c1c;
+    background: #b91c1c;
+    color: #fff;
+    border-radius: 8px;
+    cursor: pointer;
+    font: inherit;
+}
+.campaign-success {
+    color: #15803d;
+}
 .campaign-page button:disabled {
     opacity: 0.55;
     cursor: not-allowed;

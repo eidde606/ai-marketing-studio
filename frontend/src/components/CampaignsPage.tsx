@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   createCampaign,
+  deleteCampaign,
   getCampaigns,
   setCampaignDraft,
   updateCampaign,
@@ -46,6 +47,7 @@ export default function CampaignsPage({ businessId }: { businessId: string }) {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const mounted = useRef(false);
   const mutationLock = useRef(false);
   const selected = campaigns.find((campaign) => campaign.id === selectedId);
@@ -86,6 +88,7 @@ export default function CampaignsPage({ businessId }: { businessId: string }) {
     mutationLock.current = true;
     setBusy(true);
     setError(null);
+    setSuccess(null);
     try {
       await action();
     } catch (err) {
@@ -142,6 +145,40 @@ export default function CampaignsPage({ businessId }: { businessId: string }) {
       setSelectedId(saved.id);
       setForm(null);
       setDraftId("");
+    });
+  }
+
+  async function removeCampaign() {
+    if (!editingId || !form) return;
+    const campaign = campaigns.find((item) => item.id === editingId);
+    if (
+      !campaign ||
+      !window.confirm(
+        `¿Eliminar permanentemente la campaña "${campaign.name}"? Sus borradores, aprobaciones y publicaciones se conservarán sin asignar a una campaña.`,
+      )
+    ) {
+      return;
+    }
+
+    await perform(async () => {
+      await deleteCampaign(businessId, campaign.id);
+      if (!mounted.current) return;
+      const remaining = campaigns.filter((item) => item.id !== campaign.id);
+      setCampaigns(remaining);
+      setDrafts((current) =>
+        current.map((draft) =>
+          draft.campaign_id === campaign.id
+            ? { ...draft, campaign_id: null }
+            : draft,
+        ),
+      );
+      setSelectedId(remaining[0]?.id ?? null);
+      setForm(null);
+      setEditingId(null);
+      setDraftId("");
+      setSuccess(
+        "Campaña eliminada correctamente. Su contenido e historial se conservaron.",
+      );
     });
   }
 
@@ -206,6 +243,11 @@ export default function CampaignsPage({ businessId }: { businessId: string }) {
         {error && (
           <p role="alert" className="campaign-error">
             {error}
+          </p>
+        )}
+        {success && (
+          <p role="status" className="campaign-success">
+            {success}
           </p>
         )}
         {loading && <p role="status">Cargando campañas...</p>}
@@ -316,10 +358,21 @@ export default function CampaignsPage({ businessId }: { businessId: string }) {
                 <button
                   className="outline-button"
                   type="button"
+                  disabled={busy}
                   onClick={() => setForm(null)}
                 >
                   Cancelar
                 </button>
+                {editingId && (
+                  <button
+                    className="danger-button"
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void removeCampaign()}
+                  >
+                    {busy ? "Eliminando..." : "Eliminar campaña"}
+                  </button>
+                )}
               </div>
             </fieldset>
           </form>
