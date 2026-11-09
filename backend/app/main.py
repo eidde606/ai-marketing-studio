@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, UploadFile, File
 from app.facebook_auth_routes import router as facebook_auth_router
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 import logging
 
@@ -34,7 +34,20 @@ from app.storage_service import (
     get_marketing_image_url,
     download_marketing_image,
     upload_marketing_video,
+    get_storage_client,
 )
+
+from app.tiktok_auth_routes import router as tiktok_auth_router
+
+from app.tiktok_service import (
+    get_creator_info,
+    publish_tiktok_video,
+    publish_tiktok_video_file,
+    publish_tiktok_photo,
+    get_tiktok_publish_status,
+)
+from app.tiktok_oauth import refresh_tiktok_token
+from app.token_service import encrypt_token
 
 app = FastAPI()
 
@@ -52,7 +65,7 @@ app.add_middleware(
         "https://nazbort-ai-studio.netlify.app",
         "https://studio.nazborttech.com",
     ],
-    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
 )
 
@@ -81,6 +94,21 @@ class DraftCreate(BaseModel):
     caption: str
     platform: str
     media_type: Literal["text", "image", "video"] = "text"
+
+
+class TikTokPublishRequest(BaseModel):
+    account_id: str = Field(min_length=1)
+    privacy_level: str = Field(min_length=1)
+    disable_comment: bool = False
+    disable_duet: bool = False
+    disable_stitch: bool = False
+
+
+class DraftDestinationsUpdate(BaseModel):
+    destinations: list[Literal["facebook", "tiktok"]] = Field(
+        min_length=1,
+        max_length=2,
+    )
 
 
 class DraftUpdate(BaseModel):
@@ -114,10 +142,54 @@ class ImageRevisionRequest(BaseModel):
 # --------------------------------------------------
 
 
-def require_draft(db: Session, draft_id: str) -> Draft:
+async def get_valid_tiktok_token(
+        account: SocialAccount,
+        db: Session,
+) -> str:
+    now = datetime.now(timezone.utc)
+
+    expires_at = account.token_expires_at
+
+    if expires_at is not None:
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+        if expires_at > now + timedelta(minutes=5):
+            return decrypt_token(account.encrypted_access_token)
+
+    if not account.encrypted_refresh_token:
+        raise HTTPException(
+            status_code=409,
+            detail="Reconnect your TikTok account",
+        )
+
+    try:
+        tokens = await refresh_tiktok_token(
+            decrypt_token(account.encrypted_refresh_token)
+        )
+    except (httpx.HTTPError, ValueError, KeyError):
+        raise HTTPException(
+            status_code=409,
+            detail="TikTok authorization expired. Reconnect TikTok.",
+        ) from None
+
+    account.encrypted_access_token = encrypt_token(tokens["access_token"])
+    account.encrypted_refresh_token = encrypt_token(tokens["refresh_token"])
+    account.token_expires_at = now + timedelta(
+        seconds=int(tokens["expires_in"])
+    )
+
+    db.commit()
+
+    return tokens["access_token"]
+
+
+def require_draft(
+        db: Session, draft_id: str, *, include_deleted: bool = False,
+) -> Draft:
     draft = db.get(Draft, draft_id)
 
-    if draft is None:
+    if draft is None or (draft.deleted_at is not None and not include_deleted):
         raise HTTPException(
             status_code=404,
             detail="Draft not found",
@@ -127,6 +199,8 @@ def require_draft(db: Session, draft_id: str) -> Draft:
 
 
 def require_pending_draft(db: Session, draft_id: str) -> Draft:
+    # Serialize edits and approval decisions with soft deletion.
+    db.execute(select(Draft).where(Draft.id == draft_id).with_for_update())
     draft = require_draft(db, draft_id)
 
     if draft.status != "pending":
@@ -218,10 +292,7 @@ async def publish_draft_to_facebook(
         draft_id: str,
         db: Session = Depends(get_db),
 ):
-    draft = db.get(Draft, draft_id)
-
-    if draft is None:
-        raise HTTPException(status_code=404, detail="Draft not found")
+    draft = require_draft(db, draft_id)
 
     account = db.scalar(
         select(SocialAccount).where(
@@ -244,6 +315,7 @@ async def publish_draft_to_facebook(
         update(Draft)
         .where(
             Draft.id == draft_id,
+            Draft.deleted_at.is_(None),
             Draft.status == "approved",
             Draft.facebook_publish_status == "not_published",
             Draft.facebook_post_id.is_(None),
@@ -524,6 +596,7 @@ def reset_facebook_publishing(
         update(Draft)
         .where(
             Draft.id == draft_id,
+            Draft.deleted_at.is_(None),
             Draft.status == "approved",
             Draft.facebook_publish_status == "needs_review",
             Draft.facebook_post_id.is_(None),
@@ -536,6 +609,252 @@ def reset_facebook_publishing(
         raise HTTPException(status_code=409, detail="Draft cannot be reset")
     db.commit()
     return {"status": "not_published"}
+
+
+@protected.get("/drafts/{draft_id}/tiktok-creator-info")
+async def get_draft_tiktok_creator_info(
+        draft_id: str,
+        account_id: str,
+        db: Session = Depends(get_db),
+):
+    draft = require_draft(db, draft_id)
+
+    account = db.scalar(
+        select(SocialAccount).where(
+            SocialAccount.business_id == draft.business_id,
+            SocialAccount.id == account_id,
+            SocialAccount.platform == "tiktok",
+            SocialAccount.connection_status == "connected",
+        )
+    )
+
+    if account is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Connect TikTok first",
+        )
+
+    access_token = await get_valid_tiktok_token(account, db)
+
+    try:
+        return await get_creator_info(access_token)
+    except (httpx.HTTPError, ValueError):
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to retrieve TikTok publishing settings",
+        ) from None
+
+
+@protected.post("/drafts/{draft_id}/publish-tiktok")
+async def publish_draft_to_tiktok(
+        draft_id: str,
+        request: TikTokPublishRequest,
+        db: Session = Depends(get_db),
+):
+    draft = require_draft(db, draft_id)
+
+    if "tiktok" not in (draft.publish_destinations or []):
+        raise HTTPException(
+            status_code=409,
+            detail="TikTok is not selected for this draft",
+        )
+
+    account = db.scalar(
+        select(SocialAccount).where(
+            SocialAccount.id == request.account_id,
+            SocialAccount.business_id == draft.business_id,
+            SocialAccount.platform == "tiktok",
+            SocialAccount.connection_status == "connected",
+        )
+    )
+
+    if account is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Connect TikTok first",
+        )
+
+    # Validate media before claiming the draft.
+    if draft.media_type == "video":
+        if draft.video_status != "completed" or not draft.video_url:
+            raise HTTPException(
+                status_code=409,
+                detail="A completed video is required",
+            )
+        storage_path = draft.video_url
+
+    elif draft.image_url:
+        storage_path = draft.image_url
+
+    else:
+        raise HTTPException(
+            status_code=409,
+            detail="TikTok requires an image or video",
+        )
+
+    # Photo posting still requires a TikTok-verified public media URL.
+    # Reject before claiming the draft so the user can retry after setup.
+    if draft.media_type != "video":
+        raise HTTPException(
+            status_code=409,
+            detail="TikTok photo publishing requires a verified media URL; not configured yet",
+        )
+
+    expected_prefix = f"businesses/{draft.business_id}/"
+
+    if not storage_path.startswith(expected_prefix):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid media storage path",
+        )
+
+    # Download and validate before claiming the draft.
+    try:
+        bucket = os.environ["SUPABASE_STORAGE_BUCKET"]
+        video_bytes = get_storage_client().storage.from_(bucket).download(storage_path)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Unable to download TikTok video") from exc
+
+    if not isinstance(video_bytes, bytes) or video_bytes[4:8] != b"ftyp":
+        raise HTTPException(status_code=400, detail="Invalid MP4 video")
+    if not 5 * 1024 * 1024 <= len(video_bytes) <= 64 * 1024 * 1024:
+        raise HTTPException(status_code=409, detail="Video must be 5–64 MiB for current TikTok uploader")
+
+    # Check creator's allowed privacy settings before claiming publication.
+    access_token = await get_valid_tiktok_token(account, db)
+    try:
+        creator = await get_creator_info(access_token)
+    except (httpx.HTTPError, ValueError, KeyError) as exc:
+        raise HTTPException(status_code=502, detail="Unable to validate TikTok settings") from exc
+    if request.privacy_level not in creator.get("privacy_level_options", []):
+        raise HTTPException(status_code=422, detail="Privacy option not permitted by TikTok")
+
+    # Only one request can claim this draft.
+    claimed = db.execute(
+        update(Draft)
+        .where(
+            Draft.id == draft_id,
+            Draft.deleted_at.is_(None),
+            Draft.status == "approved",
+            Draft.tiktok_publish_status == "not_published",
+            Draft.tiktok_publish_id.is_(None),
+        )
+        .values(
+            tiktok_publish_status="publishing",
+            tiktok_account_id=account.id,
+        )
+        .returning(Draft.id)
+    )
+
+    if claimed.scalar_one_or_none() is None:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Draft is not eligible for TikTok publishing",
+        )
+
+    db.commit()
+
+    try:
+        result = await publish_tiktok_video_file(
+            access_token=access_token,
+            video_bytes=video_bytes,
+            caption=draft.caption,
+            privacy_level=request.privacy_level,
+            disable_comment=request.disable_comment,
+            disable_duet=request.disable_duet,
+            disable_stitch=request.disable_stitch,
+        )
+
+        publish_id = result.get("publish_id")
+
+        if not publish_id:
+            raise ValueError("TikTok returned no publish ID")
+
+        draft.tiktok_publish_id = publish_id
+        draft.tiktok_publish_status = "needs_review"
+        db.commit()
+
+        return {
+            "status": "processing",
+            "tiktok_publish_id": publish_id,
+        }
+
+    except Exception as exc:
+        db.rollback()
+        draft = require_draft(db, draft_id)
+        draft.tiktok_publish_status = "needs_review"
+        db.commit()
+
+        logger.exception(
+            "TikTok publishing requires review for draft %s",
+            draft_id,
+        )
+
+        raise HTTPException(
+            status_code=502,
+            detail="TikTok publishing outcome requires review",
+        ) from exc
+
+
+@protected.post("/drafts/{draft_id}/verify-tiktok")
+async def verify_tiktok_publication(
+        draft_id: str,
+        db: Session = Depends(get_db),
+):
+    draft = require_draft(db, draft_id, include_deleted=True)
+
+    if not draft.tiktok_publish_id:
+        raise HTTPException(
+            status_code=409,
+            detail="No TikTok publication to verify",
+        )
+
+    account = db.scalar(
+        select(SocialAccount).where(
+            SocialAccount.business_id == draft.business_id,
+            SocialAccount.id == draft.tiktok_account_id,
+            SocialAccount.platform == "tiktok",
+            SocialAccount.connection_status == "connected",
+        )
+    )
+
+    if account is None:
+        raise HTTPException(
+            status_code=409,
+            detail="TikTok is not connected",
+        )
+
+    access_token = await get_valid_tiktok_token(account, db)
+
+    try:
+        result = await get_tiktok_publish_status(
+            access_token=access_token,
+            publish_id=draft.tiktok_publish_id,
+        )
+    except (httpx.HTTPError, ValueError):
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to verify TikTok publication",
+        ) from None
+
+    status = result.get("status")
+
+    if status == "PUBLISH_COMPLETE":
+        draft.tiktok_publish_status = "published"
+        draft.published_at = datetime.now(timezone.utc)
+        db.commit()
+        return {"status": "published"}
+
+    if status == "FAILED":
+        draft.tiktok_publish_status = "needs_review"
+        db.commit()
+        return {"status": "failed"}
+
+    return {
+        "status": "processing",
+        "tiktok_status": status,
+    }
 
 
 # --------------------------------------------------
@@ -556,7 +875,14 @@ def create_draft(
             detail="Business not found",
         )
 
-    draft = Draft(**request.model_dump())
+    draft = Draft(
+        **request.model_dump(),
+        publish_destinations=(
+            [request.platform]
+            if request.platform in ("facebook", "tiktok")
+            else ["facebook"]
+        ),
+    )
 
     db.add(draft)
     db.commit()
@@ -568,6 +894,7 @@ def create_draft(
 @protected.get("/drafts")
 def list_drafts(
         business_id: str,
+        include_deleted_published: bool = False,
         db: Session = Depends(get_db),
 ):
     business = db.get(Business, business_id)
@@ -578,10 +905,103 @@ def list_drafts(
             detail="Business not found",
         )
 
-    return db.scalars(select(Draft).where(Draft.business_id == business_id)).all()
+    visibility = Draft.deleted_at.is_(None)
+    if include_deleted_published:
+        visibility = or_(
+            visibility,
+            Draft.facebook_publish_status == "published",
+            Draft.tiktok_publish_status == "published",
+            Draft.published_at.is_not(None),
+        )
+    return db.scalars(select(Draft).where(
+        Draft.business_id == business_id, visibility,
+    )).all()
 
 
-@protected.patch("/drafts/{draft_id}/approve")
+@protected.delete("/drafts/{draft_id}")
+def delete_draft(draft_id: str, db: Session = Depends(get_db)):
+    # The protected router enforces the configured authorized Supabase user.
+    draft = require_draft(db, draft_id, include_deleted=True)
+    if draft.deleted_at is not None:
+        return draft
+
+    deleted = db.execute(
+        update(Draft)
+        .where(
+            Draft.id == draft_id,
+            Draft.deleted_at.is_(None),
+            Draft.facebook_publish_status != "publishing",
+            Draft.tiktok_publish_status != "publishing",
+            Draft.image_status != "generating",
+            Draft.video_status.not_in(["generating", "uploading"]),
+            ~select(ImageRevision.id).where(
+                ImageRevision.draft_id == draft_id,
+                ImageRevision.status == "generating",
+            ).exists(),
+        )
+        .values(deleted_at=datetime.now(timezone.utc))
+        .returning(Draft.id)
+    ).scalar_one_or_none()
+    if deleted is None:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Espera a que termine la operación en curso antes de eliminar.",
+        )
+    db.commit()
+    db.refresh(draft)
+    return draft
+
+
+@protected.patch("/drafts/{draft_id}/destinations")
+def update_draft_destinations(
+        draft_id: str,
+        request: DraftDestinationsUpdate,
+        db: Session = Depends(get_db),
+):
+    draft = require_pending_draft(db, draft_id)
+
+    destinations = request.destinations
+
+    if len(destinations) != len(set(destinations)):
+        raise HTTPException(
+            status_code=422,
+            detail="Duplicate destinations are not allowed",
+        )
+
+    if "tiktok" in destinations and not (
+            draft.media_type == "video" and draft.video_url
+            or draft.image_url
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="TikTok requires an image or video",
+        )
+
+    connected = set(
+        db.scalars(
+            select(SocialAccount.platform).where(
+                SocialAccount.business_id == draft.business_id,
+                SocialAccount.platform.in_(destinations),
+                SocialAccount.connection_status == "connected",
+            )
+        ).all()
+    )
+
+    if set(destinations) != connected:
+        raise HTTPException(
+            status_code=409,
+            detail="Connect the selected social accounts first",
+        )
+
+    draft.publish_destinations = destinations
+
+    db.commit()
+    db.refresh(draft)
+
+    return draft
+
+
 @protected.patch("/drafts/{draft_id}/approve")
 def approve_draft(
         draft_id: str,
@@ -688,6 +1108,11 @@ def generate_content(
         title=generated["title"],
         caption=generated["caption"],
         platform=generated["platform"],
+        publish_destinations=(
+            [generated["platform"]]
+            if generated["platform"] in ("facebook", "tiktok")
+            else ["facebook"]
+        ),
         image_prompt=generated["image_prompt"],
         status="pending",
         source="ai",
@@ -828,7 +1253,7 @@ def get_draft_video_preview(
         draft_id: str,
         db: Session = Depends(get_db),
 ):
-    draft = require_draft(db, draft_id)
+    draft = require_draft(db, draft_id, include_deleted=True)
 
     if (
             draft.media_type != "video"
@@ -1244,6 +1669,7 @@ def generate_draft_image(
         update(Draft)
         .where(
             Draft.id == draft_id,
+            Draft.deleted_at.is_(None),
             Draft.status == "pending",
             Draft.image_status.in_(["not_started", "failed"]),
             Draft.image_url.is_(None),
@@ -1320,6 +1746,7 @@ def generate_draft_image(
         update(Draft)
         .where(
             Draft.id == draft_id,
+            Draft.deleted_at.is_(None),
             Draft.status == "pending",
             Draft.image_status == "generating",
             Draft.image_generation_id == generation_id,
@@ -1374,7 +1801,7 @@ def get_draft_image(
         draft_id: str,
         db: Session = Depends(get_db),
 ):
-    draft = require_draft(db, draft_id)
+    draft = require_draft(db, draft_id, include_deleted=True)
 
     if not draft.image_url:
         raise HTTPException(
@@ -1410,6 +1837,7 @@ def reset_stuck_image(
         update(Draft)
         .where(
             Draft.id == draft_id,
+            Draft.deleted_at.is_(None),
             Draft.status == "pending",
             Draft.image_status == "generating",
             Draft.image_url.is_(None),
@@ -1897,3 +2325,5 @@ def list_heygen_avatars():
 
 app.include_router(protected)
 app.include_router(facebook_auth_router)
+
+app.include_router(tiktok_auth_router)

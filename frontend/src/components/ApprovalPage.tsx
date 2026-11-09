@@ -6,11 +6,21 @@ import {
   type SetStateAction,
 } from "react";
 
+import { Trash2 } from "lucide-react";
+
 import type { Draft, ImageRevision } from "../services/draftsApi";
 import { VideoUpload } from "./VideoUpload";
 import { supabase } from "../services/supabaseClient";
 
 type ApprovalPageProps = {
+  handleDelete: (id: string) => Promise<void>;
+  deletingIds: string[];
+  businessId: string;
+  draftDestinations: Record<string, { facebook: boolean; tiktok: boolean }>;
+
+  setDraftDestinations: Dispatch<
+    SetStateAction<Record<string, { facebook: boolean; tiktok: boolean }>>
+  >;
   loadingDrafts: boolean;
   loadError: string | null;
   pendingCount: number;
@@ -36,6 +46,18 @@ type ApprovalPageProps = {
   formatDraftDate: (date: string) => string;
   handleApprove: (id: string) => Promise<void>;
   handlePublishFacebook: (id: string) => Promise<void>;
+  handlePublishTikTok: (
+    id: string,
+    accountId: string,
+    privacyLevel: string,
+    interactions: {
+      disable_comment: boolean;
+      disable_duet: boolean;
+      disable_stitch: boolean;
+    },
+  ) => Promise<void>;
+
+  onVerifyTikTok: (id: string) => void;
   onVerifyFacebookVideo: (id: string) => void;
   handleReject: (id: string) => Promise<void>;
   handleSaveEdit: (id: string) => Promise<void>;
@@ -54,6 +76,10 @@ type ApprovalPageProps = {
 };
 
 const ApprovalPage: FC<ApprovalPageProps> = ({
+  handleDelete,
+  deletingIds,
+  draftDestinations,
+  setDraftDestinations,
   loadingDrafts,
   loadError,
   pendingCount,
@@ -103,6 +129,57 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
   const [videoErrors, setVideoErrors] = useState<Record<string, string>>({});
 
   const [copiedScriptId, setCopiedScriptId] = useState<string | null>(null);
+
+  const [downloadBusyId, setDownloadBusyId] = useState<string | null>(null);
+  const [copiedCaptionId, setCopiedCaptionId] = useState<string | null>(null);
+
+  async function handleCopyCaption(draft: Draft) {
+    try {
+      await navigator.clipboard.writeText(draft.caption ?? "");
+      setCopiedCaptionId(draft.id);
+    } catch {
+      window.alert("No se pudo copiar la descripción.");
+    }
+  }
+
+  async function handleDownloadVideo(draft: Draft) {
+    if (!draft.video_url || downloadBusyId === draft.id) return;
+    setDownloadBusyId(draft.id);
+    try {
+      const { data, error } = await supabase.auth.getSession();
+      if (error || !data.session?.access_token) {
+        throw new Error("Debes iniciar sesión.");
+      }
+      const apiBaseUrl =
+        import.meta.env.VITE_API_BASE_URL?.trim() || "http://127.0.0.1:8000";
+      const response = await fetch(
+        `${apiBaseUrl}/drafts/${encodeURIComponent(draft.id)}/video-preview`,
+        { headers: { Authorization: `Bearer ${data.session.access_token}` } },
+      );
+      if (!response.ok) throw new Error("No se pudo obtener el video.");
+      const result: { video_url: string } = await response.json();
+      if (!result.video_url) throw new Error("No se encontró el video.");
+
+      // Fetch the signed Supabase URL and save it as a local MP4 file.
+      const videoResponse = await fetch(result.video_url);
+      if (!videoResponse.ok) throw new Error("No se pudo descargar el video.");
+      const blob = await videoResponse.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = `tiktok-${draft.id}.mp4`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
+    } catch (err) {
+      window.alert(
+        err instanceof Error ? err.message : "Error al descargar el video.",
+      );
+    } finally {
+      setDownloadBusyId(null);
+    }
+  }
 
   async function handleCopyScript(draft: Draft) {
     if (!draft.video_script) return;
@@ -489,337 +566,420 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                 )}
               </div>
 
-              {draft.status === "pending" && editingId !== draft.id ? (
-                <div className="approval-actions">
-                  <button
-                    className="approve-button"
-                    type="button"
-                    disabled={
-                      approvingIds.includes(draft.id) ||
-                      busyDraftIds.includes(draft.id) ||
-                      imageBusyIds.includes(draft.id)
-                    }
-                    onClick={() => void handleApprove(draft.id)}
-                  >
-                    {approvingIds.includes(draft.id)
-                      ? "Aprobando..."
-                      : "✓ Aprobar"}
-                  </button>
+              <div className="approval-card-controls">
+                {draft.status === "pending" && (
+                  <div>
+                    <strong>Publicar en:</strong>
+                    <label style={{ display: "block", marginTop: "8px" }}>
+                      <input
+                        type="checkbox"
+                        checked={
+                          draftDestinations[draft.id]?.facebook ??
+                          (draft.publish_destinations ?? ["facebook"]).includes(
+                            "facebook",
+                          )
+                        }
+                        onChange={(e) =>
+                          setDraftDestinations((current) => ({
+                            ...current,
+                            [draft.id]: {
+                              facebook: e.target.checked,
+                              tiktok: false,
+                            },
+                          }))
+                        }
+                      />{" "}
+                      Facebook
+                    </label>
+                  </div>
+                )}
 
-                  <button
-                    className="text-button"
-                    type="button"
-                    disabled={
-                      busyDraftIds.includes(draft.id) ||
-                      approvingIds.includes(draft.id)
-                    }
-                    onClick={() => startEditing(draft)}
-                  >
-                    Editar
-                  </button>
+                {draft.status === "pending" && editingId !== draft.id ? (
+                  <div className="approval-actions">
+                    <button
+                      className="approve-button"
+                      type="button"
+                      disabled={
+                        approvingIds.includes(draft.id) ||
+                        busyDraftIds.includes(draft.id) ||
+                        imageBusyIds.includes(draft.id)
+                      }
+                      onClick={() => void handleApprove(draft.id)}
+                    >
+                      {approvingIds.includes(draft.id)
+                        ? "Aprobando..."
+                        : "✓ Aprobar"}
+                    </button>
 
+                    <button
+                      className="text-button"
+                      type="button"
+                      disabled={
+                        busyDraftIds.includes(draft.id) ||
+                        approvingIds.includes(draft.id)
+                      }
+                      onClick={() => startEditing(draft)}
+                    >
+                      Editar
+                    </button>
+
+                    <button
+                      className="reject-button"
+                      type="button"
+                      disabled={
+                        busyDraftIds.includes(draft.id) ||
+                        approvingIds.includes(draft.id) ||
+                        imageBusyIds.includes(draft.id)
+                      }
+                      onClick={() => void handleReject(draft.id)}
+                    >
+                      {busyDraftIds.includes(draft.id)
+                        ? "Procesando..."
+                        : "Rechazar"}
+                    </button>
+                  </div>
+                ) : draft.status !== "pending" ? (
+                  <span
+                    className={`final-status ${
+                      draft.status === "approved" ? "aprobado" : ""
+                    }`}
+                  >
+                    {draft.status === "approved"
+                      ? "✓ Aprobado"
+                      : draft.status === "rejected"
+                        ? "✕ Rechazado"
+                        : draft.status}
+                  </span>
+                ) : null}
+
+                {draft.status === "approved" && (
+                  <div className="approval-actions">
+                    {(draft.publish_destinations ?? ["facebook"]).includes(
+                      "facebook",
+                    ) &&
+                      draft.facebook_publish_status === "not_published" && (
+                        <button
+                          className="primary-button facebook-publish-button"
+                          type="button"
+                          disabled={publishingIds.includes(draft.id)}
+                          onClick={() => {
+                            if (
+                              window.confirm(
+                                draft.media_type === "video"
+                                  ? "¿Enviar este video y su descripción a Facebook? Puede tardar en procesarse."
+                                  : draft.image_url
+                                    ? "¿Publicar esta imagen y su descripción en Facebook?"
+                                    : "¿Publicar este texto en Facebook?",
+                              )
+                            ) {
+                              void handlePublishFacebook(draft.id);
+                            }
+                          }}
+                        >
+                          {publishingIds.includes(draft.id)
+                            ? "Publicando..."
+                            : "Publicar en Facebook"}
+                        </button>
+                      )}
+
+                    {draft.facebook_publish_status === "published" && (
+                      <span
+                        className="facebook-publish-status is-published"
+                        role="status"
+                      >
+                        ✓ Publicado en Facebook
+                      </span>
+                    )}
+
+                    {draft.facebook_publish_status === "publishing" && (
+                      <span
+                        className="facebook-publish-status is-publishing"
+                        role="status"
+                      >
+                        Publicación en proceso. Actualiza para verificar.
+                      </span>
+                    )}
+
+                    {draft.facebook_publish_status === "needs_review" && (
+                      <div
+                        style={{
+                          display: "grid",
+                          gap: "0.5rem",
+                        }}
+                      >
+                        <span
+                          className="facebook-publish-status needs-review"
+                          role="alert"
+                        >
+                          Publicación por verificar. Revisa Facebook antes de
+                          volver a intentar.
+                        </span>
+
+                        {draft.media_type === "video" &&
+                          !!draft.facebook_post_id && (
+                            <button
+                              type="button"
+                              className="text-button"
+                              onClick={() => onVerifyFacebookVideo(draft.id)}
+                            >
+                              Verificar publicación en Facebook
+                            </button>
+                          )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {draft.status === "approved" &&
+                  draft.media_type === "video" &&
+                  draft.video_status === "completed" &&
+                  !!draft.video_url && (
+                    <div className="tiktok-manual-actions">
+                      <button
+                        type="button"
+                        className="tiktok-download-button"
+                        disabled={downloadBusyId === draft.id}
+                        onClick={() => void handleDownloadVideo(draft)}
+                      >
+                        {downloadBusyId === draft.id
+                          ? "Descargando video..."
+                          : "⬇ Descargar video para TikTok"}
+                      </button>
+                      <button
+                        type="button"
+                        className="tiktok-copy-button"
+                        onClick={() => void handleCopyCaption(draft)}
+                      >
+                        {copiedCaptionId === draft.id
+                          ? "✓ Descripción copiada"
+                          : "Copiar descripción y hashtags"}
+                      </button>
+                    </div>
+                  )}
+
+                {/* Spanish AI image editor */}
+
+                {draft.status === "pending" &&
+                  draft.image_status === "completed" &&
+                  !!draft.image_url && (
+                    <div className="ai-image-editor">
+                      <button
+                        type="button"
+                        className="ai-editor-toggle"
+                        onClick={() => toggleImageEditor(draft.id)}
+                        aria-expanded={!!showImageEditor[draft.id]}
+                        aria-controls={`ai-editor-content-${draft.id}`}
+                      >
+                        <span>✦ Editar imagen con IA</span>
+
+                        <span aria-hidden="true">
+                          {showImageEditor[draft.id] ? "−" : "+"}
+                        </span>
+                      </button>
+
+                      {showImageEditor[draft.id] && (
+                        <div
+                          id={`ai-editor-content-${draft.id}`}
+                          className="ai-editor-content"
+                        >
+                          <p>
+                            Describe en español los cambios. La imagen original se
+                            conservará hasta que aceptes una versión nueva.
+                          </p>
+
+                          {revisionErrors[draft.id] && (
+                            <p role="alert" style={{ color: "#b91c1c" }}>
+                              {revisionErrors[draft.id]}
+                            </p>
+                          )}
+
+                          {revisions[draft.id]?.status === "ready" ? (
+                            <>
+                              <p>
+                                <strong>Versión nueva lista para revisar</strong>
+                              </p>
+
+                              <div
+                                style={{
+                                  display: "grid",
+                                  gridTemplateColumns:
+                                    "repeat(auto-fit, minmax(200px, 1fr))",
+                                  gap: "1rem",
+                                }}
+                              >
+                                <div>
+                                  <strong>Original</strong>
+
+                                  {imageUrls[draft.id] ? (
+                                    <img
+                                      src={imageUrls[draft.id]}
+                                      alt="Imagen original"
+                                      style={{
+                                        width: "100%",
+                                        borderRadius: 12,
+                                      }}
+                                    />
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        void handlePreviewImage(draft)
+                                      }
+                                    >
+                                      Ver original
+                                    </button>
+                                  )}
+                                </div>
+
+                                <div>
+                                  <strong>Nueva versión</strong>
+
+                                  {revisions[draft.id]?.image_url ? (
+                                    <img
+                                      src={revisions[draft.id]!.image_url!}
+                                      alt="Versión editada"
+                                      style={{
+                                        width: "100%",
+                                        borderRadius: 12,
+                                      }}
+                                    />
+                                  ) : (
+                                    <p>
+                                      No se recibió una vista previa. Actualiza el
+                                      estado.
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className="approval-actions">
+                                <button
+                                  type="button"
+                                  className="approve-button"
+                                  disabled={revisionBusyIds.includes(draft.id)}
+                                  onClick={() =>
+                                    void handleDecideRevision(draft, "accept")
+                                  }
+                                >
+                                  ✓ Aceptar nueva versión
+                                </button>
+
+                                <button
+                                  type="button"
+                                  className="reject-button"
+                                  disabled={revisionBusyIds.includes(draft.id)}
+                                  onClick={() =>
+                                    void handleDecideRevision(draft, "reject")
+                                  }
+                                >
+                                  Conservar original
+                                </button>
+                              </div>
+                            </>
+                          ) : revisions[draft.id]?.status === "generating" ? (
+                            <p role="status">
+                              La nueva imagen se está generando. No solicites otra
+                              hasta confirmar el resultado.
+                            </p>
+                          ) : (
+                            <>
+                              <label htmlFor={`image-instructions-${draft.id}`}>
+                                Instrucciones para la IA
+                              </label>
+
+                              <textarea
+                                id={`image-instructions-${draft.id}`}
+                                value={imageInstructions[draft.id] || ""}
+                                onChange={(event) =>
+                                  updateImageInstructions(
+                                    draft.id,
+                                    event.target.value,
+                                  )
+                                }
+                                placeholder="Ejemplo: Mejora la iluminación y cambia el fondo por una mesa elegante."
+                                rows={4}
+                                maxLength={1000}
+                                disabled={revisionBusyIds.includes(draft.id)}
+                              />
+
+                              <div className="ai-editor-suggestions">
+                                {[
+                                  "Mejorar iluminación",
+                                  "Cambiar el fondo",
+                                  "Estilo más profesional",
+                                ].map((suggestion) => (
+                                  <button
+                                    key={suggestion}
+                                    type="button"
+                                    disabled={revisionBusyIds.includes(draft.id)}
+                                    onClick={() =>
+                                      addImageSuggestion(draft.id, suggestion)
+                                    }
+                                  >
+                                    + {suggestion}
+                                  </button>
+                                ))}
+                              </div>
+
+                              <button
+                                type="button"
+                                className="primary-button ai-regenerate-button"
+                                disabled={
+                                  revisionBusyIds.includes(draft.id) ||
+                                  !imageInstructions[draft.id]?.trim()
+                                }
+                                onClick={() => void handleCreateRevision(draft)}
+                              >
+                                {revisionBusyIds.includes(draft.id)
+                                  ? "Generando nueva versión..."
+                                  : "✦ Generar nueva versión"}
+                              </button>
+
+                              <small>
+                                La generación con IA puede tener un costo
+                                adicional. Se solicitará confirmación antes de
+                                continuar.
+                              </small>
+                            </>
+                          )}
+
+                          <button
+                            type="button"
+                            className="text-button"
+                            disabled={revisionBusyIds.includes(draft.id)}
+                            onClick={() => void refreshRevision(draft.id)}
+                          >
+                            Actualizar estado
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                <div className="approval-actions approval-delete-actions">
                   <button
                     className="reject-button"
                     type="button"
                     disabled={
                       busyDraftIds.includes(draft.id) ||
                       approvingIds.includes(draft.id) ||
-                      imageBusyIds.includes(draft.id)
+                      publishingIds.includes(draft.id) ||
+                      imageBusyIds.includes(draft.id) ||
+                      revisionBusyIds.includes(draft.id) ||
+                      draft.image_status === "generating" ||
+                      draft.video_status === "generating" ||
+                      draft.video_status === "uploading" ||
+                      draft.facebook_publish_status === "publishing" ||
+                      draft.tiktok_publish_status === "publishing" ||
+                      revisions[draft.id]?.status === "generating"
                     }
-                    onClick={() => void handleReject(draft.id)}
+                    onClick={() => void handleDelete(draft.id)}
                   >
-                    {busyDraftIds.includes(draft.id)
-                      ? "Procesando..."
-                      : "Rechazar"}
+                    <Trash2 size={16} aria-hidden="true" />{" "}
+                    {deletingIds.includes(draft.id) ? "Eliminando..." : "Eliminar"}
                   </button>
                 </div>
-              ) : draft.status !== "pending" ? (
-                <span
-                  className={`final-status ${
-                    draft.status === "approved" ? "aprobado" : ""
-                  }`}
-                >
-                  {draft.status === "approved"
-                    ? "✓ Aprobado"
-                    : draft.status === "rejected"
-                      ? "✕ Rechazado"
-                      : draft.status}
-                </span>
-              ) : null}
-
-              {draft.status === "approved" && (
-                <div className="approval-actions">
-                  {draft.facebook_publish_status === "not_published" && (
-                    <button
-                      className="primary-button facebook-publish-button"
-                      type="button"
-                      disabled={publishingIds.includes(draft.id)}
-                      onClick={() => {
-                        if (
-                          window.confirm(
-                            draft.media_type === "video"
-                              ? "¿Enviar este video y su descripción a Facebook? Puede tardar en procesarse."
-                              : draft.image_url
-                                ? "¿Publicar esta imagen y su descripción en Facebook?"
-                                : "¿Publicar este texto en Facebook?",
-                          )
-                        ) {
-                          void handlePublishFacebook(draft.id);
-                        }
-                      }}
-                    >
-                      {publishingIds.includes(draft.id)
-                        ? "Publicando..."
-                        : "Publicar en Facebook"}
-                    </button>
-                  )}
-
-                  {draft.facebook_publish_status === "published" && (
-                    <span
-                      className="facebook-publish-status is-published"
-                      role="status"
-                    >
-                      ✓ Publicado en Facebook
-                    </span>
-                  )}
-
-                  {draft.facebook_publish_status === "publishing" && (
-                    <span
-                      className="facebook-publish-status is-publishing"
-                      role="status"
-                    >
-                      Publicación en proceso. Actualiza para verificar.
-                    </span>
-                  )}
-
-                  {draft.facebook_publish_status === "needs_review" && (
-                    <div
-                      style={{
-                        display: "grid",
-                        gap: "0.5rem",
-                      }}
-                    >
-                      <span
-                        className="facebook-publish-status needs-review"
-                        role="alert"
-                      >
-                        Publicación por verificar. Revisa Facebook antes de
-                        volver a intentar.
-                      </span>
-
-                      {draft.media_type === "video" &&
-                        !!draft.facebook_post_id && (
-                          <button
-                            type="button"
-                            className="text-button"
-                            onClick={() => onVerifyFacebookVideo(draft.id)}
-                          >
-                            Verificar publicación en Facebook
-                          </button>
-                        )}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Spanish AI image editor */}
-
-              {draft.status === "pending" &&
-                draft.image_status === "completed" &&
-                !!draft.image_url && (
-                  <div className="ai-image-editor">
-                    <button
-                      type="button"
-                      className="ai-editor-toggle"
-                      onClick={() => toggleImageEditor(draft.id)}
-                      aria-expanded={!!showImageEditor[draft.id]}
-                      aria-controls={`ai-editor-content-${draft.id}`}
-                    >
-                      <span>✦ Editar imagen con IA</span>
-
-                      <span aria-hidden="true">
-                        {showImageEditor[draft.id] ? "−" : "+"}
-                      </span>
-                    </button>
-
-                    {showImageEditor[draft.id] && (
-                      <div
-                        id={`ai-editor-content-${draft.id}`}
-                        className="ai-editor-content"
-                      >
-                        <p>
-                          Describe en español los cambios. La imagen original se
-                          conservará hasta que aceptes una versión nueva.
-                        </p>
-
-                        {revisionErrors[draft.id] && (
-                          <p role="alert" style={{ color: "#b91c1c" }}>
-                            {revisionErrors[draft.id]}
-                          </p>
-                        )}
-
-                        {revisions[draft.id]?.status === "ready" ? (
-                          <>
-                            <p>
-                              <strong>Versión nueva lista para revisar</strong>
-                            </p>
-
-                            <div
-                              style={{
-                                display: "grid",
-                                gridTemplateColumns:
-                                  "repeat(auto-fit, minmax(200px, 1fr))",
-                                gap: "1rem",
-                              }}
-                            >
-                              <div>
-                                <strong>Original</strong>
-
-                                {imageUrls[draft.id] ? (
-                                  <img
-                                    src={imageUrls[draft.id]}
-                                    alt="Imagen original"
-                                    style={{
-                                      width: "100%",
-                                      borderRadius: 12,
-                                    }}
-                                  />
-                                ) : (
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      void handlePreviewImage(draft)
-                                    }
-                                  >
-                                    Ver original
-                                  </button>
-                                )}
-                              </div>
-
-                              <div>
-                                <strong>Nueva versión</strong>
-
-                                {revisions[draft.id]?.image_url ? (
-                                  <img
-                                    src={revisions[draft.id]!.image_url!}
-                                    alt="Versión editada"
-                                    style={{
-                                      width: "100%",
-                                      borderRadius: 12,
-                                    }}
-                                  />
-                                ) : (
-                                  <p>
-                                    No se recibió una vista previa. Actualiza el
-                                    estado.
-                                  </p>
-                                )}
-                              </div>
-                            </div>
-
-                            <div className="approval-actions">
-                              <button
-                                type="button"
-                                className="approve-button"
-                                disabled={revisionBusyIds.includes(draft.id)}
-                                onClick={() =>
-                                  void handleDecideRevision(draft, "accept")
-                                }
-                              >
-                                ✓ Aceptar nueva versión
-                              </button>
-
-                              <button
-                                type="button"
-                                className="reject-button"
-                                disabled={revisionBusyIds.includes(draft.id)}
-                                onClick={() =>
-                                  void handleDecideRevision(draft, "reject")
-                                }
-                              >
-                                Conservar original
-                              </button>
-                            </div>
-                          </>
-                        ) : revisions[draft.id]?.status === "generating" ? (
-                          <p role="status">
-                            La nueva imagen se está generando. No solicites otra
-                            hasta confirmar el resultado.
-                          </p>
-                        ) : (
-                          <>
-                            <label htmlFor={`image-instructions-${draft.id}`}>
-                              Instrucciones para la IA
-                            </label>
-
-                            <textarea
-                              id={`image-instructions-${draft.id}`}
-                              value={imageInstructions[draft.id] || ""}
-                              onChange={(event) =>
-                                updateImageInstructions(
-                                  draft.id,
-                                  event.target.value,
-                                )
-                              }
-                              placeholder="Ejemplo: Mejora la iluminación y cambia el fondo por una mesa elegante."
-                              rows={4}
-                              maxLength={1000}
-                              disabled={revisionBusyIds.includes(draft.id)}
-                            />
-
-                            <div className="ai-editor-suggestions">
-                              {[
-                                "Mejorar iluminación",
-                                "Cambiar el fondo",
-                                "Estilo más profesional",
-                              ].map((suggestion) => (
-                                <button
-                                  key={suggestion}
-                                  type="button"
-                                  disabled={revisionBusyIds.includes(draft.id)}
-                                  onClick={() =>
-                                    addImageSuggestion(draft.id, suggestion)
-                                  }
-                                >
-                                  + {suggestion}
-                                </button>
-                              ))}
-                            </div>
-
-                            <button
-                              type="button"
-                              className="primary-button ai-regenerate-button"
-                              disabled={
-                                revisionBusyIds.includes(draft.id) ||
-                                !imageInstructions[draft.id]?.trim()
-                              }
-                              onClick={() => void handleCreateRevision(draft)}
-                            >
-                              {revisionBusyIds.includes(draft.id)
-                                ? "Generando nueva versión..."
-                                : "✦ Generar nueva versión"}
-                            </button>
-
-                            <small>
-                              La generación con IA puede tener un costo
-                              adicional. Se solicitará confirmación antes de
-                              continuar.
-                            </small>
-                          </>
-                        )}
-
-                        <button
-                          type="button"
-                          className="text-button"
-                          disabled={revisionBusyIds.includes(draft.id)}
-                          onClick={() => void refreshRevision(draft.id)}
-                        >
-                          Actualizar estado
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
+              </div>
             </div>
           ))}
 

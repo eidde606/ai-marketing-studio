@@ -139,6 +139,7 @@ def test_published_draft_returns_facebook_analytics(monkeypatch):
         fake_insights.assert_awaited_once_with(
             post_id="123456_789012",
             access_token="fake_access_token",
+            media_type="text",
         )
 
     finally:

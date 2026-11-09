@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, JSON, String, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -57,6 +57,12 @@ class Draft(Base):
         nullable=True,
     )
 
+    publish_destinations: Mapped[list[str]] = mapped_column(
+        JSON,
+        nullable=False,
+        default=lambda: ["facebook"],
+    )
+
     # Facebook publishing
     facebook_post_id: Mapped[str | None] = mapped_column(
         String,
@@ -68,6 +74,28 @@ class Draft(Base):
         nullable=False,
         default="not_published",
         server_default="not_published",
+    )
+
+    tiktok_publish_status: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="not_published",
+        server_default="not_published",
+    )
+
+    tiktok_publish_id: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
+    tiktok_account_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("social_accounts.id"),
+        nullable=True,
+    )
+
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
     )
 
     published_at: Mapped[datetime | None] = mapped_column(
@@ -261,6 +289,11 @@ class SocialAccount(Base):
         nullable=False,
     )
 
+    encrypted_refresh_token: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
     token_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
@@ -384,4 +417,29 @@ class ConversationMessage(Base):
 
     conversation: Mapped["Conversation"] = relationship(
         back_populates="messages",
+    )
+
+
+class TikTokOAuthState(Base):
+    __tablename__ = "tiktok_oauth_states"
+
+    state_hash: Mapped[str] = mapped_column(
+        String(64),
+        primary_key=True,
+    )
+
+    business_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("businesses.id"),
+        nullable=False,
+    )
+
+    user_id: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+    )
+
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
     )
