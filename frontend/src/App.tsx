@@ -14,6 +14,7 @@ import ApprovalPage from "./components/ApprovalPage";
 import AuthPage from "./components/AuthPage";
 import BusinessForm from "./components/BusinessForm";
 import ContentPage from "./components/ContentPage";
+import CampaignsPage from "./components/CampaignsPage";
 import DashboardOverview from "./components/DashboardOverview";
 import FacebookConnection from "./components/FacebookConnection";
 import TikTokConnection from "./components/TikTokConnection";
@@ -1120,6 +1121,8 @@ const App: FC = () => {
             startEditing={startEditing}
             setActiveSection={setActiveSection}
           />
+        ) : activeSection === "Campañas" ? (
+          <CampaignsPage key={selectedBusinessId} businessId={selectedBusinessId} />
         ) : activeSection === "Contenido" ? (
           <ContentPage
             key={selectedBusinessId}

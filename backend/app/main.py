@@ -19,6 +19,7 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 import logging
 
+from app.campaign_routes import router as campaign_router
 from app.auth import verify_token
 from app.database import get_db
 from app.models import Business, Draft, ImageRevision, SocialAccount
@@ -2324,6 +2325,7 @@ def list_heygen_avatars():
 # --------------------------------------------------
 
 app.include_router(protected)
+app.include_router(campaign_router)
 app.include_router(facebook_auth_router)
 
 app.include_router(tiktok_auth_router)

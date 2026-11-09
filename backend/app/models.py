@@ -1,7 +1,7 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, JSON, String, UniqueConstraint
+from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, JSON, String, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -42,6 +42,37 @@ class Business(Base):
     )
 
 
+class Campaign(Base):
+    __tablename__ = "campaigns"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft', 'active', 'paused', 'completed', 'archived')",
+            name="ck_campaigns_status",
+        ),
+        CheckConstraint(
+            "end_date IS NULL OR start_date IS NULL OR end_date >= start_date",
+            name="ck_campaigns_dates",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    business_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("businesses.id"), nullable=False, index=True,
+    )
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    objective: Mapped[str] = mapped_column(String(2000), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft", server_default="draft")
+    start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+    business: Mapped["Business"] = relationship()
+    drafts: Mapped[list["Draft"]] = relationship(back_populates="campaign")
+
+
 class Draft(Base):
     __tablename__ = "drafts"
 
@@ -56,6 +87,11 @@ class Draft(Base):
         ForeignKey("businesses.id"),
         nullable=True,
     )
+
+    campaign_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("campaigns.id"), nullable=True, index=True,
+    )
+    campaign: Mapped["Campaign | None"] = relationship(back_populates="drafts")
 
     publish_destinations: Mapped[list[str]] = mapped_column(
         JSON,

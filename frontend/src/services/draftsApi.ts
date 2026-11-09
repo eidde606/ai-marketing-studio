@@ -23,6 +23,7 @@ export type Draft = {
   source: "manual" | "ai";
   created_at: string;
   business_id: string | null;
+  campaign_id: string | null;
   video_script?: string | null;
 
   // AI image fields
