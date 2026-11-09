@@ -386,7 +386,7 @@ const DashboardOverview: FC<DashboardOverviewProps> = ({
               !loadError &&
               visibleDrafts
 
-                .filter((draft) => draft.status === "pending")
+                .filter((draft) => !draft.deleted_at && draft.status === "pending")
 
                 .slice(0, 2)
 

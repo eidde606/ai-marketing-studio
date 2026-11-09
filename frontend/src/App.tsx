@@ -24,6 +24,7 @@ import {
   acceptImageRevision,
   approveDraft,
   createImageRevision,
+  deleteDraft,
   generateContent,
   generateDraftImage,
   getDraftImage,
@@ -279,7 +280,7 @@ const App: FC = () => {
     setLoadingDrafts(true);
     /* eslint-enable react-hooks/set-state-in-effect */
     const businessId = selectedBusinessId;
-    getDrafts(businessId)
+    getDrafts(businessId, true)
       .then((drafts) => {
         if (active) setApprovals(drafts);
       })
@@ -297,10 +298,24 @@ const App: FC = () => {
       active = false;
     };
   }, [selectedBusinessId, userId, setImageInstructions, setShowImageEditor]);
-  const visibleDrafts = useMemo(
-    () => approvals.filter((draft) => draft.business_id === selectedBusinessId),
+  const historyDrafts = useMemo(
+    () =>
+      approvals.filter(
+        (draft) =>
+          draft.business_id === selectedBusinessId &&
+          (!draft.deleted_at ||
+            draft.facebook_publish_status === "published" ||
+            draft.tiktok_publish_status === "published" ||
+            draft.published_at !== null),
+      ),
     [approvals, selectedBusinessId],
   );
+  const visibleDrafts = useMemo(
+    () => historyDrafts.filter((draft) => !draft.deleted_at),
+    [historyDrafts],
+  );
+  const [deletingIds, setDeletingIds] = useState<string[]>([]);
+  const deleteLocks = useRef(new Set<string>());
   const pendingCount = useMemo(
     () => visibleDrafts.filter((draft) => draft.status === "pending").length,
     [visibleDrafts],
@@ -678,6 +693,37 @@ const App: FC = () => {
       setBusyDraftIds((current) => current.filter((value) => value !== id));
     }
   };
+  const handleDelete = async (id: string) => {
+    if (
+      deleteLocks.current.has(id) ||
+      busyDraftIds.includes(id) ||
+      approvingIds.includes(id) ||
+      publishingIds.includes(id) ||
+      imageLocks.current.has(id)
+    ) return;
+    if (
+      !window.confirm(
+        "¿Eliminar este elemento de Aprobaciones? Las publicaciones ya realizadas en redes sociales no se eliminarán.",
+      )
+    ) return;
+    deleteLocks.current.add(id);
+    setDeletingIds((current) => [...current, id]);
+    setBusyDraftIds((current) => [...current, id]);
+    setApprovalError(null);
+    try {
+      const deleted = await deleteDraft(id);
+      updateLocalDraft(deleted);
+      if (editingId === id) setEditingId(null);
+    } catch {
+      setApprovalError(
+        "No se pudo eliminar el elemento. Si hay una operación en curso, espera a que termine e inténtalo de nuevo.",
+      );
+    } finally {
+      deleteLocks.current.delete(id);
+      setDeletingIds((current) => current.filter((value) => value !== id));
+      setBusyDraftIds((current) => current.filter((value) => value !== id));
+    }
+  };
   const handleReject = async (id: string) => {
     if (
       busyDraftIds.includes(id) ||
@@ -739,7 +785,7 @@ const App: FC = () => {
           [draft.id]: result.image_url,
         }));
         // Reload the authoritative image status and storage path.
-        const refreshedDrafts = await getDrafts(businessId);
+        const refreshedDrafts = await getDrafts(businessId, true);
         if (selectedBusinessRef.current === businessId) {
           setApprovals(refreshedDrafts);
         }
@@ -748,7 +794,7 @@ const App: FC = () => {
       console.error("Image generation failed:", error);
       if (selectedBusinessRef.current === businessId) {
         try {
-          const refreshedDrafts = await getDrafts(businessId);
+          const refreshedDrafts = await getDrafts(businessId, true);
           if (selectedBusinessRef.current === businessId) {
             setApprovals(refreshedDrafts);
           }
@@ -894,7 +940,7 @@ const App: FC = () => {
         await acceptImageRevision(draft.id, revision.id);
         if (businessId) {
           const [freshDrafts, freshImage] = await Promise.all([
-            getDrafts(businessId),
+            getDrafts(businessId, true),
             getDraftImage(draft.id),
           ]);
           if (selectedBusinessRef.current === businessId) {
@@ -1060,7 +1106,7 @@ const App: FC = () => {
             generationError={generationError}
             loadingDrafts={loadingDrafts}
             loadError={loadError}
-            visibleDrafts={visibleDrafts}
+            visibleDrafts={historyDrafts}
             pendingCount={pendingCount}
             agents={agents}
             draftMessages={draftMessages}
@@ -1078,19 +1124,21 @@ const App: FC = () => {
         ) : activeSection === "Contenido" ? (
           <ContentPage
             key={selectedBusinessId}
-            drafts={visibleDrafts}
+            drafts={historyDrafts}
             loading={loadingDrafts}
             error={loadError}
           />
         ) : activeSection === "Analíticas" ? (
           <AnalyticsPage
             key={selectedBusinessId}
-            drafts={visibleDrafts}
+            drafts={historyDrafts}
             loading={loadingDrafts}
             error={loadError}
           />
         ) : activeSection === "Aprobaciones" ? (
           <ApprovalPage
+            handleDelete={handleDelete}
+            deletingIds={deletingIds}
             businessId={selectedBusinessId}
             loadingDrafts={loadingDrafts}
             loadError={loadError}

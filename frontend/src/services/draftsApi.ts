@@ -19,6 +19,7 @@ export type Draft = {
   facebook_publish_status:
     "not_published" | "publishing" | "published" | "needs_review";
   published_at: string | null;
+  deleted_at: string | null;
   source: "manual" | "ai";
   created_at: string;
   business_id: string | null;
@@ -105,9 +106,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 // --------------------------------------------------
 
 // Get drafts belonging to the selected business.
-export function getDrafts(businessId: string): Promise<Draft[]> {
+export function getDrafts(businessId: string, includeDeletedPublished = false): Promise<Draft[]> {
   return request<Draft[]>(
-    `/drafts?business_id=${encodeURIComponent(businessId)}`,
+    `/drafts?business_id=${encodeURIComponent(businessId)}&include_deleted_published=${includeDeletedPublished}`,
   );
 }
 
@@ -397,4 +398,9 @@ export function verifyFacebookVideo(
     `/drafts/${encodeURIComponent(id)}/verify-facebook-video`,
     { method: "POST" },
   );
+}
+
+// Hide a draft while retaining its publication history.
+export function deleteDraft(id: string): Promise<Draft> {
+  return request<Draft>(`/drafts/${encodeURIComponent(id)}`, { method: "DELETE" });
 }

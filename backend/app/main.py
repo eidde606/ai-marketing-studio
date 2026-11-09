@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, UploadFile, File
 from app.facebook_auth_routes import router as facebook_auth_router
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 import logging
 
@@ -65,7 +65,7 @@ app.add_middleware(
         "https://nazbort-ai-studio.netlify.app",
         "https://studio.nazborttech.com",
     ],
-    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
 )
 
@@ -184,10 +184,12 @@ async def get_valid_tiktok_token(
     return tokens["access_token"]
 
 
-def require_draft(db: Session, draft_id: str) -> Draft:
+def require_draft(
+        db: Session, draft_id: str, *, include_deleted: bool = False,
+) -> Draft:
     draft = db.get(Draft, draft_id)
 
-    if draft is None:
+    if draft is None or (draft.deleted_at is not None and not include_deleted):
         raise HTTPException(
             status_code=404,
             detail="Draft not found",
@@ -197,6 +199,8 @@ def require_draft(db: Session, draft_id: str) -> Draft:
 
 
 def require_pending_draft(db: Session, draft_id: str) -> Draft:
+    # Serialize edits and approval decisions with soft deletion.
+    db.execute(select(Draft).where(Draft.id == draft_id).with_for_update())
     draft = require_draft(db, draft_id)
 
     if draft.status != "pending":
@@ -288,10 +292,7 @@ async def publish_draft_to_facebook(
         draft_id: str,
         db: Session = Depends(get_db),
 ):
-    draft = db.get(Draft, draft_id)
-
-    if draft is None:
-        raise HTTPException(status_code=404, detail="Draft not found")
+    draft = require_draft(db, draft_id)
 
     account = db.scalar(
         select(SocialAccount).where(
@@ -314,6 +315,7 @@ async def publish_draft_to_facebook(
         update(Draft)
         .where(
             Draft.id == draft_id,
+            Draft.deleted_at.is_(None),
             Draft.status == "approved",
             Draft.facebook_publish_status == "not_published",
             Draft.facebook_post_id.is_(None),
@@ -594,6 +596,7 @@ def reset_facebook_publishing(
         update(Draft)
         .where(
             Draft.id == draft_id,
+            Draft.deleted_at.is_(None),
             Draft.status == "approved",
             Draft.facebook_publish_status == "needs_review",
             Draft.facebook_post_id.is_(None),
@@ -731,6 +734,7 @@ async def publish_draft_to_tiktok(
         update(Draft)
         .where(
             Draft.id == draft_id,
+            Draft.deleted_at.is_(None),
             Draft.status == "approved",
             Draft.tiktok_publish_status == "not_published",
             Draft.tiktok_publish_id.is_(None),
@@ -798,7 +802,7 @@ async def verify_tiktok_publication(
         draft_id: str,
         db: Session = Depends(get_db),
 ):
-    draft = require_draft(db, draft_id)
+    draft = require_draft(db, draft_id, include_deleted=True)
 
     if not draft.tiktok_publish_id:
         raise HTTPException(
@@ -890,6 +894,7 @@ def create_draft(
 @protected.get("/drafts")
 def list_drafts(
         business_id: str,
+        include_deleted_published: bool = False,
         db: Session = Depends(get_db),
 ):
     business = db.get(Business, business_id)
@@ -900,7 +905,52 @@ def list_drafts(
             detail="Business not found",
         )
 
-    return db.scalars(select(Draft).where(Draft.business_id == business_id)).all()
+    visibility = Draft.deleted_at.is_(None)
+    if include_deleted_published:
+        visibility = or_(
+            visibility,
+            Draft.facebook_publish_status == "published",
+            Draft.tiktok_publish_status == "published",
+            Draft.published_at.is_not(None),
+        )
+    return db.scalars(select(Draft).where(
+        Draft.business_id == business_id, visibility,
+    )).all()
+
+
+@protected.delete("/drafts/{draft_id}")
+def delete_draft(draft_id: str, db: Session = Depends(get_db)):
+    # The protected router enforces the configured authorized Supabase user.
+    draft = require_draft(db, draft_id, include_deleted=True)
+    if draft.deleted_at is not None:
+        return draft
+
+    deleted = db.execute(
+        update(Draft)
+        .where(
+            Draft.id == draft_id,
+            Draft.deleted_at.is_(None),
+            Draft.facebook_publish_status != "publishing",
+            Draft.tiktok_publish_status != "publishing",
+            Draft.image_status != "generating",
+            Draft.video_status.not_in(["generating", "uploading"]),
+            ~select(ImageRevision.id).where(
+                ImageRevision.draft_id == draft_id,
+                ImageRevision.status == "generating",
+            ).exists(),
+        )
+        .values(deleted_at=datetime.now(timezone.utc))
+        .returning(Draft.id)
+    ).scalar_one_or_none()
+    if deleted is None:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Espera a que termine la operación en curso antes de eliminar.",
+        )
+    db.commit()
+    db.refresh(draft)
+    return draft
 
 
 @protected.patch("/drafts/{draft_id}/destinations")
@@ -1203,7 +1253,7 @@ def get_draft_video_preview(
         draft_id: str,
         db: Session = Depends(get_db),
 ):
-    draft = require_draft(db, draft_id)
+    draft = require_draft(db, draft_id, include_deleted=True)
 
     if (
             draft.media_type != "video"
@@ -1619,6 +1669,7 @@ def generate_draft_image(
         update(Draft)
         .where(
             Draft.id == draft_id,
+            Draft.deleted_at.is_(None),
             Draft.status == "pending",
             Draft.image_status.in_(["not_started", "failed"]),
             Draft.image_url.is_(None),
@@ -1695,6 +1746,7 @@ def generate_draft_image(
         update(Draft)
         .where(
             Draft.id == draft_id,
+            Draft.deleted_at.is_(None),
             Draft.status == "pending",
             Draft.image_status == "generating",
             Draft.image_generation_id == generation_id,
@@ -1749,7 +1801,7 @@ def get_draft_image(
         draft_id: str,
         db: Session = Depends(get_db),
 ):
-    draft = require_draft(db, draft_id)
+    draft = require_draft(db, draft_id, include_deleted=True)
 
     if not draft.image_url:
         raise HTTPException(
@@ -1785,6 +1837,7 @@ def reset_stuck_image(
         update(Draft)
         .where(
             Draft.id == draft_id,
+            Draft.deleted_at.is_(None),
             Draft.status == "pending",
             Draft.image_status == "generating",
             Draft.image_url.is_(None),

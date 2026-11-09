@@ -7,6 +7,8 @@ import {
   type SetStateAction,
 } from "react";
 
+import { Trash2 } from "lucide-react";
+
 import type { Draft, ImageRevision } from "../services/draftsApi";
 import { VideoUpload } from "./VideoUpload";
 import { supabase } from "../services/supabaseClient";
@@ -14,6 +16,8 @@ import { supabase } from "../services/supabaseClient";
 import { getTikTokCreatorInfo, getTikTokAccounts } from "../services/draftsApi";
 
 type ApprovalPageProps = {
+  handleDelete: (id: string) => Promise<void>;
+  deletingIds: string[];
   businessId: string;
   draftDestinations: Record<string, { facebook: boolean; tiktok: boolean }>;
 
@@ -75,6 +79,8 @@ type ApprovalPageProps = {
 };
 
 const ApprovalPage: FC<ApprovalPageProps> = ({
+  handleDelete,
+  deletingIds,
   businessId,
   draftDestinations,
   setDraftDestinations,
@@ -686,6 +692,30 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                   )}
                 </div>
               )}
+
+              <div className="approval-actions">
+                <button
+                  className="reject-button"
+                  type="button"
+                  disabled={
+                    busyDraftIds.includes(draft.id) ||
+                    approvingIds.includes(draft.id) ||
+                    publishingIds.includes(draft.id) ||
+                    imageBusyIds.includes(draft.id) ||
+                    revisionBusyIds.includes(draft.id) ||
+                    draft.image_status === "generating" ||
+                    draft.video_status === "generating" ||
+                    draft.video_status === "uploading" ||
+                    draft.facebook_publish_status === "publishing" ||
+                    draft.tiktok_publish_status === "publishing" ||
+                    revisions[draft.id]?.status === "generating"
+                  }
+                  onClick={() => void handleDelete(draft.id)}
+                >
+                  <Trash2 size={16} aria-hidden="true" />{" "}
+                  {deletingIds.includes(draft.id) ? "Eliminando..." : "Eliminar"}
+                </button>
+              </div>
 
               {draft.status === "pending" && editingId !== draft.id ? (
                 <div className="approval-actions">
