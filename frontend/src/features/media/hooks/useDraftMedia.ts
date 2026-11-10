@@ -17,7 +17,7 @@ import type { DraftOperations } from "../../drafts/hooks/useDraftOperations";
 export function useDraftMedia(
   selectedBusinessId: string,
   collection: DraftCollection,
-  operations: Pick<DraftOperations, "imageLocks">,
+  operations: Pick<DraftOperations, "imageLocks" | "busyDraftIds">,
 ) {
   const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
   const [imageBusyIds, setImageBusyIds] = useState<string[]>([]);
@@ -59,6 +59,7 @@ export function useDraftMedia(
   const handleGenerateImage = async (draft: Draft) => {
     if (
       imageLocks.current.has(draft.id) ||
+      operations.busyDraftIds.includes(draft.id) ||
       draft.status !== "pending" ||
       !draft.image_prompt ||
       draft.image_url ||
@@ -188,7 +189,8 @@ export function useDraftMedia(
     if (
       !instructions ||
       instructions.length > 1000 ||
-      imageLocks.current.has(draft.id)
+      imageLocks.current.has(draft.id) ||
+      operations.busyDraftIds.includes(draft.id)
     )
       return;
     if (
@@ -235,7 +237,8 @@ export function useDraftMedia(
     if (
       !revision ||
       revision.status !== "ready" ||
-      imageLocks.current.has(draft.id)
+      imageLocks.current.has(draft.id) ||
+      operations.busyDraftIds.includes(draft.id)
     )
       return;
     if (

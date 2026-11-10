@@ -1,8 +1,12 @@
+import { useState } from "react";
+import { HeyGenGenerationPanel } from "./HeyGenGenerationPanel";
+import type { HeyGenController } from "../hooks/useHeyGenGeneration";
 import type { Draft } from "../../../services/draftsApi";
 import type { useDraftMedia } from "../hooks/useDraftMedia";
 import type { useApprovalMedia } from "../hooks/useApprovalMedia";
 import { VideoUpload } from "./VideoUpload";
 type Props = {
+  heygen?: HeyGenController;
   draft: Draft;
   busyDraftIds: string[];
   approvingIds: string[];
@@ -16,6 +20,7 @@ type Props = {
   | "handlePreviewImage"
 >;
 export function DraftMediaPanel({
+  heygen,
   draft,
   imageUrls,
   imageErrors,
@@ -26,6 +31,7 @@ export function DraftMediaPanel({
   handlePreviewImage,
   browserMedia,
 }: Props) {
+  const [heygenOpen, setHeygenOpen] = useState(false);
   const {
     openVideoEditorId,
     setOpenVideoEditorId,
@@ -222,33 +228,55 @@ export function DraftMediaPanel({
         </div>
       )}
 
-      {draft.status === "pending" && draft.video_status !== "completed" && (
-        <div>
-          <button
-            type="button"
-            className="text-button"
-            onClick={() =>
-              setOpenVideoEditorId((current) =>
-                current === draft.id ? null : draft.id,
-              )
-            }
-          >
-            {openVideoEditorId === draft.id
-              ? "Cerrar carga de video"
-              : "🎬 Subir video MP4"}
-          </button>
+      {heygen &&
+        (draft.status === "pending" || draft.media_type === "video") && (
+          <div>
+            <button
+              type="button"
+              className="text-button"
+              disabled={openVideoEditorId === draft.id}
+              onClick={() => setHeygenOpen((value) => !value)}
+            >
+              {heygenOpen
+                ? "Cerrar generación de video"
+                : "Crear o recuperar video con HeyGen"}
+            </button>
+            {heygenOpen && (
+              <HeyGenGenerationPanel draft={draft} controller={heygen} />
+            )}
+          </div>
+        )}
 
-          {openVideoEditorId === draft.id && (
-            <VideoUpload
-              draftId={draft.id}
-              onUploaded={() => {
-                setOpenVideoEditorId(null);
-                window.location.reload();
-              }}
-            />
-          )}
-        </div>
-      )}
+      {draft.status === "pending" &&
+        !heygenOpen &&
+        !busyDraftIds.includes(draft.id) &&
+        ["not_started", "failed"].includes(draft.video_status) && (
+          <div>
+            <button
+              type="button"
+              className="text-button"
+              onClick={() =>
+                setOpenVideoEditorId((current) =>
+                  current === draft.id ? null : draft.id,
+                )
+              }
+            >
+              {openVideoEditorId === draft.id
+                ? "Cerrar carga de video"
+                : "🎬 Subir video MP4"}
+            </button>
+
+            {openVideoEditorId === draft.id && (
+              <VideoUpload
+                draftId={draft.id}
+                onUploaded={() => {
+                  setOpenVideoEditorId(null);
+                  window.location.reload();
+                }}
+              />
+            )}
+          </div>
+        )}
 
       {!draft.image_prompt && !draft.image_url && (
         <small>

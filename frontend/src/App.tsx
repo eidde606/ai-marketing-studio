@@ -15,6 +15,7 @@ import { useDraftCollection } from "./features/drafts/hooks/useDraftCollection";
 import { useDraftOperations } from "./features/drafts/hooks/useDraftOperations";
 import { useDraftActions } from "./features/drafts/hooks/useDraftActions";
 import { useApprovalActions } from "./features/approvals/hooks/useApprovalActions";
+import { useHeyGenGeneration } from "./features/media/hooks/useHeyGenGeneration";
 import { useDraftMedia } from "./features/media/hooks/useDraftMedia";
 import { getConnectedFacebookAccounts } from "./services/facebookApi";
 import AppShell from "./app/AppShell";
@@ -161,6 +162,7 @@ function AuthenticatedApp({
     operations,
   );
   const media = useDraftMedia(selectedBusinessId, collection, operations);
+  const heygen = useHeyGenGeneration(selectedBusinessId, collection, operations);
   const {
     setApprovals,
     loadingDrafts,
@@ -375,6 +377,7 @@ function AuthenticatedApp({
         />
       ) : activeSection === "Aprobaciones" ? (
         <ApprovalPage
+          heygen={heygen}
           handleDelete={handleDelete}
           deletingIds={deletingIds}
           businessId={selectedBusinessId}

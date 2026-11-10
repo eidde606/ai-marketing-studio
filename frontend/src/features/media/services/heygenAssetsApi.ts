@@ -58,6 +58,7 @@ async function getAssetPage<T>(
     },
   });
 
+  if (response.status === 503) throw new Error("HeyGen no está configurado. Contacta al administrador.");
   if (!response.ok) {
     throw new Error(`No se pudieron cargar los recursos de HeyGen (${response.status}).`);
   }
