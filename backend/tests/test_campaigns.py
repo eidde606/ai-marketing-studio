@@ -313,3 +313,83 @@ def test_existing_facebook_workflow_updates_campaign_progress(campaign_client, m
         draft = db.get(Draft, drafts[0])
         assert draft.campaign_id == campaign["id"]
         assert draft.facebook_post_id == "confirmed-post"
+
+
+def test_response_shape_ordering_and_cross_business_content_filter(campaign_client):
+    client, engine, businesses, _ = campaign_client
+    first = create(client, businesses[0], name="Primera")
+    second = create(client, businesses[0], name="Segunda")
+    same_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    with Session(engine) as db:
+        for campaign_id in (first["id"], second["id"]):
+            db.get(Campaign, campaign_id).created_at = same_time
+        for draft_id, title, business_id in [
+            ("draft-z", "beta", businesses[0]),
+            ("draft-b", "Alpha", businesses[0]),
+            ("draft-a", "alpha", businesses[0]),
+            ("other-business", "Invisible", businesses[1]),
+        ]:
+            db.add(Draft(id=draft_id, business_id=business_id, campaign_id=first["id"],
+                         title=title, caption="Original", platform="facebook"))
+        db.commit()
+    response = client.get(f'/businesses/{businesses[0]}/campaigns')
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == sorted([first["id"], second["id"]])
+    detail = client.get(f'/businesses/{businesses[0]}/campaigns/{first["id"]}').json()
+    assert set(detail) == {
+        "id", "business_id", "name", "objective", "status", "start_date", "end_date",
+        "created_at", "updated_at", "total_count", "published_count", "pending_count",
+        "rejected_count", "progress", "drafts",
+    }
+    assert detail["start_date"] is None and detail["end_date"] is None
+    assert [item["id"] for item in detail["drafts"]] == ["draft-a", "draft-b", "draft-z"]
+    assert detail["total_count"] == detail["pending_count"] == 3
+    for item in detail["drafts"]:
+        assert set(item) == {"id", "title", "status", "platform", "published", "deleted_at"}
+        assert item["published"] is False and item["deleted_at"] is None
+
+
+def test_campaign_error_details_are_preserved(campaign_client):
+    client, _, businesses, drafts = campaign_client
+    first = create(client, businesses[0])
+    second = create(client, businesses[0], name="Otra")
+    root = f'/businesses/{businesses[0]}/campaigns'
+    first_draft = f'{root}/{first["id"]}/drafts/{drafts[0]}'
+    assert client.patch(first_draft).status_code == 200
+    cases = [
+        ("GET", "/businesses/missing/campaigns", None, 404, "Negocio no encontrado."),
+        ("GET", f"{root}/missing", None, 404, "Campaña no encontrada para este negocio."),
+        ("PATCH", f'{root}/{first["id"]}/drafts/{drafts[1]}', None, 404, "Contenido no encontrado para este negocio."),
+        ("PATCH", f'{root}/{second["id"]}/drafts/{drafts[0]}', None, 409,
+         "Desvincula el contenido de su campaña actual antes de asociarlo."),
+        ("DELETE", f'{root}/{second["id"]}/drafts/{drafts[0]}', None, 404,
+         "El contenido no pertenece a esta campaña."),
+        ("PATCH", f'{root}/{first["id"]}', {"start_date": "2026-07-01", "end_date": "2026-06-01"},
+         422, "La fecha final no puede ser anterior a la inicial."),
+    ]
+    for method, url, payload, status, message in cases:
+        response = client.request(method, url, json=payload)
+        assert response.status_code == status
+        assert response.json() == {"detail": message}
+
+
+def test_failed_delete_commit_keeps_campaign_and_association(campaign_client, monkeypatch):
+    client, engine, businesses, drafts = campaign_client
+    campaign = create(client, businesses[0])
+    url = f'/businesses/{businesses[0]}/campaigns/{campaign["id"]}'
+    assert client.patch(f'{url}/drafts/{drafts[0]}').status_code == 200
+
+    def fail_commit(_session):
+        raise RuntimeError("Simulated commit failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Session, "commit", fail_commit)
+        with pytest.raises(RuntimeError, match="Simulated commit failure"):
+            client.delete(url)
+    # Closing the request session must roll back the unlink together with deletion.
+    with Session(engine) as db:
+        assert db.get(Campaign, campaign["id"]) is not None
+        draft = db.get(Draft, drafts[0])
+        assert draft.campaign_id == campaign["id"]
+        assert draft.caption == "Original"
+        assert draft.status == "pending"
