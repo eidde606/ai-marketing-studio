@@ -3,6 +3,7 @@ import { ImageRevisionEditor } from "../../media/components/ImageRevisionEditor"
 import type { FC } from "react";
 import { Trash2 } from "lucide-react";
 import { DraftMediaPanel } from "../../media/components/DraftMediaPanel";
+import { HeyGenAssetSelector } from "../../media/components/HeyGenAssetSelector";
 import { useApprovalMedia } from "../../media/hooks/useApprovalMedia";
 import type { ApprovalPageProps } from "../types/ApprovalPageProps";
 
@@ -71,6 +72,7 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
       </div>
 
       <div className="approval-page-list">
+        <HeyGenAssetSelector />
         {draftMessages}
 
         {!loadingDrafts &&

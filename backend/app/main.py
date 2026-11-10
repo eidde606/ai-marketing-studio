@@ -20,13 +20,13 @@ from sqlalchemy.orm import Session
 import logging
 
 from app.campaign_routes import router as campaign_router
+from app.features.media.routes import router as media_router
 from app.auth import verify_token
 from app.database import get_db
 from app.models import Business, Draft, ImageRevision, SocialAccount
 from app.token_service import decrypt_token
 from app.ai_service import generate_marketing_content
-from app.heygen_service import get_available_avatar_looks
-from app.heygen_service import generate_video, get_video_status, get_available_voices
+from app.heygen_service import generate_video, get_video_status
 from app.image_service import (
     generate_marketing_image,
     edit_marketing_image,
@@ -1293,11 +1293,6 @@ def check_heygen_video(video_id: str):
     return get_video_status(video_id)
 
 
-@protected.get("/heygen/voices")
-def list_heygen_voices():
-    return get_available_voices()
-
-
 @protected.get("/businesses/{business_id}/sofia/conversations")
 def list_sofia_conversations(
         business_id: str,
@@ -2302,30 +2297,13 @@ async def test_facebook_reach(
         ) from exc
 
 
-@protected.get("/heygen/avatars")
-def list_heygen_avatars():
-    try:
-        return get_available_avatar_looks()
-
-    except httpx.HTTPStatusError:
-        raise HTTPException(
-            status_code=502,
-            detail="Unable to retrieve HeyGen avatars",
-        )
-
-    except httpx.RequestError:
-        raise HTTPException(
-            status_code=502,
-            detail="HeyGen connection failed",
-        )
-
-
 # --------------------------------------------------
 # Register Protected Endpoints
 # --------------------------------------------------
 
 app.include_router(protected)
 app.include_router(campaign_router)
+app.include_router(media_router)
 app.include_router(facebook_auth_router)
 
 app.include_router(tiktok_auth_router)

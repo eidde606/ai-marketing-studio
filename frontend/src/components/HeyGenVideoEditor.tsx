@@ -19,9 +19,9 @@ export function HeyGenVideoEditor({ draft }: HeyGenVideoEditorProps) {
 
   const [script, setScript] = useState(draft.caption ?? "");
   const [selectedAvatarId, setSelectedAvatarId] = useState("");
-
-  // Temporary test voice: Eddie
-  const selectedVoiceId = "8cc9e20fd83c488da1a1c1015bb4c06e";
+  const selectedVoiceId =
+    avatars.find((avatar) => avatar.id === selectedAvatarId)
+      ?.default_voice_id ?? "";
 
   const [generating, setGenerating] = useState(false);
   const [videoId, setVideoId] = useState<string | null>(null);
@@ -60,7 +60,12 @@ export function HeyGenVideoEditor({ draft }: HeyGenVideoEditorProps) {
   }, []);
 
   async function handleGenerateVideo() {
-    if (generating || !selectedAvatarId || !script.trim()) {
+    if (
+      generating ||
+      !selectedAvatarId ||
+      !selectedVoiceId ||
+      !script.trim()
+    ) {
       return;
     }
 
@@ -216,7 +221,11 @@ export function HeyGenVideoEditor({ draft }: HeyGenVideoEditorProps) {
         type="button"
         onClick={() => void handleGenerateVideo()}
         disabled={
-          generating || videoInProgress || !selectedAvatarId || !script.trim()
+          generating ||
+          videoInProgress ||
+          !selectedAvatarId ||
+          !selectedVoiceId ||
+          !script.trim()
         }
       >
         {generating ? "Enviando..." : "🎬 Generar video"}

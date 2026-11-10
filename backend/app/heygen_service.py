@@ -2,8 +2,6 @@ import os
 
 import httpx
 from dotenv import load_dotenv
-import ipaddress
-import socket
 from urllib.parse import urlparse
 
 load_dotenv(".env")
@@ -11,28 +9,73 @@ load_dotenv(".env")
 HEYGEN_API_URL = "https://api.heygen.com"
 
 
-def get_available_avatar_looks() -> list:
-    headers = {
-        "X-Api-Key": os.environ["HEYGEN_API_KEY"],
+class HeyGenConfigurationError(RuntimeError):
+    pass
+
+
+def _heygen_headers() -> dict[str, str]:
+    api_key = os.getenv("HEYGEN_API_KEY")
+    if not api_key:
+        raise HeyGenConfigurationError("HEYGEN_API_KEY is not configured.")
+    return {
+        "X-Api-Key": api_key,
         "Accept": "application/json",
     }
 
+
+def _list_heygen_resources(
+    endpoint: str,
+    *,
+    limit: int,
+    token: str | None,
+    filters: dict[str, str | None],
+) -> dict:
+    params = {"limit": limit}
+    params.update({key: value for key, value in filters.items() if value})
+    if token:
+        params["token"] = token
+
     with httpx.Client(timeout=30.0) as client:
         response = client.get(
-            f"{HEYGEN_API_URL}/v3/avatars/looks",
-            headers=headers,
+            f"{HEYGEN_API_URL}{endpoint}",
+            headers=_heygen_headers(),
+            params=params,
         )
         response.raise_for_status()
         result = response.json()
 
+    if not isinstance(result, dict):
+        raise ValueError("HeyGen returned an invalid list response.")
     if result.get("error"):
-        raise ValueError(str(result["error"]))
+        raise ValueError(f"HeyGen API error: {result['error']}")
 
-    for look in result.get("data", []):
-        if "eddie" in look.get("name", "").lower():
-            print("EDDIE LOOK:", look, flush=True)
+    if not isinstance(result.get("data"), list):
+        raise ValueError("HeyGen returned an invalid list response.")
 
-    return result.get("data", [])
+    return {
+        "data": result["data"],
+        "has_more": result.get("has_more", False),
+        "next_token": result.get("next_token"),
+    }
+
+
+def list_avatar_looks(
+    *,
+    avatar_type: str | None = None,
+    ownership: str | None = None,
+    limit: int = 20,
+    token: str | None = None,
+) -> dict:
+    return _list_heygen_resources(
+        "/v3/avatars/looks",
+        limit=limit,
+        token=token,
+        filters={"avatar_type": avatar_type, "ownership": ownership},
+    )
+
+
+def get_available_avatar_looks() -> list:
+    return list_avatar_looks()["data"]
 
 
 def generate_video(avatar_id: str, voice_id: str, script: str) -> dict:
@@ -123,25 +166,30 @@ def download_generated_video(video_url: str) -> bytes:
 
 
 def get_available_voices() -> list:
-    api_key = os.getenv("HEYGEN_API_KEY")
+    voices = []
+    token = None
+    seen_tokens = set()
 
-    if not api_key:
-        raise ValueError("HEYGEN_API_KEY is not configured.")
+    while True:
+        page = list_voices(voice_type="private", limit=20, token=token)
+        voices.extend(page["data"])
+        if not page["has_more"] or not page["next_token"]:
+            return voices
+        if page["next_token"] in seen_tokens:
+            raise ValueError("HeyGen repeated a voice pagination cursor.")
+        seen_tokens.add(page["next_token"])
+        token = page["next_token"]
 
-    headers = {
-        "X-Api-Key": api_key,
-        "Accept": "application/json",
-    }
 
-    with httpx.Client(timeout=30.0) as client:
-        response = client.get(
-            f"{HEYGEN_API_URL}/v2/voices",
-            headers=headers,
-        )
-        response.raise_for_status()
-        result = response.json()
-
-    if result.get("error"):
-        raise ValueError(f"HeyGen API error: {result['error']}")
-
-    return result.get("data", {}).get("voices", [])
+def list_voices(
+    *,
+    voice_type: str = "private",
+    limit: int = 20,
+    token: str | None = None,
+) -> dict:
+    return _list_heygen_resources(
+        "/v3/models/audio/voices",
+        limit=limit,
+        token=token,
+        filters={"type": voice_type},
+    )
