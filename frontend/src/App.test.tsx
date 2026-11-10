@@ -24,6 +24,19 @@ const mocks = vi.hoisted(() => ({
   getConnectedFacebookAccounts: vi.fn(),
   generateContent: vi.fn(),
   publishDraftToFacebook: vi.fn(),
+  approveDraft: vi.fn(),
+  updateDraftDestinations: vi.fn(),
+  updateDraft: vi.fn(),
+  deleteDraft: vi.fn(),
+  rejectDraft: vi.fn(),
+  generateDraftImage: vi.fn(),
+  createImageRevision: vi.fn(),
+  getImageRevisions: vi.fn(),
+  acceptImageRevision: vi.fn(),
+  rejectImageRevision: vi.fn(),
+  publishDraftToTikTok: vi.fn(),
+  verifyTikTokPublication: vi.fn(),
+  verifyFacebookVideo: vi.fn(),
   getDraftImage: vi.fn(),
 }));
 vi.mock("./services/supabaseClient", () => ({ supabase: { auth: mocks } }));
@@ -35,6 +48,19 @@ vi.mock("./services/draftsApi", async (original) => ({
   getDrafts: mocks.getDrafts,
   generateContent: mocks.generateContent,
   publishDraftToFacebook: mocks.publishDraftToFacebook,
+  approveDraft: mocks.approveDraft,
+  updateDraftDestinations: mocks.updateDraftDestinations,
+  updateDraft: mocks.updateDraft,
+  deleteDraft: mocks.deleteDraft,
+  rejectDraft: mocks.rejectDraft,
+  generateDraftImage: mocks.generateDraftImage,
+  createImageRevision: mocks.createImageRevision,
+  getImageRevisions: mocks.getImageRevisions,
+  acceptImageRevision: mocks.acceptImageRevision,
+  rejectImageRevision: mocks.rejectImageRevision,
+  publishDraftToTikTok: mocks.publishDraftToTikTok,
+  verifyTikTokPublication: mocks.verifyTikTokPublication,
+  verifyFacebookVideo: mocks.verifyFacebookVideo,
   getDraftImage: mocks.getDraftImage,
 }));
 vi.mock("./services/facebookApi", () => ({
@@ -73,6 +99,62 @@ vi.mock("./components/ApprovalPage", () => ({
       {props.visibleDrafts.map((d) => (
         <div key={d.id}>
           <p>{d.title}</p>
+          <span data-testid={`draft-state-${d.id}`}>
+            {d.status}:{d.campaign_id}:{d.caption}
+          </span>
+          <button onClick={() => props.startEditing(d)}>Editar {d.id}</button>
+          <button onClick={() => props.handleSaveEdit(d.id)}>
+            Guardar {d.id}
+          </button>
+          <button onClick={() => props.handleDelete(d.id)}>
+            Eliminar {d.id}
+          </button>
+          <button onClick={() => props.handleReject(d.id)}>
+            Rechazar {d.id}
+          </button>
+          <button onClick={() => props.handleApprove(d.id)}>
+            Aprobar {d.id}
+          </button>
+          <button
+            onClick={() =>
+              props.handlePublishTikTok(d.id, "account-1", "SELF_ONLY", {
+                disable_comment: true,
+                disable_duet: false,
+                disable_stitch: true,
+              })
+            }
+          >
+            TikTok {d.id}
+          </button>
+          <button onClick={() => props.onVerifyTikTok(d.id)}>
+            Verificar TikTok {d.id}
+          </button>
+          <span data-testid={`tiktok-status-${d.id}`}>
+            {d.tiktok_publish_status}
+          </span>
+          <button onClick={() => props.handleGenerateImage(d)}>
+            Generar imagen {d.id}
+          </button>
+          <button onClick={() => props.handleCreateRevision(d)}>
+            Revisar imagen {d.id}
+          </button>
+          <button onClick={() => props.handleDecideRevision(d, "accept")}>
+            Aceptar imagen {d.id}
+          </button>
+          <button onClick={() => props.refreshRevision(d.id)}>
+            Historial imagen {d.id}
+          </button>
+          <input
+            aria-label={`Instrucciones ${d.id}`}
+            value={props.imageInstructions[d.id] ?? ""}
+            onChange={(e) =>
+              props.updateImageInstructions(d.id, e.target.value)
+            }
+          />
+          <output>
+            {props.revisionErrors[d.id]}
+            {props.imageErrors[d.id]}
+          </output>
           <span data-testid={`publish-status-${d.id}`}>
             {d.facebook_publish_status}
           </span>
@@ -91,6 +173,11 @@ vi.mock("./components/ApprovalPage", () => ({
         aria-label="Título sin guardar"
         value={props.editTitle}
         onChange={(event) => props.setEditTitle(event.target.value)}
+      />
+      <input
+        aria-label="Texto sin guardar"
+        value={props.editCaption}
+        onChange={(e) => props.setEditCaption(e.target.value)}
       />
       <output>{Object.values(props.imageUrls).join(",")}</output>
     </div>
@@ -641,3 +728,242 @@ it.each(["logout", "account change"])(
     expect(screen.getByRole("heading", { name: "Resumen" })).toBeTruthy();
   },
 );
+
+// Phase 4 characterization: all services are mocked; no provider requests.
+const editableDraft = {
+  ...draft("a"),
+  caption: "Texto original",
+  campaign_id: "campaign-1",
+  image_prompt: "A cafe",
+  image_url: null,
+  image_status: "not_started",
+  publish_destinations: ["facebook"],
+} as Draft;
+async function openDraftActions() {
+  mocks.getDrafts.mockResolvedValue([editableDraft]);
+  await openApp();
+  fireEvent.click(screen.getByRole("button", { name: /^Aprobaciones/ }));
+  await screen.findByText("Editar a");
+}
+it("saves trimmed edits and preserves the campaign association", async () => {
+  mocks.updateDraft.mockResolvedValue({
+    ...editableDraft,
+    title: "Nuevo",
+    caption: "Texto nuevo",
+  });
+  await openDraftActions();
+  fireEvent.click(screen.getByText("Editar a"));
+  fireEvent.change(screen.getByLabelText("Título sin guardar"), {
+    target: { value: "  Nuevo  " },
+  });
+  fireEvent.change(screen.getByLabelText("Texto sin guardar"), {
+    target: { value: " Texto nuevo " },
+  });
+  fireEvent.click(screen.getByText("Guardar a"));
+  await screen.findByText("Nuevo");
+  expect(mocks.updateDraft).toHaveBeenCalledWith("a", {
+    title: "Nuevo",
+    caption: "Texto nuevo",
+  });
+  expect(screen.getByTestId("draft-state-a").textContent).toContain(
+    "campaign-1:Texto nuevo",
+  );
+});
+it("does not save empty edits and retains edits after a save failure", async () => {
+  await openDraftActions();
+  fireEvent.click(screen.getByText("Guardar a"));
+  expect(mocks.updateDraft).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByText("Editar a"));
+  mocks.updateDraft.mockRejectedValue(new Error("offline"));
+  fireEvent.click(screen.getByText("Guardar a"));
+  expect((await screen.findByRole("alert")).textContent).toContain(
+    "No se pudo guardar",
+  );
+  expect(
+    (screen.getByLabelText("Título sin guardar") as HTMLInputElement).value,
+  ).toBe(editableDraft.title);
+});
+it("ignores a saved edit from the earlier A visit", async () => {
+  const old = deferred<Draft>();
+  mocks.updateDraft.mockReturnValue(old.promise);
+  await openDraftActions();
+  fireEvent.click(screen.getByText("Editar a"));
+  fireEvent.click(screen.getByText("Guardar a"));
+  select("b");
+  select("a");
+  await screen.findByText("Editar a");
+  await act(async () =>
+    old.resolve({ ...editableDraft, title: "Obsolete edit" }),
+  );
+  expect(screen.queryByText("Obsolete edit")).toBeNull();
+});
+it.each(["Eliminar", "Rechazar"])(
+  "cancels %s without a request",
+  async (action) => {
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    await openDraftActions();
+    fireEvent.click(screen.getByText(`${action} a`));
+    expect(mocks.deleteDraft).not.toHaveBeenCalled();
+    expect(mocks.rejectDraft).not.toHaveBeenCalled();
+  },
+);
+it("soft-deletes once while pending and removes the draft from approvals", async () => {
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  const old = deferred<Draft>();
+  mocks.deleteDraft.mockReturnValue(old.promise);
+  await openDraftActions();
+  fireEvent.click(screen.getByText("Eliminar a"));
+  fireEvent.click(screen.getByText("Eliminar a"));
+  expect(mocks.deleteDraft).toHaveBeenCalledTimes(1);
+  await act(async () =>
+    old.resolve({ ...editableDraft, deleted_at: "2026-01-01" }),
+  );
+  expect(screen.queryByText("Editar a")).toBeNull();
+});
+it("rejects a draft without deleting it", async () => {
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  mocks.rejectDraft.mockResolvedValue({ ...editableDraft, status: "rejected" });
+  await openDraftActions();
+  fireEvent.click(screen.getByText("Rechazar a"));
+  await screen.findByText("rejected:campaign-1:Texto original");
+  expect(mocks.deleteDraft).not.toHaveBeenCalled();
+});
+it("saves destinations before approving and blocks another approval while pending", async () => {
+  const saved = deferred<Draft>();
+  mocks.updateDraftDestinations.mockReturnValue(saved.promise);
+  mocks.approveDraft.mockResolvedValue({
+    ...editableDraft,
+    status: "approved",
+  });
+  await openDraftActions();
+  fireEvent.click(screen.getByText("Aprobar a"));
+  fireEvent.click(screen.getByText("Aprobar a"));
+  expect(mocks.updateDraftDestinations).toHaveBeenCalledTimes(1);
+  expect(mocks.approveDraft).not.toHaveBeenCalled();
+  await act(async () => saved.resolve(editableDraft));
+  expect(mocks.updateDraftDestinations).toHaveBeenCalledWith("a", ["facebook"]);
+  expect(mocks.approveDraft).toHaveBeenCalledTimes(1);
+  expect(screen.getByTestId("draft-state-a").textContent).toContain("approved");
+});
+it("does not approve when saving destinations fails", async () => {
+  mocks.updateDraftDestinations.mockRejectedValue(new Error("offline"));
+  await openDraftActions();
+  fireEvent.click(screen.getByText("Aprobar a"));
+  expect((await screen.findByRole("alert")).textContent).toContain(
+    "No se pudo aprobar",
+  );
+  expect(mocks.approveDraft).not.toHaveBeenCalled();
+});
+it("confirms image charges, keeps the image lock and reloads authoritative drafts", async () => {
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  const image = deferred<{ image_url: string }>();
+  mocks.generateDraftImage.mockReturnValue(image.promise);
+  await openDraftActions();
+  fireEvent.click(screen.getByText("Generar imagen a"));
+  expect(mocks.generateDraftImage).not.toHaveBeenCalled();
+  confirm.mockReturnValue(true);
+  fireEvent.click(screen.getByText("Generar imagen a"));
+  fireEvent.click(screen.getByText("Generar imagen a"));
+  fireEvent.click(screen.getByText("Aprobar a"));
+  expect(mocks.generateDraftImage).toHaveBeenCalledTimes(1);
+  expect(mocks.approveDraft).not.toHaveBeenCalled();
+  await act(async () => image.resolve({ image_url: "signed-image" }));
+  expect(screen.getByText("signed-image")).toBeTruthy();
+  expect(mocks.getDrafts).toHaveBeenCalledTimes(2);
+  expect(confirm).toHaveBeenLastCalledWith(expect.stringContaining("cargo"));
+});
+it("refreshes revision status after an ambiguous failure without retrying generation", async () => {
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  mocks.createImageRevision.mockRejectedValue(new Error("ambiguous"));
+  mocks.getImageRevisions.mockResolvedValue([]);
+  await openDraftActions();
+  fireEvent.change(screen.getByLabelText("Instrucciones a"), {
+    target: { value: "  Más luz  " },
+  });
+  fireEvent.click(screen.getByText("Revisar imagen a"));
+  await screen.findByText(/No se pudo confirmar la generación/);
+  expect(mocks.createImageRevision).toHaveBeenCalledTimes(1);
+  expect(mocks.createImageRevision).toHaveBeenCalledWith("a", "Más luz");
+  expect(mocks.getImageRevisions).toHaveBeenCalledTimes(1);
+});
+it("accepts a ready revision then reloads drafts and preview without generating", async () => {
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  mocks.getImageRevisions.mockResolvedValue([
+    { id: "revision-1", status: "ready", image_url: "revision-url" },
+  ]);
+  mocks.acceptImageRevision.mockResolvedValue({ status: "accepted" });
+  mocks.getDraftImage.mockResolvedValue({ image_url: "accepted-image" });
+  await openDraftActions();
+  await act(async () =>
+    fireEvent.click(screen.getByText("Historial imagen a")),
+  );
+  fireEvent.click(screen.getByText("Aceptar imagen a"));
+  await screen.findByText("accepted-image");
+  expect(mocks.acceptImageRevision).toHaveBeenCalledWith("a", "revision-1");
+  expect(mocks.getDrafts).toHaveBeenCalledTimes(2);
+  expect(mocks.generateDraftImage).not.toHaveBeenCalled();
+});
+
+it("preserves direct TikTok payload, pending lock and explicit verification", async () => {
+  const pending = deferred<{ tiktok_publish_id: string }>();
+  mocks.publishDraftToTikTok.mockReturnValue(pending.promise);
+  mocks.verifyTikTokPublication.mockResolvedValue({ status: "published" });
+  mocks.getDrafts.mockResolvedValue([
+    {
+      ...editableDraft,
+      status: "approved",
+      tiktok_publish_status: "not_published",
+    },
+  ]);
+  await openApp();
+  fireEvent.click(screen.getByRole("button", { name: /^Aprobaciones/ }));
+  fireEvent.click(await screen.findByText("TikTok a"));
+  fireEvent.click(screen.getByText("TikTok a"));
+  expect(mocks.publishDraftToTikTok).toHaveBeenCalledTimes(1);
+  expect(mocks.publishDraftToTikTok).toHaveBeenCalledWith("a", {
+    account_id: "account-1",
+    privacy_level: "SELF_ONLY",
+    disable_comment: true,
+    disable_duet: false,
+    disable_stitch: true,
+  });
+  await act(async () =>
+    pending.resolve({ tiktok_publish_id: "publication-1" }),
+  );
+  expect(screen.getByTestId("tiktok-status-a").textContent).toBe(
+    "needs_review",
+  );
+  fireEvent.click(screen.getByText("Verificar TikTok a"));
+  await screen.findByText("published");
+  expect(mocks.verifyTikTokPublication).toHaveBeenCalledTimes(1);
+});
+it("retains Facebook video verification interval and cleans it up at logout", async () => {
+  const setInterval = vi.spyOn(window, "setInterval");
+  const clearInterval = vi.spyOn(window, "clearInterval");
+  mocks.verifyFacebookVideo.mockResolvedValue({
+    status: "processing",
+    facebook_post_id: "post-1",
+  });
+  mocks.getDrafts.mockResolvedValue([
+    {
+      ...editableDraft,
+      status: "approved",
+      media_type: "video",
+      facebook_publish_status: "needs_review",
+      facebook_post_id: "post-1",
+    },
+  ]);
+  await openApp();
+  await act(async () => {});
+  expect(mocks.verifyFacebookVideo).toHaveBeenCalledTimes(1);
+  expect(setInterval).toHaveBeenCalledWith(expect.any(Function), 30000);
+  const index = setInterval.mock.calls.findIndex((call) => call[1] === 30000);
+  const intervalId = setInterval.mock.results[index].value;
+  await act(async () => {
+    (setInterval.mock.calls[index][0] as () => void)();
+  });
+  expect(mocks.verifyFacebookVideo).toHaveBeenCalledTimes(2);
+  act(() => authChange("SIGNED_OUT", null));
+  expect(clearInterval).toHaveBeenCalledWith(intervalId);
+});
