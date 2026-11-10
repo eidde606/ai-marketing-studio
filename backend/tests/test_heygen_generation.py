@@ -1528,3 +1528,181 @@ def test_completion_cannot_attach_superseded_attempt(completed_provider, monkeyp
     assert result.json()["storage_status"] == "FAILED"
     with Session(engine) as db:
         assert db.get(Draft, "draft-1").video_url is None
+
+
+@pytest.mark.parametrize("first", ["image", "video"])
+def test_media_reservations_block_other_provider_while_first_is_pending(
+    isolated_client, monkeypatch, first,
+):
+    """Overlap requests during provider I/O, after reservation commit."""
+    from app import main
+    from app.features.media import generation_service
+    from app.models import Draft
+
+    client, engine = isolated_client
+    create_draft(engine)
+    with Session(engine) as db:
+        db.get(Draft, "draft-1").image_prompt = "Una imagen"
+        db.commit()
+    calls = []
+    blocked = []
+
+    def image_provider(**_kwargs):
+        calls.append("image")
+        blocked.append(client.post(GENERATION_PATH, json=REQUEST).status_code)
+        return "businesses/business-1/image.png"
+
+    def video_provider(**_kwargs):
+        calls.append("video")
+        blocked.append(client.post("/drafts/draft-1/generate-image").status_code)
+        return {"video_id": "exclusive-video"}
+
+    monkeypatch.setattr(main, "get_marketing_image_url", lambda *_args, **_kw: "https://storage.test/signed-image")
+    monkeypatch.setattr(main, "generate_marketing_image", image_provider)
+    monkeypatch.setattr(generation_service, "generate_video", video_provider)
+    if first == "image":
+        result = client.post("/drafts/draft-1/generate-image")
+    else:
+        result = client.post(GENERATION_PATH, json=REQUEST)
+    assert result.status_code == 200
+    assert blocked == [409]
+    assert calls == [first]
+
+
+@pytest.mark.parametrize("video_status", ["generating", "uploading", "needs_review", "completed"])
+def test_image_generation_rejects_reserved_or_stored_video(
+    isolated_client, monkeypatch, video_status,
+):
+    from app import main
+    from app.models import Draft
+    client, engine = isolated_client
+    create_draft(engine)
+    with Session(engine) as db:
+        draft = db.get(Draft, "draft-1")
+        draft.image_prompt = "Una imagen"
+        draft.video_status = video_status
+        db.commit()
+    def forbidden(**_kwargs):
+        pytest.fail("Conflicting paid image generation")
+    monkeypatch.setattr(main, "generate_marketing_image", forbidden)
+    assert client.post("/drafts/draft-1/generate-image").status_code == 409
+
+
+@pytest.mark.parametrize("provider_error", ["offline", "missing"])
+@pytest.mark.parametrize("action", ["read", "reconcile"])
+def test_stored_video_restores_without_provider(
+    completed_provider, monkeypatch, provider_error, action,
+):
+    client, engine, service = completed_provider
+    assert client.get(GENERATION_PATH).json()["storage_status"] == "STORED"
+    from unittest.mock import Mock
+    error = httpx.ConnectError("offline") if provider_error == "offline" else httpx.HTTPStatusError(
+        "missing", request=httpx.Request("GET", "https://api.heygen.com/v3/videos/mock"),
+        response=httpx.Response(404),
+    )
+    provider = Mock(side_effect=error)
+    monkeypatch.setattr(service, "get_video_status", provider)
+    response = client.get(GENERATION_PATH) if action == "read" else client.post(f"{GENERATION_PATH}/reconcile")
+    assert response.status_code == 200
+    assert response.json()["status"] == "COMPLETED"
+    assert response.json()["storage_status"] == "STORED"
+    provider.assert_not_called()
+    assert client.get("/businesses/other/drafts/draft-1/heygen-generation").status_code == 404
+
+
+def test_stored_video_does_not_bypass_attempt_user_scope(completed_provider, monkeypatch):
+    from app.main import app
+    from app.auth import verify_token
+    client, _engine, service = completed_provider
+    assert client.get(GENERATION_PATH).json()["storage_status"] == "STORED"
+    monkeypatch.setattr(service, "get_video_status", lambda _id: pytest.fail("Provider must not be called"))
+    app.dependency_overrides[verify_token] = lambda: {"sub": "other-user"}
+    assert client.get(GENERATION_PATH).status_code == 404
+
+
+@pytest.mark.parametrize("first", ["image", "video"])
+def test_simultaneous_image_and_video_reservations_share_draft_lock(isolated_client, monkeypatch, first):
+    """Model PostgreSQL row-lock scheduling around real reservation SQL.
+
+    SQLite ignores FOR UPDATE. The event hook supplies only that missing lock;
+    both routes, transaction boundaries, and provider-call decisions stay real.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier, Event, Lock
+    from sqlalchemy import event
+    from app import main
+    from app.features.media import generation_service
+    from app.models import Draft
+
+    client, engine = isolated_client
+    create_draft(engine)
+    with Session(engine) as db:
+        db.get(Draft, "draft-1").image_prompt = "Una imagen"
+        db.commit()
+    image_lock = main.require_pending_draft
+    video_lock = generation_service.repository.lock_draft_for_generation
+
+    def identify_image(db, draft_id):
+        db.info["reservation_kind"] = "image"
+        return image_lock(db, draft_id)
+
+    def identify_video(db, **kwargs):
+        db.info["reservation_kind"] = "video"
+        return video_lock(db, **kwargs)
+
+    monkeypatch.setattr(main, "require_pending_draft", identify_image)
+    monkeypatch.setattr(generation_service.repository, "lock_draft_for_generation", identify_video)
+    contenders = Barrier(2)
+    first_acquired = Event()
+    row_lock = Lock()
+    loser_finished = Event()
+    paid_calls = []
+
+    def simulate_row_lock(execution):
+        statement = execution.statement
+        if not execution.is_select or getattr(statement, "_for_update_arg", None) is None:
+            return
+        if not any(getattr(table, "name", None) == "drafts" for table in statement.get_final_froms()):
+            return
+        session = execution.session
+        if session.info.get("held_draft_lock"):
+            return
+        if not session.info.get("visited_reservation"):
+            session.info["visited_reservation"] = True
+            contenders.wait(timeout=5)
+            if session.info["reservation_kind"] != first:
+                assert first_acquired.wait(timeout=5)
+        assert row_lock.acquire(timeout=5)
+        session.info["held_draft_lock"] = True
+        first_acquired.set()
+
+    def release_row_lock(session, transaction):
+        if transaction.parent is None and session.info.pop("held_draft_lock", False):
+            row_lock.release()
+
+    def provider(kind, result):
+        paid_calls.append(kind)
+        assert loser_finished.wait(timeout=5)
+        return result
+
+    monkeypatch.setattr(main, "get_marketing_image_url", lambda *_args, **_kw: "https://storage.test/signed-image")
+    monkeypatch.setattr(main, "generate_marketing_image", lambda **_kw: provider("image", "businesses/business-1/image.png"))
+    monkeypatch.setattr(generation_service, "generate_video", lambda **_kw: provider("video", {"video_id": "concurrent-video"}))
+
+    def request(kind):
+        response = client.post("/drafts/draft-1/generate-image") if kind == "image" else client.post(GENERATION_PATH, json=REQUEST)
+        if response.status_code == 409:
+            loser_finished.set()
+        return response.status_code
+
+    event.listen(Session, "do_orm_execute", simulate_row_lock)
+    event.listen(Session, "after_transaction_end", release_row_lock)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            image = pool.submit(request, "image")
+            video = pool.submit(request, "video")
+            assert sorted([image.result(timeout=10), video.result(timeout=10)]) == [200, 409]
+    finally:
+        event.remove(Session, "do_orm_execute", simulate_row_lock)
+        event.remove(Session, "after_transaction_end", release_row_lock)
+    assert paid_calls == [first]

@@ -311,6 +311,11 @@ def submit_generation(
     if draft.status != "pending":
         raise HTTPException(status_code=409, detail="Only pending drafts can generate videos")
 
+    # Both image and video reservations hold the same draft row lock before
+    # inspecting other media operations. Commit the reservation before HTTP I/O.
+    if draft.image_status == "generating":
+        raise HTTPException(status_code=409, detail="Image generation is already active")
+
     active = repository.active_attempt_for_draft(db, draft_id, lock=True)
     if active is not None:
         if active.user_id != user_id or active.business_id != business_id:
@@ -438,6 +443,10 @@ def get_latest_generation(
     )
     if attempt is None:
         raise HTTPException(status_code=404, detail="No HeyGen generation attempt found")
+    if attempt.status == "COMPLETED" and attempt.storage_status == "STORED":
+        # Private storage is authoritative after completion; provider retention
+        # or outages must not prevent restoring an already saved video.
+        return _response(attempt)
 
     try:
         if not attempt.provider_video_id:

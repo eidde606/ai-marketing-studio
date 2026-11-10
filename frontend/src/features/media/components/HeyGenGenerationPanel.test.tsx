@@ -1,8 +1,10 @@
+import { useDraftActions } from "../../drafts/hooks/useDraftActions";
 import {
   act,
   cleanup,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
 } from "@testing-library/react";
@@ -11,12 +13,23 @@ import { useDraftCollection } from "../../drafts/hooks/useDraftCollection";
 import { useDraftOperations } from "../../drafts/hooks/useDraftOperations";
 import { useHeyGenGeneration } from "../hooks/useHeyGenGeneration";
 import { HeyGenGenerationPanel } from "./HeyGenGenerationPanel";
-import { getDrafts, type Draft } from "../../../services/draftsApi";
+import {
+  getDrafts,
+  updateDraft,
+  rejectDraft,
+  deleteDraft,
+  type Draft,
+} from "../../../services/draftsApi";
 import * as api from "../services/heygenGenerationApi";
 import * as assets from "../services/heygenAssetsApi";
 import { fetchVideoPreview } from "../services/videoApi";
 
-vi.mock("../../../services/draftsApi", () => ({ getDrafts: vi.fn() }));
+vi.mock("../../../services/draftsApi", () => ({
+  getDrafts: vi.fn(),
+  updateDraft: vi.fn(),
+  rejectDraft: vi.fn(),
+  deleteDraft: vi.fn(),
+}));
 vi.mock("../services/heygenGenerationApi", () => ({
   getGeneration: vi.fn(),
   reconcileGeneration: vi.fn(),
@@ -70,9 +83,20 @@ function Workspace({
 }) {
   const collection = useDraftCollection(business, "user");
   const operations = useDraftOperations(business);
+  const actions = useDraftActions(business, collection, operations, vi.fn());
   const controller = useHeyGenGeneration(business, collection, operations);
   return (
     <>
+      <button onClick={() => actions.startEditing(item)}>Editar prueba</button>
+      <button onClick={() => void actions.handleSaveEdit(item.id)}>
+        Guardar prueba
+      </button>
+      <button onClick={() => void actions.handleReject(item.id)}>
+        Rechazar prueba
+      </button>
+      <button onClick={() => void actions.handleDelete(item.id)}>
+        Eliminar prueba
+      </button>
       <span data-testid="locks">{operations.busyDraftIds.join(",")}</span>
       {show && (
         <HeyGenGenerationPanel
@@ -390,4 +414,78 @@ it("blocks generation after a later recovery error even when an earlier lookup w
     screen.getByRole("button", { name: "Generar video con costo" }),
   ).toHaveProperty("disabled", true);
   expect(api.submitGeneration).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["Guardar prueba", updateDraft],
+  ["Rechazar prueba", rejectDraft],
+  ["Eliminar prueba", deleteDraft],
+] as const)(
+  "recovery cannot acquire or clear a pending %s lock",
+  async (label, mutation) => {
+    const pending = deferred<Draft>();
+    vi.mocked(mutation).mockReturnValue(pending.promise);
+    render(<Workspace />);
+    await screen.findByText(/Revisa el guion/);
+    fireEvent.click(screen.getByRole("button", { name: "Editar prueba" }));
+    fireEvent.click(screen.getByRole("button", { name: label }));
+    expect(mutation).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("locks").textContent).toBe(draft.id);
+    fireEvent.click(screen.getByRole("button", { name: /Recuperar estado/ }));
+    await screen.findByText(/Espera a que termine la otra operación/);
+    expect(api.reconcileGeneration).not.toHaveBeenCalled();
+    expect(screen.getByTestId("locks").textContent).toBe(draft.id);
+    await act(async () => pending.resolve(draft));
+    expect(screen.getByTestId("locks").textContent).toBe("");
+    vi.mocked(api.reconcileGeneration).mockResolvedValue({
+      ...job,
+      status: "FAILED",
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Recuperar estado/ }));
+    await screen.findByText(/HeyGen no pudo generar/);
+    await waitFor(() =>
+      expect(screen.getByTestId("locks").textContent).toBe(""),
+    );
+  },
+);
+
+it.each([
+  ["Guardar prueba", updateDraft],
+  ["Rechazar prueba", rejectDraft],
+  ["Eliminar prueba", deleteDraft],
+] as const)(
+  "blocks %s while recovery owns the lock",
+  async (label, mutation) => {
+    const pending = deferred<api.Generation>();
+    vi.mocked(api.reconcileGeneration).mockReturnValue(pending.promise);
+    render(<Workspace />);
+    await screen.findByText(/Revisa el guion/);
+    fireEvent.click(screen.getByRole("button", { name: "Editar prueba" }));
+    fireEvent.click(screen.getByRole("button", { name: /Recuperar estado/ }));
+    expect(screen.getByTestId("locks").textContent).toBe(draft.id);
+    fireEvent.click(screen.getByRole("button", { name: label }));
+    expect(mutation).not.toHaveBeenCalled();
+    await act(async () => pending.resolve({ ...job, status: "FAILED" }));
+    expect(screen.getByTestId("locks").textContent).toBe("");
+  },
+);
+
+it("only releases the matching HeyGen owner and keeps other operation flags separate", () => {
+  const { result } = renderHook(() => useDraftOperations("A"));
+  const owner = Symbol("owner");
+  const other = Symbol("other");
+  act(() => {
+    result.current.setBusyDraftIds([draft.id]);
+    expect(result.current.acquireHeyGenLock(draft.id, owner)).toBe(false);
+  });
+  expect(result.current.busyDraftIds).toEqual([draft.id]);
+  act(() => {
+    result.current.setBusyDraftIds([]);
+    expect(result.current.acquireHeyGenLock(draft.id, owner)).toBe(true);
+    result.current.releaseHeyGenLock(draft.id, other);
+    result.current.setBusyDraftIds([]);
+  });
+  expect(result.current.busyDraftIds).toEqual([draft.id]);
+  act(() => result.current.releaseHeyGenLock(draft.id, owner));
+  expect(result.current.busyDraftIds).toEqual([]);
 });

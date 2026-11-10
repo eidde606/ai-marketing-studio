@@ -1589,6 +1589,17 @@ def generate_draft_image(
         draft_id: str,
         db: Session = Depends(get_db),
 ):
+    # Serialize with HeyGen's draft-row reservation. A predicate on the image
+    # UPDATE alone cannot safely check a concurrently inserted video attempt.
+    draft = require_pending_draft(db, draft_id)
+    if (
+        draft.video_url
+        or draft.video_status in ("pending", "generating", "uploading", "needs_review", "completed")
+        or has_active_generation(db, draft.id)
+        or has_unstored_generation(db, draft.id)
+    ):
+        raise HTTPException(status_code=409, detail="A video or video operation already exists")
+
     generation_id = str(uuid4())
 
     reservation = db.execute(

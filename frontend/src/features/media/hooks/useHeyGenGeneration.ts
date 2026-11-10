@@ -32,7 +32,8 @@ export function useHeyGenGeneration(
   const [states, setStates] = useState<Record<string, State>>({});
   // Workspace lifetime: navigation/recovery must not release an in-flight lock.
   const locks = useRef(new Set<string>());
-  const held = useRef(new Set<string>());
+  const owner = useRef(Symbol("heygen"));
+  const retained = useRef(new Set<string>());
   const submitted = useRef(new Set<string>());
   const key = (id: string) => `${businessId}:${id}`;
   const state = (id: string) => states[key(id)] ?? empty;
@@ -73,6 +74,13 @@ export function useHeyGenGeneration(
       locks.current.has(scopeKey)
     )
       return;
+    // Recovery uses the same exclusive lock as submission, but never owns
+    // edit/reject/delete flags. An existing job may retain its own lock.
+    if (
+      operations.approvingIds.includes(id) ||
+      operations.publishingIds.includes(id)
+    )
+      return;
     if (action === "submit") {
       if (
         operations.imageLocks.current.has(id) ||
@@ -91,7 +99,17 @@ export function useHeyGenGeneration(
         )
       )
         return;
-      submitted.current.add(scopeKey);
+    }
+    if (!operations.acquireHeyGenLock(id, owner.current)) {
+      setStates((current) => ({
+        ...current,
+        [scopeKey]: {
+          ...(current[scopeKey] ?? empty),
+          error:
+            "Espera a que termine la otra operación del borrador antes de recuperar el video.",
+        },
+      }));
+      return;
     }
     locks.current.add(scopeKey);
     setStates((current) => ({
@@ -104,8 +122,8 @@ export function useHeyGenGeneration(
       },
     }));
     if (action === "submit") {
-      held.current.add(scopeKey);
-      operations.setBusyDraftIds((current) => [...current, id]);
+      submitted.current.add(scopeKey);
+      retained.current.add(scopeKey);
     }
     try {
       const job =
@@ -116,20 +134,14 @@ export function useHeyGenGeneration(
             : await getGeneration(businessId, id);
       // Only an authoritative attempt can resolve an ambiguous submission.
       if (job?.status === "FAILED") submitted.current.delete(scopeKey);
-      // Keep conflicting edits locked until the refreshed draft is applied.
-      if (job && !held.current.has(scopeKey)) {
-        held.current.add(scopeKey);
-        operations.setBusyDraftIds((current) => [...current, id]);
-      }
+      // Retain the owned lock for unresolved jobs, including a failed draft
+      // refresh. Terminal recovery releases it only after applying fresh data.
+      if (job) retained.current.add(scopeKey);
       const terminal =
         job?.status === "FAILED" ||
         (job?.status === "COMPLETED" && job.storage_status === "STORED");
       const release = () => {
-        if (terminal && held.current.delete(scopeKey)) {
-          operations.setBusyDraftIds((current) =>
-            current.filter((value) => value !== id),
-          );
-        }
+        if (terminal) retained.current.delete(scopeKey);
       };
       if (!collection.isCurrentBusiness()) {
         release();
@@ -171,6 +183,8 @@ export function useHeyGenGeneration(
         }));
     } finally {
       locks.current.delete(scopeKey);
+      if (!retained.current.has(scopeKey))
+        operations.releaseHeyGenLock(id, owner.current);
       // Clear operation flags even after switching businesses; never apply old data.
       setStates((current) => ({
         ...current,
