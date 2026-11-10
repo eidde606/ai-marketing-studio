@@ -46,6 +46,7 @@ def test_repeated_request_reuses_attempt_and_conflicting_payload_is_rejected(
     isolated_client, monkeypatch,
 ):
     from app.features.media import generation_service
+    from app.models import Draft
 
     client, engine = isolated_client
     create_draft(engine)
@@ -79,6 +80,28 @@ def test_repeated_request_reuses_attempt_and_conflicting_payload_is_rejected(
     assert calls[0]["callback_id"] == attempt.id
     assert calls[0]["aspect_ratio"] == attempt.aspect_ratio
     assert calls[0]["resolution"] == attempt.resolution
+    with Session(engine) as db:
+        saved_draft = db.get(Draft, "draft-1")
+        assert saved_draft.status == "pending"
+        assert saved_draft.published_at is None
+
+
+def test_missing_generation_attempt_is_distinct_from_missing_draft(isolated_client):
+    client, engine = isolated_client
+    create_draft(engine)
+
+    for response in (
+        client.get(GENERATION_PATH),
+        client.post(f"{GENERATION_PATH}/reconcile"),
+    ):
+        assert response.status_code == 404
+        assert response.json()["detail"] == "No HeyGen generation attempt found"
+
+    inaccessible = client.get(
+        "/businesses/another-business/drafts/draft-1/heygen-generation"
+    )
+    assert inaccessible.status_code == 404
+    assert inaccessible.json()["detail"] == "Draft not found"
 
 
 def test_same_request_during_submission_returns_reserved_attempt_without_resubmitting(

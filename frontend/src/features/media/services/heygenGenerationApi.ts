@@ -48,6 +48,8 @@ async function request(
       return null;
     if (response.status === 503)
       throw new Error("HeyGen no está configurado. Contacta al administrador.");
+    if (response.status === 401 || response.status === 403)
+      throw new Error("No tienes autorización para realizar esta acción.");
     if (response.status === 409)
       throw new Error(
         "Este borrador no permite generar otro video. Recupera su estado antes de continuar.",

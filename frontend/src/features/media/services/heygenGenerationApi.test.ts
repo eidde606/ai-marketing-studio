@@ -68,13 +68,56 @@ it("distinguishes no attempt from an inaccessible draft", async () => {
         ),
       )
       .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ detail: "No HeyGen generation attempt found" }),
+          { status: 404 },
+        ),
+      )
+      .mockResolvedValueOnce(
         new Response(JSON.stringify({ detail: "Draft not found" }), {
           status: 404,
         }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ detail: "No HeyGen generation attempt found" }),
+          { status: 404 },
+        ),
       ),
   );
   expect(await getGeneration("business/1", "draft/1")).toBeNull();
+  expect(await reconcileGeneration("business/1", "draft/1")).toBeNull();
   await expect(getGeneration("business/1", "draft/1")).rejects.toThrow();
+  await expect(
+    submitGeneration("business/1", "draft/1", {
+      avatar_id: "look",
+      voice_id: "voice",
+      script: "Guion",
+    }),
+  ).rejects.toThrow();
+});
+it("keeps authorization and unexpected failures visible", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ detail: "Not authorized" }), {
+          status: 403,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ detail: "Internal server error" }), {
+          status: 500,
+        }),
+      ),
+  );
+  await expect(getGeneration("business/1", "draft/1")).rejects.toThrow(
+    "No tienes autorización",
+  );
+  await expect(reconcileGeneration("business/1", "draft/1")).rejects.toThrow(
+    "No se pudo consultar HeyGen",
+  );
 });
 it("reports missing configuration and never retries a failed paid request", async () => {
   const fetchMock = vi

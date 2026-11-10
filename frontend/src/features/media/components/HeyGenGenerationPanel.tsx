@@ -89,37 +89,53 @@ export function HeyGenGenerationPanel({
       className="heygen-editor"
       aria-label="Generación de video con HeyGen"
     >
-      <h3>Crear video con HeyGen</h3>
-      <p role="status">{message}</p>
+      <header className="heygen-editor-header">
+        <h3>Crear video con HeyGen</h3>
+        <p>Configura tu avatar, voz y guion antes de generar el video.</p>
+      </header>
+      <p className="heygen-status" role="status">
+        {message}
+      </p>
       {state.error && <p role="alert">{state.error}</p>}
-      <button
-        type="button"
-        className="text-button"
-        disabled={state.busy}
-        onClick={() => void controller.reconcile(draft)}
-      >
-        {state.busy ? "Consultando..." : "Recuperar estado del video"}
-      </button>
+      {(job || state.uncertain || state.error) && (
+        <button
+          type="button"
+          className="text-button"
+          disabled={state.busy}
+          onClick={() => void controller.reconcile(draft)}
+        >
+          {state.busy ? "Consultando..." : "Recuperar estado del video"}
+        </button>
+      )}
       {(!job || job.status === "FAILED") && !state.uncertain && (
         <>
-          <fieldset disabled={state.busy || !controller.canGenerate(draft)}>
+          <fieldset className="heygen-inputs" disabled={state.busy}>
             <HeyGenAssetSelector onSelection={setSelection} />
-            <label htmlFor={scriptId}>Guion del video</label>
-            <textarea
-              id={scriptId}
-              value={script}
-              maxLength={5000}
-              rows={6}
-              onChange={(event) => setScript(event.target.value)}
-            />
+            <div className="heygen-field">
+              <label htmlFor={scriptId}>Guion del video</label>
+              <textarea
+                id={scriptId}
+                className="heygen-script-textarea"
+                aria-describedby={`${scriptId}-help`}
+                value={script}
+                maxLength={5000}
+                rows={8}
+                onChange={(event) => setScript(event.target.value)}
+              />
+              <small id={`${scriptId}-help`}>
+                Hasta 5.000 caracteres. El texto se conserva tal como lo
+                escribas.
+              </small>
+            </div>
           </fieldset>
-          <p>
+          <p className="heygen-generation-notice">
             Video vertical · 1080p. HeyGen consume créditos de API. El costo
             exacto no está disponible aquí.
           </p>
           <button
             className="primary-button"
             type="button"
+            aria-describedby={`${scriptId}-generation-help`}
             disabled={
               !controller.canGenerate(draft) || !selection || !script.trim()
             }
@@ -128,8 +144,12 @@ export function HeyGenGenerationPanel({
                 void controller.generate(draft, { ...selection, script });
             }}
           >
-            Generar video con costo
+            Generar video con HeyGen
           </button>
+          <small id={`${scriptId}-generation-help`}>
+            Selecciona un avatar y una voz, y confirma antes de enviar la
+            solicitud pagada.
+          </small>
         </>
       )}
       {stored && (
@@ -150,7 +170,7 @@ export function HeyGenGenerationPanel({
               controls
               playsInline
               preload="metadata"
-              style={{ width: "100%", maxWidth: 420 }}
+              className="heygen-video-preview"
               onError={() => {
                 setPreview(null);
                 setPreviewError(
@@ -162,7 +182,9 @@ export function HeyGenGenerationPanel({
           {previewError && <p role="alert">{previewError}</p>}
         </>
       )}
-      <p>Generar un video no aprueba ni publica este contenido.</p>
+      <p className="heygen-approval-notice">
+        Generar un video no aprueba ni publica este contenido.
+      </p>
     </section>
   );
 }

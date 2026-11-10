@@ -2109,6 +2109,9 @@ h1 {
     display: flex;
     flex-direction: column;
     gap: 1.25rem;
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
     margin-top: 1rem;
     padding: 1.25rem;
     background: #ffffff;
@@ -2130,6 +2133,48 @@ h1 {
     line-height: 1.5;
 }
 
+.heygen-editor > * {
+    min-width: 0;
+}
+
+.heygen-editor .heygen-status,
+.heygen-editor .heygen-generation-notice,
+.heygen-editor .heygen-approval-notice {
+    margin: 0;
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+}
+
+.heygen-editor .heygen-inputs {
+    display: grid;
+    gap: 1rem;
+    width: 100%;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+
+.heygen-editor .heygen-assets {
+    display: grid;
+    gap: 0.875rem;
+    min-width: 0;
+    padding: 1rem;
+    border: 1px solid #e9ddff;
+    border-radius: 12px;
+}
+
+.heygen-assets h3,
+.heygen-assets p,
+.heygen-asset-error p {
+    margin: 0;
+}
+
+.heygen-editor .heygen-field {
+    width: 100%;
+    min-width: 0;
+}
+
 .heygen-field {
     display: flex;
     flex-direction: column;
@@ -2145,7 +2190,9 @@ h1 {
 
 .heygen-field select,
 .heygen-field textarea {
+    display: block;
     width: 100%;
+    min-width: 0;
     box-sizing: border-box;
     padding: 0.75rem 0.875rem;
     border: 1px solid #ddd4ed;
@@ -2158,8 +2205,52 @@ h1 {
 
 .heygen-field textarea {
     resize: vertical;
-    min-height: 140px;
+    min-height: 180px;
     line-height: 1.6;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+}
+
+.heygen-editor .heygen-generation-notice {
+    padding: 0.875rem 1rem;
+    border: 1px solid #e9ddff;
+    border-radius: 10px;
+    background: #faf7ff;
+}
+
+.heygen-editor button {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.heygen-editor small {
+    color: #716780;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.heygen-editor .heygen-video-preview {
+    display: block;
+    width: 100%;
+    max-width: 420px;
+    border-radius: 12px;
+}
+
+.heygen-asset-error {
+    display: grid;
+    gap: 0.5rem;
+}
+
+@media (max-width: 600px) {
+    .heygen-editor {
+        gap: 1rem;
+        padding: 1rem;
+    }
+
+    .heygen-editor .heygen-assets {
+        padding: 0.75rem;
+    }
 }
 
 .heygen-field select:focus,

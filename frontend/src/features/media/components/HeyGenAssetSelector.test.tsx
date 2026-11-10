@@ -52,7 +52,7 @@ it("loads and displays avatar metadata and selectable voices", async () => {
 
   await screen.findByRole("option", { name: /Avatar de prueba/ });
   await screen.findByRole("option", { name: /Voz de prueba/ });
-  fireEvent.change(screen.getByLabelText("Avatar o avatar de foto"), {
+  fireEvent.change(screen.getByLabelText("Avatar"), {
     target: { value: "look-1" },
   });
 
@@ -210,4 +210,73 @@ it("switches between private and public voice lists and reports failures", async
   await screen.findByRole("option", { name: /Voz pública/ });
 
   expect(getHeyGenVoiceAssets).toHaveBeenLastCalledWith({ type: "public" });
+});
+
+it("offers retry after an avatar catalog failure", async () => {
+  vi.mocked(getHeyGenAvatarAssets)
+    .mockRejectedValueOnce(
+      new Error("No se pudieron cargar los recursos de HeyGen (502)."),
+    )
+    .mockResolvedValueOnce({
+      data: [{
+        id: "look-retry",
+        name: "Avatar recuperado",
+        avatar_type: "digital_twin",
+        default_voice_id: null,
+        supported_api_engines: ["avatar_iv"],
+        preview_image_url: null,
+        preview_video_url: null,
+        group_id: null,
+        gender: null,
+        tags: [],
+        status: "completed",
+      }],
+      has_more: false,
+      next_token: null,
+    });
+  vi.mocked(getHeyGenVoiceAssets).mockResolvedValue({
+    data: [],
+    has_more: false,
+    next_token: null,
+  });
+
+  render(<HeyGenAssetSelector />);
+  fireEvent.click(screen.getByRole("button", { name: /Explorar avatares/ }));
+  expect(await screen.findByRole("alert")).toBeTruthy();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Reintentar carga de avatares" }),
+  );
+  await screen.findByRole("option", { name: /Avatar recuperado/ });
+  expect(getHeyGenAvatarAssets).toHaveBeenCalledTimes(2);
+});
+
+it("offers retry after a voice catalog failure", async () => {
+  vi.mocked(getHeyGenAvatarAssets).mockResolvedValue({
+    data: [],
+    has_more: false,
+    next_token: null,
+  });
+  vi.mocked(getHeyGenVoiceAssets)
+    .mockRejectedValueOnce(new Error("No se pudieron cargar las voces."))
+    .mockResolvedValueOnce({
+      data: [{
+        voice_id: "voice-retry",
+        name: "Voz recuperada",
+        language: "es",
+        status: "ACTIVE",
+        mode: null,
+        preview_audio_url: null,
+      }],
+      has_more: false,
+      next_token: null,
+    });
+
+  render(<HeyGenAssetSelector />);
+  fireEvent.click(screen.getByRole("button", { name: /Explorar avatares/ }));
+  expect(await screen.findByText("No se pudieron cargar las voces.")).toBeTruthy();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Reintentar carga de voces" }),
+  );
+  await screen.findByRole("option", { name: /Voz recuperada/ });
+  expect(getHeyGenVoiceAssets).toHaveBeenCalledTimes(2);
 });
