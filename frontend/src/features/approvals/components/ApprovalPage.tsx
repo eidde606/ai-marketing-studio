@@ -7,6 +7,8 @@ import { useApprovalMedia } from "../../media/hooks/useApprovalMedia";
 import type { ApprovalPageProps } from "../types/ApprovalPageProps";
 
 const ApprovalPage: FC<ApprovalPageProps> = ({
+  heygen,
+  businessId,
   handleDelete,
   deletingIds,
   draftDestinations,
@@ -76,7 +78,7 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
         {!loadingDrafts &&
           !loadError &&
           visibleDrafts.map((draft) => (
-            <div className="approval-card" key={draft.id}>
+            <div className="approval-card" key={`${businessId}:${draft.id}`}>
               <div className="approval-card-top">
                 <span className="channel-tag">{draft.platform}</span>
                 <time>{formatDraftDate(draft.created_at)}</time>
@@ -101,6 +103,7 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
               )}
 
               <DraftMediaPanel
+                heygen={heygen}
                 draft={draft}
                 imageUrls={imageUrls}
                 imageErrors={imageErrors}
@@ -316,7 +319,7 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                       revisions={revisions}
                       imageUrls={imageUrls}
                       handlePreviewImage={handlePreviewImage}
-                      revisionBusyIds={revisionBusyIds}
+                      revisionBusyIds={[...revisionBusyIds, ...busyDraftIds]}
                       handleDecideRevision={handleDecideRevision}
                       imageInstructions={imageInstructions}
                       updateImageInstructions={updateImageInstructions}

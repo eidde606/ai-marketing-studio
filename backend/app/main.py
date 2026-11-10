@@ -20,13 +20,17 @@ from sqlalchemy.orm import Session
 import logging
 
 from app.campaign_routes import router as campaign_router
+from app.features.media.routes import router as media_router
+from app.features.media.routes import webhook_router as heygen_webhook_router
+from app.features.media.generation_service import (
+    has_active_generation,
+    has_unstored_generation,
+)
 from app.auth import verify_token
 from app.database import get_db
 from app.models import Business, Draft, ImageRevision, SocialAccount
 from app.token_service import decrypt_token
 from app.ai_service import generate_marketing_content
-from app.heygen_service import get_available_avatar_looks
-from app.heygen_service import generate_video, get_video_status, get_available_voices
 from app.image_service import (
     generate_marketing_image,
     edit_marketing_image,
@@ -76,12 +80,6 @@ logger = logging.getLogger(__name__)
 # --------------------------------------------------
 # Request Models
 # --------------------------------------------------
-
-
-class HeyGenVideoRequest(BaseModel):
-    avatar_id: str = Field(min_length=1)
-    voice_id: str = Field(min_length=1)
-    script: str = Field(min_length=1, max_length=5000)
 
 
 class SofiaChatRequest(BaseModel):
@@ -1126,15 +1124,6 @@ def generate_content(
     return draft
 
 
-@protected.post("/heygen/videos")
-def create_heygen_video(request: HeyGenVideoRequest):
-    return generate_video(
-        avatar_id=request.avatar_id,
-        voice_id=request.voice_id,
-        script=request.script,
-    )
-
-
 @protected.post("/drafts/{draft_id}/upload-video")
 def upload_draft_video(
         draft_id: str,
@@ -1143,7 +1132,11 @@ def upload_draft_video(
 ):
     draft = require_pending_draft(db, draft_id)
 
-    if draft.video_status in ("generating", "completed", "uploading"):
+    if (
+        draft.video_status in ("generating", "completed", "uploading")
+        or has_active_generation(db, draft.id)
+        or has_unstored_generation(db, draft.id)
+    ):
         raise HTTPException(
             status_code=409,
             detail="This draft already has a video or an active video operation",
@@ -1191,64 +1184,6 @@ def upload_draft_video(
     }
 
 
-@protected.post("/drafts/{draft_id}/generate-video")
-def generate_draft_video(
-        draft_id: str,
-        request: HeyGenVideoRequest,
-        db: Session = Depends(get_db),
-):
-    # Prevent concurrent generation requests for this Draft.
-    lock_draft_revisions(db, draft_id)
-
-    draft = require_pending_draft(db, draft_id)
-
-    if draft.video_status in ("pending", "generating", "completed"):
-        raise HTTPException(
-            status_code=409,
-            detail="Video generation already started or completed",
-        )
-
-    # Reserve the Draft before calling HeyGen.
-    draft.media_type = "video"
-    draft.video_status = "generating"
-    draft.video_generation_id = None
-    db.commit()
-
-    try:
-        job = generate_video(
-            avatar_id=request.avatar_id,
-            voice_id=request.voice_id,
-            script=request.script,
-        )
-
-        video_id = job.get("video_id")
-
-        if not video_id:
-            raise ValueError("HeyGen did not return a video ID")
-
-        draft.video_generation_id = video_id
-        db.commit()
-
-        return {
-            "draft_id": draft.id,
-            "video_id": video_id,
-            "status": "generating",
-        }
-
-    except Exception:
-        db.rollback()
-        draft.video_status = "needs_review"
-        db.commit()
-        logger.exception(
-            "Unable to start HeyGen video generation for draft %s",
-            draft_id,
-        )
-        raise HTTPException(
-            status_code=502,
-            detail="Unable to start video generation; review before retrying",
-        )
-
-
 @protected.get("/drafts/{draft_id}/video-preview")
 def get_draft_video_preview(
         draft_id: str,
@@ -1286,16 +1221,6 @@ def get_draft_video_preview(
         "draft_id": draft.id,
         "video_url": signed_url,
     }
-
-
-@protected.get("/heygen/videos/{video_id}")
-def check_heygen_video(video_id: str):
-    return get_video_status(video_id)
-
-
-@protected.get("/heygen/voices")
-def list_heygen_voices():
-    return get_available_voices()
 
 
 @protected.get("/businesses/{business_id}/sofia/conversations")
@@ -1664,6 +1589,17 @@ def generate_draft_image(
         draft_id: str,
         db: Session = Depends(get_db),
 ):
+    # Serialize with HeyGen's draft-row reservation. A predicate on the image
+    # UPDATE alone cannot safely check a concurrently inserted video attempt.
+    draft = require_pending_draft(db, draft_id)
+    if (
+        draft.video_url
+        or draft.video_status in ("pending", "generating", "uploading", "needs_review", "completed")
+        or has_active_generation(db, draft.id)
+        or has_unstored_generation(db, draft.id)
+    ):
+        raise HTTPException(status_code=409, detail="A video or video operation already exists")
+
     generation_id = str(uuid4())
 
     reservation = db.execute(
@@ -2302,30 +2238,14 @@ async def test_facebook_reach(
         ) from exc
 
 
-@protected.get("/heygen/avatars")
-def list_heygen_avatars():
-    try:
-        return get_available_avatar_looks()
-
-    except httpx.HTTPStatusError:
-        raise HTTPException(
-            status_code=502,
-            detail="Unable to retrieve HeyGen avatars",
-        )
-
-    except httpx.RequestError:
-        raise HTTPException(
-            status_code=502,
-            detail="HeyGen connection failed",
-        )
-
-
 # --------------------------------------------------
 # Register Protected Endpoints
 # --------------------------------------------------
 
 app.include_router(protected)
 app.include_router(campaign_router)
+app.include_router(media_router)
+app.include_router(heygen_webhook_router)
 app.include_router(facebook_auth_router)
 
 app.include_router(tiktok_auth_router)

@@ -1,7 +1,10 @@
 import type { Dispatch, SetStateAction, ReactNode } from "react";
 import type { Draft, ImageRevision } from "../../../services/draftsApi";
 
+import type { HeyGenController } from "../../media/hooks/useHeyGenGeneration";
+
 export type ApprovalPageProps = {
+  heygen?: HeyGenController;
   handleDelete: (id: string) => Promise<void>;
   deletingIds: string[];
   businessId: string;
