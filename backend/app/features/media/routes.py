@@ -1,15 +1,20 @@
 """Authenticated HeyGen asset endpoints."""
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
 
 from app.auth import verify_token
+from app.database import get_db
 from app.heygen_service import HeyGenConfigurationError
 from . import service
+from . import generation_service
 from .schemas import (
     AvatarLook,
     AvatarLookPage,
     AvatarOwnership,
     AvatarType,
+    HeyGenGenerationRequest,
+    HeyGenGenerationResponse,
     HeyGenVoice,
     HeyGenVoicePage,
     VoiceType,
@@ -88,3 +93,41 @@ def list_voice_assets(
         )
     except (httpx.HTTPError, HeyGenConfigurationError, ValueError) as exc:
         _raise_provider_error(exc)
+
+
+@router.post(
+    "/businesses/{business_id}/drafts/{draft_id}/heygen-generation",
+    response_model=HeyGenGenerationResponse,
+)
+def submit_video_generation(
+    business_id: str,
+    draft_id: str,
+    request: HeyGenGenerationRequest,
+    user: dict = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
+    return generation_service.submit_generation(
+        db,
+        user_id=user["sub"],
+        business_id=business_id,
+        draft_id=draft_id,
+        request=request,
+    )
+
+
+@router.get(
+    "/businesses/{business_id}/drafts/{draft_id}/heygen-generation",
+    response_model=HeyGenGenerationResponse,
+)
+def get_video_generation_status(
+    business_id: str,
+    draft_id: str,
+    user: dict = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
+    return generation_service.get_latest_generation(
+        db,
+        user_id=user["sub"],
+        business_id=business_id,
+        draft_id=draft_id,
+    )

@@ -1,4 +1,5 @@
 """HeyGen asset selection response shapes."""
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -7,6 +8,7 @@ from pydantic import BaseModel, Field
 AvatarType = Literal["studio_avatar", "digital_twin", "photo_avatar"]
 AvatarOwnership = Literal["private", "public"]
 VoiceType = Literal["private", "public"]
+GenerationStatus = Literal["SUBMITTING", "UNKNOWN", "PROCESSING", "COMPLETED", "FAILED"]
 
 
 class AvatarLook(BaseModel):
@@ -42,3 +44,19 @@ class HeyGenVoicePage(BaseModel):
     data: list[HeyGenVoice]
     has_more: bool = False
     next_token: str | None = None
+
+
+class HeyGenGenerationRequest(BaseModel):
+    avatar_id: str = Field(min_length=1)
+    voice_id: str = Field(min_length=1)
+    script: str = Field(min_length=1, max_length=5000)
+
+
+class HeyGenGenerationResponse(BaseModel):
+    attempt_id: str
+    draft_id: str
+    business_id: str
+    status: GenerationStatus
+    provider_video_id: str | None = None
+    created_at: datetime
+    updated_at: datetime

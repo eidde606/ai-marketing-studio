@@ -78,19 +78,53 @@ def get_available_avatar_looks() -> list:
     return list_avatar_looks()["data"]
 
 
-def generate_video(avatar_id: str, voice_id: str, script: str) -> dict:
-    headers = {
-        "X-Api-Key": os.environ["HEYGEN_API_KEY"],
-        "Content-Type": "application/json",
-    }
+class HeyGenProviderError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        code: str | None = None,
+    ):
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
 
+
+class HeyGenRequestInProgress(HeyGenProviderError):
+    pass
+
+
+def _error_code(response: httpx.Response) -> str | None:
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    error = body.get("error") if isinstance(body, dict) else None
+    return error.get("code") if isinstance(error, dict) else None
+
+
+def generate_video(
+    avatar_id: str,
+    voice_id: str,
+    script: str,
+    *,
+    idempotency_key: str,
+    aspect_ratio: str = "9:16",
+    resolution: str = "1080p",
+) -> dict:
+    headers = {
+        **_heygen_headers(),
+        "Content-Type": "application/json",
+        "Idempotency-Key": idempotency_key,
+    }
     payload = {
         "type": "avatar",
         "avatar_id": avatar_id,
         "script": script,
         "voice_id": voice_id,
-        "aspect_ratio": "9:16",
-        "resolution": "1080p",
+        "aspect_ratio": aspect_ratio,
+        "resolution": resolution,
     }
 
     with httpx.Client(timeout=30.0) as client:
@@ -100,33 +134,54 @@ def generate_video(avatar_id: str, voice_id: str, script: str) -> dict:
             json=payload,
         )
 
-        if response.is_error:
-            print("HeyGen error:", response.status_code, response.text)
+        if response.status_code == 409:
+            raise HeyGenRequestInProgress(
+                "HeyGen is still processing this idempotent request.",
+                status_code=409,
+                code=_error_code(response) or "request_in_progress",
+            )
 
-        response.raise_for_status()
+        if response.is_error:
+            raise HeyGenProviderError(
+                "HeyGen rejected the video generation request.",
+                status_code=response.status_code,
+                code=_error_code(response),
+            )
         result = response.json()
 
+    if not isinstance(result, dict):
+        raise ValueError("HeyGen returned an invalid generation response.")
     if result.get("error"):
-        raise ValueError(str(result["error"]))
+        error = result["error"]
+        raise HeyGenProviderError(
+            "HeyGen rejected the video generation request.",
+            code=error.get("code") if isinstance(error, dict) else None,
+        )
 
-    return result.get("data", result)
+    data = result.get("data")
+    if not isinstance(data, dict):
+        raise ValueError("HeyGen returned an invalid generation response.")
+    return data
 
 
 def get_video_status(video_id: str) -> dict:
-    headers = {"X-Api-Key": os.environ["HEYGEN_API_KEY"]}
-
     with httpx.Client(timeout=30.0) as client:
         response = client.get(
             f"{HEYGEN_API_URL}/v3/videos/{video_id}",
-            headers=headers,
+            headers=_heygen_headers(),
         )
         response.raise_for_status()
         result = response.json()
 
+    if not isinstance(result, dict):
+        raise ValueError("HeyGen returned an invalid status response.")
     if result.get("error"):
         raise ValueError(str(result["error"]))
 
-    return result["data"]
+    data = result.get("data")
+    if not isinstance(data, dict):
+        raise ValueError("HeyGen returned an invalid status response.")
+    return data
 
 
 def download_generated_video(video_url: str) -> bytes:
