@@ -1,12 +1,20 @@
 import os
-
+import time
+from urllib.parse import urljoin, urlparse
 import httpx
 from dotenv import load_dotenv
-from urllib.parse import urlparse
 
 load_dotenv(".env")
 
 HEYGEN_API_URL = "https://api.heygen.com"
+HEYGEN_VIDEO_HOSTS = frozenset({
+    "files.heygen.ai",
+    "resource.heygen.ai",
+    "files2.heygen.ai",
+    "resource2.heygen.ai",
+})
+MAX_GENERATED_VIDEO_SIZE = 100 * 1024 * 1024
+MAX_GENERATED_VIDEO_DOWNLOAD_SECONDS = 300
 
 
 class HeyGenConfigurationError(RuntimeError):
@@ -110,6 +118,7 @@ def generate_video(
     script: str,
     *,
     idempotency_key: str,
+    callback_id: str | None = None,
     aspect_ratio: str = "9:16",
     resolution: str = "1080p",
 ) -> dict:
@@ -126,6 +135,8 @@ def generate_video(
         "aspect_ratio": aspect_ratio,
         "resolution": resolution,
     }
+    if callback_id is not None:
+        payload["callback_id"] = callback_id
 
     with httpx.Client(timeout=30.0) as client:
         response = client.post(
@@ -185,39 +196,57 @@ def get_video_status(video_id: str) -> dict:
 
 
 def download_generated_video(video_url: str) -> bytes:
-    """Download a completed HeyGen video with basic URL and size checks."""
+    """Download a HeyGen MP4 without following untrusted redirects."""
 
-    parsed = urlparse(video_url)
+    def validate_url(url: str) -> None:
+        parsed = urlparse(url)
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname not in HEYGEN_VIDEO_HOSTS
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.port not in (None, 443)
+        ):
+            raise ValueError("Untrusted HeyGen video URL.")
 
-    if parsed.scheme != "https" or not parsed.hostname:
-        raise ValueError("Invalid video download URL.")
+    current_url = video_url
+    deadline = time.monotonic() + MAX_GENERATED_VIDEO_DOWNLOAD_SECONDS
+    timeout = httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0)
+    with httpx.Client(timeout=timeout, follow_redirects=False) as client:
+        for redirect_count in range(4):
+            if time.monotonic() >= deadline:
+                raise ValueError("Video download exceeded the time limit.")
+            validate_url(current_url)
+            with client.stream("GET", current_url) as response:
+                if response.is_redirect:
+                    location = response.headers.get("location")
+                    if not location or redirect_count == 3:
+                        raise ValueError("Invalid or excessive video redirects.")
+                    current_url = urljoin(current_url, location)
+                    continue
 
-    # Only allow HeyGen's documented video delivery hosts.
-    allowed_hosts = {
-        "resource2.heygen.ai",
-        "files2.heygen.ai",
-    }
+                response.raise_for_status()
+                content_length = response.headers.get("content-length")
+                if content_length:
+                    try:
+                        declared_size = int(content_length)
+                    except ValueError as exc:
+                        raise ValueError("Invalid video content length.") from exc
+                    if declared_size > MAX_GENERATED_VIDEO_SIZE:
+                        raise ValueError("Video exceeds the 100 MB limit.")
 
-    if parsed.hostname not in allowed_hosts:
-        raise ValueError("Untrusted HeyGen video URL.")
+                chunks = []
+                total_size = 0
+                for chunk in response.iter_bytes():
+                    if time.monotonic() >= deadline:
+                        raise ValueError("Video download exceeded the time limit.")
+                    total_size += len(chunk)
+                    if total_size > MAX_GENERATED_VIDEO_SIZE:
+                        raise ValueError("Video exceeds the 100 MB limit.")
+                    chunks.append(chunk)
+                return b"".join(chunks)
 
-    max_size = 100 * 1024 * 1024
-    chunks = []
-    total_size = 0
-
-    with httpx.Client(timeout=120.0, follow_redirects=False) as client:
-        with client.stream("GET", video_url) as response:
-            response.raise_for_status()
-
-            for chunk in response.iter_bytes():
-                total_size += len(chunk)
-
-                if total_size > max_size:
-                    raise ValueError("Video exceeds the 100 MB limit.")
-
-                chunks.append(chunk)
-
-    return b"".join(chunks)
+    raise ValueError("Unable to download HeyGen video.")
 
 
 def get_available_voices() -> list:

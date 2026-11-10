@@ -245,9 +245,17 @@ class HeyGenGenerationAttempt(Base):
             "status IN ('SUBMITTING', 'UNKNOWN', 'PROCESSING', 'COMPLETED', 'FAILED')",
             name="ck_heygen_generation_attempts_status",
         ),
+        CheckConstraint(
+            "storage_status IN ('PENDING', 'PROCESSING', 'RETRY', 'STORED', 'FAILED')",
+            name="ck_heygen_generation_attempts_storage_status",
+        ),
         UniqueConstraint(
             "idempotency_key",
             name="uq_heygen_generation_attempts_idempotency_key",
+        ),
+        UniqueConstraint(
+            "provider_video_id",
+            name="uq_heygen_generation_attempts_provider_video_id",
         ),
         Index(
             "uq_heygen_generation_attempts_active_draft",
@@ -279,6 +287,13 @@ class HeyGenGenerationAttempt(Base):
     resolution: Mapped[str] = mapped_column(String(20), nullable=False)
     provider_video_id: Mapped[str | None] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False)
+    storage_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="PENDING", server_default="PENDING",
+    )
+    storage_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    completion_lease_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
     first_submitted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False,
     )
@@ -291,6 +306,24 @@ class HeyGenGenerationAttempt(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False,
     )
+
+
+class HeyGenWebhookDelivery(Base):
+    __tablename__ = "heygen_webhook_deliveries"
+    __table_args__ = (
+        UniqueConstraint(
+            "deduplication_key",
+            name="uq_heygen_webhook_deliveries_deduplication_key",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    deduplication_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    provider_video_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    callback_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ImageRevision(Base):

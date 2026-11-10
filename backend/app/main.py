@@ -21,7 +21,11 @@ import logging
 
 from app.campaign_routes import router as campaign_router
 from app.features.media.routes import router as media_router
-from app.features.media.generation_service import has_active_generation
+from app.features.media.routes import webhook_router as heygen_webhook_router
+from app.features.media.generation_service import (
+    has_active_generation,
+    has_unstored_generation,
+)
 from app.auth import verify_token
 from app.database import get_db
 from app.models import Business, Draft, ImageRevision, SocialAccount
@@ -1131,6 +1135,7 @@ def upload_draft_video(
     if (
         draft.video_status in ("generating", "completed", "uploading")
         or has_active_generation(db, draft.id)
+        or has_unstored_generation(db, draft.id)
     ):
         raise HTTPException(
             status_code=409,
@@ -2229,6 +2234,7 @@ async def test_facebook_reach(
 app.include_router(protected)
 app.include_router(campaign_router)
 app.include_router(media_router)
+app.include_router(heygen_webhook_router)
 app.include_router(facebook_auth_router)
 
 app.include_router(tiktok_auth_router)

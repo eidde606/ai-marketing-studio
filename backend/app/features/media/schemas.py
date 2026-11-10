@@ -58,5 +58,6 @@ class HeyGenGenerationResponse(BaseModel):
     business_id: str
     status: GenerationStatus
     provider_video_id: str | None = None
+    storage_status: Literal["PENDING", "PROCESSING", "RETRY", "STORED", "FAILED"]
     created_at: datetime
     updated_at: datetime

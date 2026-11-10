@@ -1,7 +1,9 @@
 """Durable, idempotent submission and tracking for HeyGen video jobs."""
 import hashlib
+import hmac
 import json
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -15,10 +17,12 @@ from app.heygen_service import (
     HeyGenConfigurationError,
     HeyGenProviderError,
     HeyGenRequestInProgress,
+    download_generated_video,
     generate_video,
     get_video_status,
 )
-from app.models import Draft, HeyGenGenerationAttempt
+from app.models import Draft, HeyGenGenerationAttempt, HeyGenWebhookDelivery
+from app.storage_service import upload_marketing_video
 
 from . import repository
 from .schemas import HeyGenGenerationRequest
@@ -28,13 +32,18 @@ logger = logging.getLogger(__name__)
 # Leave an hour of margin for provider/network timing within its 24-hour window.
 IDEMPOTENCY_RETRY_WINDOW = timedelta(hours=23)
 SUBMISSION_LEASE = timedelta(seconds=60)
+COMPLETION_LEASE = timedelta(minutes=5)
 GENERATION_ASPECT_RATIO = "9:16"
 GENERATION_RESOLUTION = "1080p"
 DEFINITIVE_REJECTION_STATUSES = frozenset({400, 401, 403, 404, 422})
 
 ALLOWED_STATUS_TRANSITIONS = {
-    "SUBMITTING": frozenset({"SUBMITTING", "UNKNOWN", "PROCESSING", "FAILED"}),
-    "UNKNOWN": frozenset({"UNKNOWN", "SUBMITTING", "PROCESSING", "FAILED"}),
+    "SUBMITTING": frozenset(
+        {"SUBMITTING", "UNKNOWN", "PROCESSING", "COMPLETED", "FAILED"}
+    ),
+    "UNKNOWN": frozenset(
+        {"UNKNOWN", "SUBMITTING", "PROCESSING", "COMPLETED", "FAILED"}
+    ),
     "PROCESSING": frozenset({"PROCESSING", "COMPLETED", "FAILED"}),
     "COMPLETED": frozenset({"COMPLETED"}),
     "FAILED": frozenset({"FAILED"}),
@@ -71,9 +80,34 @@ def _response(attempt: HeyGenGenerationAttempt) -> dict:
         "business_id": attempt.business_id,
         "status": attempt.status,
         "provider_video_id": attempt.provider_video_id,
+        "storage_status": attempt.storage_status,
         "created_at": attempt.created_at,
         "updated_at": attempt.updated_at,
     }
+
+
+def _can_attach_video(
+    db: Session, draft: Draft | None, attempt: HeyGenGenerationAttempt,
+) -> bool:
+    latest = repository.latest_attempt(db, attempt.draft_id)
+    return bool(
+        draft is not None
+        and draft.business_id == attempt.business_id
+        and draft.deleted_at is None
+        and draft.status == "pending"
+        and draft.published_at is None
+        and draft.facebook_publish_status == "not_published"
+        and draft.tiktok_publish_status == "not_published"
+        and not draft.facebook_post_id
+        and not draft.tiktok_publish_id
+        and draft.image_status != "generating"
+        and draft.media_type == "video"
+        and draft.video_url is None
+        and draft.video_status in ("generating", "needs_review", "uploading")
+        and draft.video_generation_id == attempt.provider_video_id
+        and latest is not None
+        and latest.id == attempt.id
+    )
 
 
 def _update_attempt(
@@ -87,6 +121,7 @@ def _update_attempt(
     expected_updated_at: datetime | None = None,
     expected_lease_until: datetime | None = None,
 ) -> HeyGenGenerationAttempt:
+    draft = repository.lock_draft_for_attempt(db, attempt_id)
     attempt = db.scalar(
         select(HeyGenGenerationAttempt)
         .where(HeyGenGenerationAttempt.id == attempt_id)
@@ -114,15 +149,19 @@ def _update_attempt(
     if status not in ALLOWED_STATUS_TRANSITIONS[attempt.status]:
         return attempt
 
+    can_attach = _can_attach_video(db, draft, attempt)
     attempt.status = status
     if provider_video_id is not None:
         attempt.provider_video_id = provider_video_id
     attempt.submission_lease_until = lease_until
     attempt.updated_at = _now()
 
-    draft = db.get(Draft, attempt.draft_id)
-    if draft is None:
-        raise RuntimeError("Draft for HeyGen generation attempt disappeared.")
+    # Tracking may finish after a draft becomes ineligible; never restore
+    # that draft's generation association or media state.
+    if not can_attach:
+        db.commit()
+        db.refresh(attempt)
+        return attempt
     if status in ("SUBMITTING", "PROCESSING"):
         draft.media_type = "video"
         draft.video_status = "generating"
@@ -135,11 +174,14 @@ def _update_attempt(
             draft.video_generation_id = attempt.provider_video_id
     elif status == "COMPLETED":
         draft.media_type = "video"
-        draft.video_status = "needs_review"
+        draft.video_status = (
+            "completed" if attempt.storage_status == "STORED" else "uploading"
+        )
         draft.video_generation_id = attempt.provider_video_id
     elif status == "FAILED":
         draft.video_status = "failed"
         draft.video_generation_id = None
+        attempt.storage_status = "FAILED"
 
     db.commit()
     db.refresh(attempt)
@@ -176,6 +218,7 @@ def _submit_provider_request(
             voice_id=attempt.voice_id,
             script=attempt.script,
             idempotency_key=attempt.idempotency_key,
+            callback_id=attempt.id,
             aspect_ratio=attempt.aspect_ratio,
             resolution=attempt.resolution,
         )
@@ -395,18 +438,205 @@ def get_latest_generation(
     )
     if attempt is None:
         raise HTTPException(status_code=404, detail="No HeyGen generation attempt found")
-    if not attempt.provider_video_id:
-        return _response(attempt)
 
     try:
-        provider_status = get_video_status(attempt.provider_video_id)
+        if not attempt.provider_video_id:
+            delivery = repository.pending_webhook_delivery_for_attempt(db, attempt.id)
+            if delivery is not None:
+                attempt = _reconcile_webhook_delivery(db, delivery) or attempt
+                return _response(attempt)
+            return _response(attempt)
+        attempt = refresh_attempt_status(db, attempt)
+    except CompletionProcessingError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="HeyGen video completion could not be stored; retry reconciliation",
+        ) from exc
     except (httpx.HTTPError, HeyGenConfigurationError, ValueError) as exc:
         raise HTTPException(
             status_code=502,
             detail="HeyGen status is temporarily unavailable; the saved attempt is unchanged",
         ) from exc
 
-    status = str(provider_status.get("status", "")).lower()
+    return _response(attempt)
+
+
+class CompletionProcessingError(RuntimeError):
+    pass
+
+
+def _validate_provider_video(attempt: HeyGenGenerationAttempt, resource: dict) -> str:
+    provider_id = resource.get("id") or resource.get("video_id")
+    if not provider_id or provider_id != attempt.provider_video_id:
+        raise ValueError("HeyGen returned a different video resource.")
+    if str(resource.get("status", "")).lower() != "completed":
+        raise ValueError("HeyGen video is not completed.")
+    video_url = resource.get("video_url")
+    if not isinstance(video_url, str) or not video_url:
+        raise ValueError("HeyGen completed video has no download URL.")
+    return video_url
+
+
+def _set_storage_retry(
+    db: Session,
+    attempt_id: str,
+    lease_until: datetime,
+) -> None:
+    attempt = db.scalar(
+        select(HeyGenGenerationAttempt)
+        .where(HeyGenGenerationAttempt.id == attempt_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if (
+        attempt is not None
+        and attempt.storage_status == "PROCESSING"
+        and attempt.completion_lease_until is not None
+        and _utc(attempt.completion_lease_until) == _utc(lease_until)
+    ):
+        attempt.storage_status = "RETRY"
+        attempt.completion_lease_until = None
+        attempt.updated_at = _now()
+        db.commit()
+
+
+def _claim_storage(
+    db: Session,
+    attempt_id: str,
+) -> tuple[HeyGenGenerationAttempt, datetime] | None:
+    draft = repository.lock_draft_for_attempt(db, attempt_id)
+    attempt = db.scalar(
+        select(HeyGenGenerationAttempt)
+        .where(HeyGenGenerationAttempt.id == attempt_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if attempt is None or attempt.status != "COMPLETED":
+        return None
+    if attempt.storage_status in ("STORED", "FAILED"):
+        return None
+    if not _can_attach_video(db, draft, attempt):
+        attempt.storage_status = "FAILED"
+        attempt.completion_lease_until = None
+        attempt.updated_at = _now()
+        db.commit()
+        return None
+    lease_until = (
+        _utc(attempt.completion_lease_until)
+        if attempt.completion_lease_until is not None
+        else None
+    )
+    now = _now()
+    if attempt.storage_status == "PROCESSING" and lease_until and lease_until > now:
+        return None
+
+    lease_until = now + COMPLETION_LEASE
+    attempt.storage_status = "PROCESSING"
+    attempt.completion_lease_until = lease_until
+    attempt.updated_at = now
+    db.commit()
+    db.refresh(attempt)
+    return attempt, lease_until
+
+
+def _store_completed_video(
+    db: Session,
+    attempt: HeyGenGenerationAttempt,
+    provider_resource: dict,
+) -> HeyGenGenerationAttempt:
+    claim = _claim_storage(db, attempt.id)
+    if claim is None:
+        fresh = db.scalar(
+            select(HeyGenGenerationAttempt)
+            .where(HeyGenGenerationAttempt.id == attempt.id)
+            .execution_options(populate_existing=True)
+        )
+        return fresh or attempt
+    claimed, lease_until = claim
+    # Expired workers may still upload; isolate each claim's object so they
+    # cannot overwrite a successor's video after losing the database lease.
+    claim_path = (
+        f"businesses/{claimed.business_id}/heygen/{claimed.id}/{uuid4()}.mp4"
+    )
+
+    try:
+        video_url = _validate_provider_video(claimed, provider_resource)
+        try:
+            video_bytes = download_generated_video(video_url)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code not in (401, 403, 404):
+                raise
+            refreshed = get_video_status(claimed.provider_video_id)
+            video_url = _validate_provider_video(claimed, refreshed)
+            video_bytes = download_generated_video(video_url)
+
+        upload_path = upload_marketing_video(
+            video_bytes,
+            claimed.business_id,
+            storage_path=claim_path,
+            upsert=False,
+        )
+        if upload_path != claim_path:
+            raise ValueError("Storage returned an unexpected video path.")
+    except Exception as exc:
+        _set_storage_retry(db, claimed.id, lease_until)
+        raise CompletionProcessingError(
+            "Unable to download or store the completed HeyGen video."
+        ) from exc
+
+    draft = repository.lock_draft_for_attempt(db, claimed.id)
+    current = db.scalar(
+        select(HeyGenGenerationAttempt)
+        .where(HeyGenGenerationAttempt.id == claimed.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if (
+        current is None
+        or current.status != "COMPLETED"
+        or current.storage_status != "PROCESSING"
+        or current.completion_lease_until is None
+        or _utc(current.completion_lease_until) != _utc(lease_until)
+    ):
+        return current or claimed
+
+    if _utc(lease_until) <= _now():
+        _set_storage_retry(db, current.id, lease_until)
+        return current
+    if not _can_attach_video(db, draft, current):
+        current.storage_status = "FAILED"
+        current.completion_lease_until = None
+        current.updated_at = _now()
+        db.commit()
+        db.refresh(current)
+        return current
+    current.storage_status = "STORED"
+    current.storage_path = claim_path
+    current.completion_lease_until = None
+    current.updated_at = _now()
+    draft.media_type = "video"
+    draft.video_url = claim_path
+    draft.video_status = "completed"
+    draft.video_generation_id = current.provider_video_id
+    db.commit()
+    db.refresh(current)
+    return current
+
+
+def refresh_attempt_status(
+    db: Session,
+    attempt: HeyGenGenerationAttempt,
+    *,
+    provider_video_id: str | None = None,
+) -> HeyGenGenerationAttempt:
+    requested_video_id = attempt.provider_video_id or provider_video_id
+    if not requested_video_id:
+        return attempt
+    resource = get_video_status(requested_video_id)
+    returned_video_id = resource.get("id") or resource.get("video_id")
+    if not returned_video_id or returned_video_id != requested_video_id:
+        raise ValueError("HeyGen returned a different video resource.")
+    status = str(resource.get("status", "")).lower()
     status_map = {
         "waiting": "PROCESSING",
         "pending": "PROCESSING",
@@ -420,7 +650,10 @@ def get_latest_generation(
         "canceled": "FAILED",
     }
     mapped_status = status_map.get(status)
-    if mapped_status and mapped_status != attempt.status:
+    if mapped_status and (
+        mapped_status != attempt.status
+        or attempt.provider_video_id is None
+    ):
         attempt = _update_attempt(
             db,
             attempt.id,
@@ -428,9 +661,113 @@ def get_latest_generation(
             expected_status=attempt.status,
             expected_updated_at=attempt.updated_at,
             expected_lease_until=attempt.submission_lease_until,
-            provider_video_id=attempt.provider_video_id,
+            provider_video_id=requested_video_id,
         )
-    return _response(attempt)
+    if mapped_status == "COMPLETED":
+        attempt = _store_completed_video(db, attempt, resource)
+    return attempt
+
+
+def process_webhook_delivery(delivery_id: str) -> None:
+    from app.database import SessionLocal
+
+    with SessionLocal() as db:
+        delivery = repository.webhook_delivery(db, delivery_id)
+        if delivery is None or delivery.processed_at is not None:
+            return
+        try:
+            _reconcile_webhook_delivery(db, delivery)
+        except Exception:
+            logger.exception(
+                "Unable to reconcile HeyGen webhook delivery %s",
+                delivery_id,
+            )
+            return
+
+
+def _reconcile_webhook_delivery(
+    db: Session,
+    delivery: HeyGenWebhookDelivery,
+) -> HeyGenGenerationAttempt | None:
+    if delivery.callback_id:
+        attempt = repository.attempt_by_id(db, delivery.callback_id)
+        if (
+            attempt is not None
+            and attempt.provider_video_id is not None
+            and attempt.provider_video_id != delivery.provider_video_id
+        ):
+            return attempt
+    else:
+        attempt = repository.attempt_for_provider_video(
+            db,
+            delivery.provider_video_id,
+        )
+    if attempt is None:
+        return None
+
+    attempt = refresh_attempt_status(
+        db,
+        attempt,
+        provider_video_id=delivery.provider_video_id,
+    )
+    if attempt.status in ("COMPLETED", "FAILED"):
+        delivery.processed_at = _now()
+        db.commit()
+    return attempt
+
+
+def record_webhook_delivery(
+    db: Session,
+    *,
+    event_type: str,
+    provider_video_id: str,
+    callback_id: str | None,
+) -> HeyGenWebhookDelivery:
+    deduplication_key = hashlib.sha256(
+        f"{event_type}:{provider_video_id}".encode("utf-8")
+    ).hexdigest()
+    existing = repository.webhook_delivery_by_key(db, deduplication_key)
+    if existing is not None:
+        return existing
+
+    delivery = HeyGenWebhookDelivery(
+        id=str(uuid4()),
+        deduplication_key=deduplication_key,
+        event_type=event_type,
+        provider_video_id=provider_video_id,
+        callback_id=callback_id,
+        received_at=_now(),
+    )
+    db.add(delivery)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing = repository.webhook_delivery_by_key(db, deduplication_key)
+        if existing is None:
+            raise
+        return existing
+    db.refresh(delivery)
+    return delivery
+
+
+def has_unstored_generation(db: Session, draft_id: str) -> bool:
+    attempt = repository.latest_attempt(db, draft_id)
+    if attempt is not None:
+        return attempt.status == "COMPLETED" and attempt.storage_status != "STORED"
+    return False
+
+
+def verify_webhook_signature(raw_body: bytes, signature: str | None) -> bool:
+    secret = os.getenv("HEYGEN_WEBHOOK_SECRET")
+    if not secret or not signature:
+        return False
+    expected = hmac.new(
+        secret.encode("utf-8"),
+        raw_body,
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(signature, expected)
 
 
 def has_active_generation(db: Session, draft_id: str) -> bool:
