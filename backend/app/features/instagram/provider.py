@@ -108,7 +108,7 @@ async def get_managed_pages(access_token: str) -> list[dict]:
     async with httpx.AsyncClient(timeout=15.0) as client:
         while True:
             params: dict[str, str | int] = {
-                "fields": "id,name,instagram_business_account{id,username}",
+                "fields": "id,name",
                 "limit": 100,
             }
             if after:
@@ -127,3 +127,21 @@ async def get_managed_pages(access_token: str) -> list[dict]:
             after = payload.get("paging", {}).get("cursors", {}).get("after")
             if not after or not payload.get("paging", {}).get("next"):
                 return pages
+
+
+async def get_page_instagram_account(
+    access_token: str,
+    page_id: str,
+) -> dict:
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.get(
+            f"{GRAPH_API_URL}/{page_id}",
+            params={"fields": "id,instagram_business_account{id,username}"},
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        _raise_meta_error(response)
+        payload = response.json()
+
+    if not isinstance(payload, dict):
+        raise ValueError("Meta returned an invalid Page response")
+    return payload
