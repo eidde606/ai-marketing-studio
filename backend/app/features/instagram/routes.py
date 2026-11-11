@@ -4,6 +4,7 @@ from urllib.parse import quote, urlsplit
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.auth import verify_token
 from app.database import get_db
@@ -11,6 +12,39 @@ from app.features.instagram import repository, service
 from app.features.instagram.schemas import InstagramConnectionResponse
 
 router = APIRouter(prefix="/auth/instagram", tags=["Instagram OAuth"])
+
+
+class InstagramCallbackAccessLogRedactionMiddleware:
+    """Redact callback query parameters only while Uvicorn emits its access log."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
+        if (
+            scope["type"] != "http"
+            or scope.get("path") != "/auth/instagram/callback"
+        ):
+            await self.app(scope, receive, send)
+            return
+
+        async def send_without_query(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                query_string = scope.get("query_string", b"")
+                scope["query_string"] = b""
+                try:
+                    await send(message)
+                finally:
+                    scope["query_string"] = query_string
+                return
+            await send(message)
+
+        await self.app(scope, receive, send_without_query)
 
 
 @router.get("/start")
