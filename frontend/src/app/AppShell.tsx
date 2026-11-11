@@ -21,6 +21,8 @@ type Props = {
   onAddBusiness: () => void;
   onSignOut: () => Promise<unknown>;
   businessError: string | null;
+  userDisplayName: string;
+  userEmail: string;
   children: ReactNode;
 };
 
@@ -34,6 +36,8 @@ export default function AppShell({
   onAddBusiness,
   onSignOut,
   businessError,
+  userDisplayName,
+  userEmail,
   children,
 }: Props) {
   return (
@@ -42,14 +46,15 @@ export default function AppShell({
         activeSection={activeSection}
         onSectionChange={onSectionChange}
         pendingCount={pendingCount}
+        userDisplayName={userDisplayName}
       />
-      <main className="main-content">
-        <header className="topbar">
-          <div className="topbar-heading">
-            <span className="eyebrow">Estudio de marketing</span>
+      <main className="main-content app-shell__main">
+        <header className="app-shell__topbar">
+          <div className="app-shell__heading">
+            <span className="app-shell__eyebrow">Estudio de marketing</span>
             <h1>{activeSection}</h1>
           </div>
-          <div className="topbar-actions">
+          <div className="app-shell__actions">
             <select
               aria-label="Seleccionar negocio"
               value={selectedBusinessId}
@@ -67,30 +72,36 @@ export default function AppShell({
             </select>
             <button
               type="button"
-              className="primary-button add-business-button"
+              className="primary-button app-shell__add-business"
               onClick={onAddBusiness}
             >
               + Agregar negocio
             </button>
-            <div className="topbar-account">
+            <div className="app-shell__account">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button
                     type="button"
-                    className="account-trigger"
-                    aria-label="Abrir menú de Ángela"
+                    className="app-shell__account-trigger"
+                    aria-label={`Abrir menú de ${userDisplayName}`}
                   >
-                    <span className="avatar small">Á</span>
-                    <span className="account-name">Ángela</span>
+                    <span className="app-shell__avatar" aria-hidden="true">
+                      {Array.from(userDisplayName.trim())[0]?.toLocaleUpperCase(
+                        "es",
+                      ) ?? "T"}
+                    </span>
+                    <span className="app-shell__account-name">
+                      {userDisplayName}
+                    </span>
                     <ChevronDown size={16} aria-hidden="true" />
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-52">
                   <DropdownMenuLabel>
                     <div className="flex flex-col gap-1">
-                      <span>Ángela</span>
+                      <span>{userDisplayName}</span>
                       <span className="text-xs font-normal text-muted-foreground">
-                        Administradora
+                        {userEmail || "Correo no disponible"}
                       </span>
                     </div>
                   </DropdownMenuLabel>
@@ -106,7 +117,7 @@ export default function AppShell({
               </DropdownMenu>
             </div>
             {businessError && (
-              <span className="topbar-error" role="alert">
+              <span className="app-shell__error" role="alert">
                 {businessError}
               </span>
             )}

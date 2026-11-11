@@ -57,6 +57,13 @@ export default function SofiaChat({
   const [switchingConversation, setSwitchingConversation] = useState(false);
   const [generatingDraft, setGeneratingDraft] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [historyRetry, setHistoryRetry] = useState(0);
+  const [errorAction, setErrorAction] = useState<
+    "history" | "send" | "conversation" | "draft" | null
+  >(null);
+  const [retryConversationId, setRetryConversationId] = useState<string | null>(
+    null,
+  );
 
   const [error, setError] = useState<string | null>(null);
   const [generatedDraftTitle, setGeneratedDraftTitle] = useState<string | null>(
@@ -71,6 +78,7 @@ export default function SofiaChat({
     async function loadConversation() {
       setLoadingHistory(true);
       setError(null);
+      setErrorAction(null);
       setMessages([]);
       setMessage("");
       setConversationId(null);
@@ -100,6 +108,7 @@ export default function SofiaChat({
             ? err.message
             : "No se pudo cargar la conversación.",
         );
+        setErrorAction("history");
       } finally {
         if (!cancelled) {
           setLoadingHistory(false);
@@ -112,10 +121,10 @@ export default function SofiaChat({
     return () => {
       cancelled = true;
     };
-  }, [businessId]);
+  }, [businessId, historyRetry]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({
+    messagesEndRef.current?.scrollIntoView?.({
       behavior: "smooth",
       block: "nearest",
     });
@@ -126,7 +135,12 @@ export default function SofiaChat({
       const history = await getSofiaConversations(businessId);
       setConversations(history);
     } catch (err) {
-      console.error("Failed to refresh conversations:", err);
+      setError(
+        err instanceof Error
+          ? err.message
+          : "No se pudo actualizar el historial.",
+      );
+      setErrorAction("history");
     }
   }
 
@@ -135,6 +149,8 @@ export default function SofiaChat({
 
     setSwitchingConversation(true);
     setError(null);
+    setErrorAction(null);
+    setRetryConversationId(null);
     setGeneratedDraftTitle(null);
 
     try {
@@ -150,6 +166,8 @@ export default function SofiaChat({
           ? err.message
           : "No se pudo cargar la conversación.",
       );
+      setErrorAction("conversation");
+      setRetryConversationId(id);
     } finally {
       setSwitchingConversation(false);
     }
@@ -162,6 +180,8 @@ export default function SofiaChat({
     setMessages([]);
     setMessage("");
     setError(null);
+    setErrorAction(null);
+    setRetryConversationId(null);
     setGeneratedDraftTitle(null);
     setShowHistory(false);
   }
@@ -173,6 +193,7 @@ export default function SofiaChat({
 
     setLoading(true);
     setError(null);
+    setErrorAction(null);
     setGeneratedDraftTitle(null);
     setMessage("");
 
@@ -200,6 +221,7 @@ export default function SofiaChat({
       setError(
         err instanceof Error ? err.message : "No se pudo contactar a Sofía.",
       );
+      setErrorAction("send");
     } finally {
       setLoading(false);
     }
@@ -221,6 +243,7 @@ export default function SofiaChat({
       setError(
         err instanceof Error ? err.message : "No se pudo generar el borrador.",
       );
+      setErrorAction("draft");
     } finally {
       setGeneratingDraft(false);
     }
@@ -230,8 +253,22 @@ export default function SofiaChat({
     loading ||
     loadingHistory ||
     switchingConversation ||
-    generatingDraft ||
-    Boolean(error);
+    generatingDraft;
+
+  function retryFailedAction() {
+    const action = errorAction;
+    setError(null);
+    setErrorAction(null);
+    if (action === "history") {
+      setHistoryRetry((count) => count + 1);
+    } else if (action === "send") {
+      void handleSend();
+    } else if (action === "conversation" && retryConversationId) {
+      void handleSelectConversation(retryConversationId);
+    } else if (action === "draft" && conversationId) {
+      void handleGenerateDraft();
+    }
+  }
 
   const currentConversation = conversations.find(
     (item) => item.id === conversationId,
@@ -301,7 +338,7 @@ export default function SofiaChat({
         </div>
 
         {showHistory && (
-          <div className="sofia-history-panel">
+          <div className="sofia-history-panel" aria-label="Historial de conversaciones">
             <div className="sofia-history-heading">
               <strong>Conversaciones anteriores</strong>
               <span>{conversations.length}</span>
@@ -345,10 +382,16 @@ export default function SofiaChat({
         )}
       </div>
 
-      <div className="sofia-messages">
-        {loadingHistory && <p>Cargando conversación...</p>}
+      <div
+        className="sofia-messages"
+        role="log"
+        aria-label="Mensajes de la conversación con Sofía"
+        aria-live="polite"
+        aria-relevant="additions text"
+      >
+        {loadingHistory && <p role="status">Cargando conversación…</p>}
 
-        {switchingConversation && <p>Cargando conversación...</p>}
+        {switchingConversation && <p role="status">Cargando conversación…</p>}
 
         {!loadingHistory &&
           !switchingConversation &&
@@ -370,16 +413,20 @@ export default function SofiaChat({
           </div>
         ))}
 
-        {loading && <p>Sofía está escribiendo...</p>}
+        {loading && <p role="status">Sofía está preparando una respuesta…</p>}
 
         <div ref={messagesEndRef} />
       </div>
 
       {error && (
         <p role="alert">
-          {error}{" "}
-          <button type="button" onClick={() => window.location.reload()}>
-            Reintentar
+          {error}
+          <button type="button" onClick={retryFailedAction}>
+            {errorAction === "send"
+              ? "Reintentar mensaje"
+              : errorAction === "draft"
+                ? "Reintentar borrador"
+                : "Reintentar carga"}
           </button>
         </p>
       )}
@@ -391,8 +438,15 @@ export default function SofiaChat({
         }}
       >
         <textarea
+          aria-label="Mensaje para Sofía"
           value={message}
-          onChange={(event) => setMessage(event.target.value)}
+          onChange={(event) => {
+            setMessage(event.target.value);
+            if (errorAction === "send") {
+              setError(null);
+              setErrorAction(null);
+            }
+          }}
           onKeyDown={(event) => {
             if (
               event.key === "Enter" &&

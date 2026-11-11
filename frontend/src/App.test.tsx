@@ -17,6 +17,7 @@ import type { Draft } from "./services/draftsApi";
 const mocks = vi.hoisted(() => ({
   getSession: vi.fn(),
   signOut: vi.fn(),
+  updateUser: vi.fn(),
   unsubscribe: vi.fn(),
   onAuthStateChange: vi.fn(),
   getBusinesses: vi.fn(),
@@ -84,6 +85,7 @@ vi.mock("./components/FacebookConnection", () => ({ default: () => null }));
 vi.mock("./components/DashboardOverview", () => ({
   default: (props: ComponentProps<typeof DashboardOverview>) => (
     <div>
+      <h2>Hola, {props.userDisplayName}</h2>
       {props.draftMessages}
       {props.visibleDrafts.map((d) => (
         <p key={d.id}>{d.title}</p>
@@ -249,6 +251,7 @@ beforeEach(() => {
     }),
   );
   mocks.getSession.mockResolvedValue({ data: { session } });
+  mocks.updateUser.mockReset();
   mocks.onAuthStateChange.mockImplementation((callback) => {
     authChange = callback;
     return { data: { subscription: { unsubscribe: mocks.unsubscribe } } };
@@ -292,7 +295,7 @@ it("preserves the workspace through same-account password recovery", async () =>
 });
 it("logs out through the Spanish account menu", async () => {
   await openApp();
-  fireEvent.keyDown(screen.getByLabelText("Abrir menú de Ángela"), {
+  fireEvent.keyDown(screen.getByLabelText("Abrir menú de Mi cuenta"), {
     key: "Enter",
   });
   fireEvent.click(
@@ -300,6 +303,96 @@ it("logs out through the Spanish account menu", async () => {
   );
   expect(await screen.findByText("Iniciar sesión")).toBeTruthy();
   expect(mocks.signOut).toHaveBeenCalledTimes(1);
+});
+it("displays the authenticated name and a neutral fallback", async () => {
+  await openApp();
+  expect(screen.getByLabelText("Abrir menú de Mi cuenta")).toBeTruthy();
+
+  const namedSession = {
+    ...session,
+    user: {
+      ...session.user,
+      user_metadata: { full_name: "María López" },
+    },
+  } as Session;
+  mocks.getSession.mockResolvedValue({ data: { session: namedSession } });
+  cleanup();
+  render(<App />);
+
+  expect(
+    await screen.findByLabelText("Abrir menú de María López"),
+  ).toBeTruthy();
+  expect(screen.getAllByText("María López")).toHaveLength(2);
+});
+it("updates the account, sidebar, dashboard and restored session display name", async () => {
+  const updatedSession = {
+    ...session,
+    user: {
+      ...session.user,
+      user_metadata: { display_name: "Ana Pérez" },
+    },
+  } as Session;
+  mocks.updateUser.mockResolvedValue({
+    data: { user: updatedSession.user },
+    error: null,
+  });
+
+  await openApp();
+  fireEvent.click(screen.getByRole("button", { name: "Configuración" }));
+  const input = await screen.findByLabelText("Nombre para mostrar");
+  fireEvent.change(input, { target: { value: "  Ana Pérez  " } });
+  fireEvent.click(screen.getByRole("button", { name: "Guardar cambios" }));
+
+  await screen.findByText("Nombre para mostrar actualizado.");
+  expect(mocks.updateUser).toHaveBeenCalledWith({
+    data: { display_name: "Ana Pérez" },
+  });
+  expect(screen.getByLabelText("Abrir menú de Ana Pérez")).toBeTruthy();
+  expect(screen.getAllByText("Ana Pérez").length).toBeGreaterThanOrEqual(2);
+
+  fireEvent.click(screen.getByRole("button", { name: "Resumen" }));
+  expect(screen.getByRole("heading", { name: "Hola, Ana Pérez" })).toBeTruthy();
+
+  mocks.getSession.mockResolvedValue({ data: { session: updatedSession } });
+  cleanup();
+  await openApp();
+  expect(screen.getByLabelText("Abrir menú de Ana Pérez")).toBeTruthy();
+});
+it("keeps all navigation destinations keyboard-focusable and closes mobile navigation after selection", async () => {
+  await openApp();
+  const trigger = screen.getByLabelText("Abrir navegación principal");
+  trigger.focus();
+  expect(document.activeElement).toBe(trigger);
+
+  fireEvent.click(trigger);
+  const dialog = await screen.findByRole("dialog");
+  const mobileNavigation = within(dialog).getByRole("navigation", {
+    name: "Navegación principal",
+  });
+  expect(within(mobileNavigation).getAllByRole("button")).toHaveLength(7);
+  fireEvent.keyDown(dialog, { key: "Escape" });
+  expect(screen.queryByRole("dialog")).toBeNull();
+
+  fireEvent.click(trigger);
+  const reopenedDialog = await screen.findByRole("dialog");
+  const analyticsButton = within(
+    within(reopenedDialog).getByRole("navigation", {
+      name: "Navegación principal",
+    }),
+  ).getByRole("button", {
+    name: "Analíticas",
+  });
+  analyticsButton.focus();
+  expect(document.activeElement).toBe(analyticsButton);
+  fireEvent.click(analyticsButton);
+
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(
+    screen.getByRole("heading", { name: "Analíticas", level: 2 }),
+  ).toBeTruthy();
+  expect(localStorage.getItem("ai-marketing-studio:section")).toBe(
+    "Analíticas",
+  );
 });
 it("selects the first business and remembers changes per user", async () => {
   await openApp();
@@ -402,7 +495,9 @@ it("preserves Spanish navigation restoration and fallback", async () => {
   view.unmount();
   localStorage.setItem("ai-marketing-studio:section", "Analíticas");
   render(<App />);
-  expect(await screen.findByRole("heading", { name: "Resumen" })).toBeTruthy();
+  expect(
+    await screen.findByRole("heading", { name: "Analíticas", level: 2 }),
+  ).toBeTruthy();
 });
 it("shows draft loading failures", async () => {
   mocks.getDrafts.mockRejectedValue(new Error("offline"));

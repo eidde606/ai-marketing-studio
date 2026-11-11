@@ -58,13 +58,22 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
     handleCopyCaption,
     handleDownloadVideo,
   } = browserMedia;
+  const statusLabel = (status: string) =>
+    status === "pending"
+      ? "Pendiente de aprobación"
+      : status === "approved"
+        ? "Aprobado"
+        : status === "rejected"
+          ? "Rechazado"
+          : status;
 
   return (
-    <section className="panel approval-page">
+    <section className="approval-page">
       <div className="panel-heading">
         <div>
-          <span className="eyebrow">Revisión de contenido</span>
-          <h2>Cola de aprobaciones</h2>
+          <span className="eyebrow">Revisa antes de publicar</span>
+          <h2>Contenido y aprobaciones</h2>
+          <p>Aprueba el contenido antes de iniciar una publicación.</p>
         </div>
 
         <span className="approval-counter">
@@ -81,26 +90,30 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
             <div className="approval-card" key={`${businessId}:${draft.id}`}>
               <div className="approval-card-top">
                 <span className="channel-tag">{draft.platform}</span>
+                <span
+                  className={`approval-state approval-state--${draft.status}`}
+                >
+                  {statusLabel(draft.status)}
+                </span>
                 <time>{formatDraftDate(draft.created_at)}</time>
               </div>
 
-              {editingId === draft.id ? (
-                <DraftEditForm
-                  draft={draft}
-                  editTitle={editTitle}
-                  editCaption={editCaption}
-                  setEditTitle={setEditTitle}
-                  setEditCaption={setEditCaption}
-                  busyDraftIds={busyDraftIds}
-                  handleSaveEdit={handleSaveEdit}
-                  setEditingId={setEditingId}
-                />
-              ) : (
-                <>
+              <section className="approval-card-information">
+                {editingId === draft.id ? (
+                  <DraftEditForm
+                    draft={draft}
+                    editTitle={editTitle}
+                    editCaption={editCaption}
+                    setEditTitle={setEditTitle}
+                    setEditCaption={setEditCaption}
+                    busyDraftIds={busyDraftIds}
+                    handleSaveEdit={handleSaveEdit}
+                    setEditingId={setEditingId}
+                  />
+                ) : (
                   <h3>{draft.title}</h3>
-                  <p>{draft.caption}</p>
-                </>
-              )}
+                )}
+              </section>
 
               <DraftMediaPanel
                 heygen={heygen}
@@ -115,11 +128,21 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                 browserMedia={browserMedia}
               />
 
-              <div className="approval-card-controls">
+              {editingId !== draft.id && (
+                <section className="approval-card-caption">
+                  <h4>Texto de la publicación</h4>
+                  <p>{draft.caption}</p>
+                </section>
+              )}
+
+              <section
+                className="approval-card-controls"
+                aria-label={`Acciones para ${draft.title}`}
+              >
                 {draft.status === "pending" && (
-                  <div>
+                  <div className="approval-platform-selection">
                     <strong>Publicar en:</strong>
-                    <label style={{ display: "block", marginTop: "8px" }}>
+                    <label>
                       <input
                         type="checkbox"
                         checked={
@@ -143,66 +166,68 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                   </div>
                 )}
 
-                {draft.status === "pending" && editingId !== draft.id ? (
-                  <div className="approval-actions">
-                    <button
-                      className="approve-button"
-                      type="button"
-                      disabled={
-                        approvingIds.includes(draft.id) ||
-                        busyDraftIds.includes(draft.id) ||
-                        imageBusyIds.includes(draft.id)
-                      }
-                      onClick={() => void handleApprove(draft.id)}
-                    >
-                      {approvingIds.includes(draft.id)
-                        ? "Aprobando..."
-                        : "✓ Aprobar"}
-                    </button>
+                <div className="approval-card-decisions">
+                  {draft.status === "pending" && editingId !== draft.id ? (
+                    <div className="approval-actions">
+                      <button
+                        className="approve-button"
+                        type="button"
+                        disabled={
+                          approvingIds.includes(draft.id) ||
+                          busyDraftIds.includes(draft.id) ||
+                          imageBusyIds.includes(draft.id)
+                        }
+                        onClick={() => void handleApprove(draft.id)}
+                      >
+                        {approvingIds.includes(draft.id)
+                          ? "Aprobando..."
+                          : "✓ Aprobar"}
+                      </button>
 
-                    <button
-                      className="text-button"
-                      type="button"
-                      disabled={
-                        busyDraftIds.includes(draft.id) ||
-                        approvingIds.includes(draft.id)
-                      }
-                      onClick={() => startEditing(draft)}
-                    >
-                      Editar
-                    </button>
+                      <button
+                        className="text-button"
+                        type="button"
+                        disabled={
+                          busyDraftIds.includes(draft.id) ||
+                          approvingIds.includes(draft.id)
+                        }
+                        onClick={() => startEditing(draft)}
+                      >
+                        Editar
+                      </button>
 
-                    <button
-                      className="reject-button"
-                      type="button"
-                      disabled={
-                        busyDraftIds.includes(draft.id) ||
-                        approvingIds.includes(draft.id) ||
-                        imageBusyIds.includes(draft.id)
-                      }
-                      onClick={() => void handleReject(draft.id)}
+                      <button
+                        className="reject-button"
+                        type="button"
+                        disabled={
+                          busyDraftIds.includes(draft.id) ||
+                          approvingIds.includes(draft.id) ||
+                          imageBusyIds.includes(draft.id)
+                        }
+                        onClick={() => void handleReject(draft.id)}
+                      >
+                        {busyDraftIds.includes(draft.id)
+                          ? "Procesando..."
+                          : "Rechazar"}
+                      </button>
+                    </div>
+                  ) : draft.status !== "pending" ? (
+                    <span
+                      className={`final-status ${
+                        draft.status === "approved" ? "aprobado" : ""
+                      }`}
                     >
-                      {busyDraftIds.includes(draft.id)
-                        ? "Procesando..."
-                        : "Rechazar"}
-                    </button>
-                  </div>
-                ) : draft.status !== "pending" ? (
-                  <span
-                    className={`final-status ${
-                      draft.status === "approved" ? "aprobado" : ""
-                    }`}
-                  >
-                    {draft.status === "approved"
-                      ? "✓ Aprobado"
-                      : draft.status === "rejected"
-                        ? "✕ Rechazado"
-                        : draft.status}
-                  </span>
-                ) : null}
+                      {draft.status === "approved"
+                        ? "✓ Aprobado"
+                        : draft.status === "rejected"
+                          ? "✕ Rechazado"
+                          : draft.status}
+                    </span>
+                  ) : null}
+                </div>
 
                 {draft.status === "approved" && (
-                  <div className="approval-actions">
+                  <div className="approval-card-publishing">
                     {(draft.publish_destinations ?? ["facebook"]).includes(
                       "facebook",
                     ) &&
@@ -283,7 +308,7 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                   draft.media_type === "video" &&
                   draft.video_status === "completed" &&
                   !!draft.video_url && (
-                    <div className="tiktok-manual-actions">
+                    <div className="approval-card-secondary tiktok-manual-actions">
                       <button
                         type="button"
                         className="tiktok-download-button"
@@ -311,25 +336,27 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                 {draft.status === "pending" &&
                   draft.image_status === "completed" &&
                   !!draft.image_url && (
-                    <ImageRevisionEditor
-                      draft={draft}
-                      toggleImageEditor={toggleImageEditor}
-                      showImageEditor={showImageEditor}
-                      revisionErrors={revisionErrors}
-                      revisions={revisions}
-                      imageUrls={imageUrls}
-                      handlePreviewImage={handlePreviewImage}
-                      revisionBusyIds={[...revisionBusyIds, ...busyDraftIds]}
-                      handleDecideRevision={handleDecideRevision}
-                      imageInstructions={imageInstructions}
-                      updateImageInstructions={updateImageInstructions}
-                      addImageSuggestion={addImageSuggestion}
-                      handleCreateRevision={handleCreateRevision}
-                      refreshRevision={refreshRevision}
-                    />
+                    <div className="approval-card-revision">
+                      <ImageRevisionEditor
+                        draft={draft}
+                        toggleImageEditor={toggleImageEditor}
+                        showImageEditor={showImageEditor}
+                        revisionErrors={revisionErrors}
+                        revisions={revisions}
+                        imageUrls={imageUrls}
+                        handlePreviewImage={handlePreviewImage}
+                        revisionBusyIds={[...revisionBusyIds, ...busyDraftIds]}
+                        handleDecideRevision={handleDecideRevision}
+                        imageInstructions={imageInstructions}
+                        updateImageInstructions={updateImageInstructions}
+                        addImageSuggestion={addImageSuggestion}
+                        handleCreateRevision={handleCreateRevision}
+                        refreshRevision={refreshRevision}
+                      />
+                    </div>
                   )}
 
-                <div className="approval-actions approval-delete-actions">
+                <div className="approval-card-secondary approval-actions approval-delete-actions">
                   <button
                     className="reject-button"
                     type="button"
@@ -353,8 +380,8 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                       ? "Eliminando..."
                       : "Eliminar"}
                   </button>
-                </div>
-              </div>
+                  </div>
+                </section>
             </div>
           ))}
 

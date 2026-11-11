@@ -1,7 +1,16 @@
-import { useEffect, useState, type FC, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type FC, type ReactNode } from "react";
+import {
+  ArrowRight,
+  BarChart3,
+  CheckCircle2,
+  Clock3,
+  FilePlus2,
+  Megaphone,
+  Sparkles,
+} from "lucide-react";
 import { getFacebookReach, type Draft } from "../services/draftsApi";
+import { getCampaigns, type Campaign } from "../services/campaignsApi";
 import type { Section } from "./Sidebar";
-import SummaryCard from "./SummaryCard";
 
 type Agent = {
   name: string;
@@ -19,6 +28,7 @@ type DashboardOverviewProps = {
   visibleDrafts: Draft[];
   pendingCount: number;
   agents: Agent[];
+  userDisplayName: string;
   draftMessages: ReactNode;
   approvingIds: string[];
   busyDraftIds: string[];
@@ -41,6 +51,7 @@ const DashboardOverview: FC<DashboardOverviewProps> = ({
   visibleDrafts,
   pendingCount,
   agents,
+  userDisplayName,
   draftMessages,
   approvingIds,
   busyDraftIds,
@@ -53,418 +64,447 @@ const DashboardOverview: FC<DashboardOverviewProps> = ({
   startEditing,
   setActiveSection,
 }) => {
-  const [uniqueMediaViews, setUniqueMediaViews] = useState<number | null>(null);
-  const [unavailableReachCount, setUnavailableReachCount] = useState(0);
-  const [reachLoading, setReachLoading] = useState(false);
+  const [campaignResult, setCampaignResult] = useState<{
+    businessId: string;
+    campaigns: Campaign[];
+    error: string | null;
+  } | null>(null);
+  const [reachResult, setReachResult] = useState<{
+    requestKey: string;
+    uniqueMediaViews: number | null;
+    unavailableCount: number;
+  } | null>(null);
+  const currentCampaignResult =
+    campaignResult?.businessId === selectedBusinessId
+      ? campaignResult
+      : null;
+  const campaigns = currentCampaignResult?.campaigns ?? [];
+  const campaignsLoading = Boolean(selectedBusinessId) && !currentCampaignResult;
+  const campaignsError = currentCampaignResult?.error ?? null;
+
+  useEffect(() => {
+    let active = true;
+    if (!selectedBusinessId) return () => {
+      active = false;
+    };
+
+    void getCampaigns(selectedBusinessId)
+      .then((items) => {
+        if (active)
+          setCampaignResult({
+            businessId: selectedBusinessId,
+            campaigns: items,
+            error: null,
+          });
+      })
+      .catch(() => {
+        if (active)
+          setCampaignResult({
+            businessId: selectedBusinessId,
+            campaigns: [],
+            error: "No se pudieron cargar las campañas.",
+          });
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [selectedBusinessId]);
+
+  const publishedFacebookDrafts = useMemo(
+    () =>
+      visibleDrafts.filter(
+        (draft) =>
+          !draft.deleted_at &&
+          draft.business_id === selectedBusinessId &&
+          draft.facebook_publish_status === "published" &&
+          Boolean(draft.facebook_post_id),
+      ),
+    [visibleDrafts, selectedBusinessId],
+  );
+  const reachRequestKey = JSON.stringify([
+    selectedBusinessId,
+    publishedFacebookDrafts.map((draft) => draft.id),
+  ]);
+  const shouldLoadReach =
+    !loadingDrafts && !loadError && publishedFacebookDrafts.length > 0;
+  const currentReachResult =
+    reachResult?.requestKey === reachRequestKey ? reachResult : null;
+  const uniqueMediaViews = currentReachResult?.uniqueMediaViews ?? null;
+  const unavailableReachCount = currentReachResult?.unavailableCount ?? 0;
+  const reachLoading = shouldLoadReach && !currentReachResult;
 
   useEffect(() => {
     let cancelled = false;
+    if (!shouldLoadReach) return () => {
+      cancelled = true;
+    };
 
-    async function loadReach() {
-      const published = visibleDrafts.filter(
-        (draft) =>
-          draft.business_id === selectedBusinessId &&
-          draft.facebook_publish_status === "published" &&
-          draft.facebook_post_id,
+    void Promise.allSettled(
+      publishedFacebookDrafts.map((draft) => getFacebookReach(draft.id)),
+    ).then((results) => {
+      if (cancelled) return;
+      const available = results.flatMap((result) =>
+        result.status === "fulfilled" &&
+        result.value.unique_media_viewers !== null
+          ? [result.value.unique_media_viewers]
+          : [],
       );
-
-      try {
-        const results = await Promise.allSettled(
-          published.map((draft) => getFacebookReach(draft.id)),
-        );
-
-        if (cancelled) return;
-
-        const unavailable = results.filter(
-          (result) =>
-            result.status === "rejected" ||
-            result.value.unique_media_viewers === null,
-        ).length;
-
-        setUnavailableReachCount(unavailable);
-
-        const values: number[] = [];
-
-        for (const result of results) {
-          if (
-            result.status === "fulfilled" &&
-            result.value.unique_media_viewers !== null
-          ) {
-            values.push(result.value.unique_media_viewers);
-          }
-        }
-
-        setUniqueMediaViews(
-          values.length > 0
-            ? values.reduce((total, value) => total + value, 0)
-            : null,
-        );
-      } finally {
-        if (!cancelled) setReachLoading(false);
-      }
-    }
-
-    if (!loadingDrafts && !loadError && selectedBusinessId) {
-      void loadReach();
-    }
+      setReachResult({
+        requestKey: reachRequestKey,
+        uniqueMediaViews: available.length
+          ? available.reduce((total, value) => total + value, 0)
+          : null,
+        unavailableCount: results.length - available.length,
+      });
+    });
 
     return () => {
       cancelled = true;
     };
-  }, [visibleDrafts, selectedBusinessId, loadingDrafts, loadError]);
+  }, [publishedFacebookDrafts, reachRequestKey, shouldLoadReach]);
 
-  const recentPosts = visibleDrafts
+  const activeCampaigns = campaigns.filter(
+    (campaign) => campaign.status === "active",
+  );
+  const drafts = visibleDrafts.filter((draft) => !draft.deleted_at);
+  const recentPosts = drafts
     .filter(
       (draft) =>
-        draft.facebook_publish_status === "published" &&
-        draft.published_at !== null &&
-        draft.business_id === selectedBusinessId,
+        (draft.facebook_publish_status === "published" ||
+          draft.tiktok_publish_status === "published") &&
+        draft.published_at,
     )
     .sort(
       (a, b) =>
         new Date(b.published_at ?? "").getTime() -
         new Date(a.published_at ?? "").getTime(),
     )
-    .slice(0, 5);
+    .slice(0, 4);
+  const pendingDrafts = drafts
+    .filter((draft) => draft.status === "pending")
+    .slice(0, 3);
 
   return (
-    <>
-      <section className="welcome">
-        <div>
-          <h2>
-            Buenos días, Ángela <span>✦</span>
-          </h2>
-
+    <div className="dashboard-page">
+      <section className="dashboard-hero">
+        <div className="dashboard-hero__copy">
+          <span className="dashboard-kicker">
+            <Sparkles size={15} aria-hidden="true" />
+            Tu espacio creativo
+          </span>
+          <h2>Hola, {userDisplayName}</h2>
           <p>
-            Aquí tienes una visión general de lo que está pasando en tu
-            marketing.
+            Sigue tu trabajo y continúa con el siguiente paso de tu marketing.
           </p>
         </div>
-
         <button
-          className="primary-button"
-
+          className="dashboard-hero__action"
           type="button"
-
           onClick={() => void handleGenerateContent()}
-
           disabled={!selectedBusinessId || generating}
         >
-          {generating ? "Generando contenido..." : "＋ Crear contenido"}
+          <FilePlus2 size={18} aria-hidden="true" />
+          {generating ? "Preparando contenido…" : "Crear contenido"}
+          <ArrowRight size={16} aria-hidden="true" />
         </button>
-
-        {generationError && <p role="alert">{generationError}</p>}
+        {generationError && (
+          <p className="dashboard-message dashboard-message--error" role="alert">
+            {generationError}
+          </p>
+        )}
       </section>
 
-      <section
-        className="summary-grid"
+      <section className="workflow-steps" aria-label="Flujo de trabajo">
+        {[
+          ["Planifica", "Campañas", "Campañas"],
+          ["Crea", "Equipo IA", "Equipo IA"],
+          ["Revisa", "Aprobaciones", "Aprobaciones"],
+          ["Analiza", "Resultados", "Analíticas"],
+        ].map(([label, hint, section], index) => (
+          <button
+            type="button"
+            className="workflow-step"
+            key={label}
+            onClick={() => setActiveSection(section as Section)}
+          >
+            <span className="workflow-step__number">{index + 1}</span>
+            <span>
+              <strong>{label}</strong>
+              <small>{hint}</small>
+            </span>
+            {index < 3 && (
+              <ArrowRight className="workflow-step__arrow" size={16} aria-hidden="true" />
+            )}
+          </button>
+        ))}
+      </section>
 
-        aria-label="Resumen de métricas"
-      >
-        <SummaryCard
-          icon="◈"
-
-          label="Campañas activas"
-
-          value="0"
-
-          detail="Aún no hay campañas"
-
-          tone="purple"
-        />
-
-        <SummaryCard
-          icon="✧"
-
-          label="Contenido generado"
-
-          value={
-            loadingDrafts || loadError ? "—" : String(visibleDrafts.length)
-          }
-
-          detail="Borradores registrados"
-
-          tone="orange"
-        />
-
-        <SummaryCard
-          icon="✓"
-
-          label="Aprobaciones pendientes"
-
-          value={loadingDrafts || loadError ? "—" : String(pendingCount)}
-
-          detail="Requieren tu atención"
-
-          tone="blue"
-        />
-
-        <SummaryCard
-          icon="◒"
-          label="Espectadores únicos"
-          value={
-            reachLoading
-              ? "..."
+      <section className="dashboard-kpis" aria-label="Actividad del negocio">
+        <article className="dashboard-kpi">
+          <span className="dashboard-kpi__icon dashboard-kpi__icon--violet">
+            <Megaphone size={18} aria-hidden="true" />
+          </span>
+          <span className="dashboard-kpi__label">Campañas activas</span>
+          <strong>
+            {campaignsLoading || campaignsError ? "—" : activeCampaigns.length}
+          </strong>
+          <small>{campaignsError ?? "De este negocio"}</small>
+        </article>
+        <article className="dashboard-kpi">
+          <span className="dashboard-kpi__icon dashboard-kpi__icon--blue">
+            <FilePlus2 size={18} aria-hidden="true" />
+          </span>
+          <span className="dashboard-kpi__label">Contenido en biblioteca</span>
+          <strong>{loadingDrafts || loadError ? "—" : drafts.length}</strong>
+          <small>{loadError ?? "Borradores e historial"}</small>
+        </article>
+        <article className="dashboard-kpi">
+          <span className="dashboard-kpi__icon dashboard-kpi__icon--amber">
+            <Clock3 size={18} aria-hidden="true" />
+          </span>
+          <span className="dashboard-kpi__label">Por revisar</span>
+          <strong>{loadingDrafts || loadError ? "—" : pendingCount}</strong>
+          <small>{loadError ?? "Esperando tu aprobación"}</small>
+        </article>
+        <article className="dashboard-kpi">
+          <span className="dashboard-kpi__icon dashboard-kpi__icon--green">
+            <BarChart3 size={18} aria-hidden="true" />
+          </span>
+          <span className="dashboard-kpi__label">Espectadores únicos</span>
+          <strong>
+            {reachLoading
+              ? "…"
               : uniqueMediaViews === null
                 ? "—"
-                : String(uniqueMediaViews)
-          }
-          detail={
-            unavailableReachCount > 0
-              ? `Datos parciales · ${unavailableReachCount} publicaciones sin métricas`
-              : "Suma de espectadores únicos por publicación en Facebook"
-          }
-          tone="green"
-        />
+                : uniqueMediaViews.toLocaleString("es")}
+          </strong>
+          <small>
+            {unavailableReachCount > 0
+              ? `${unavailableReachCount} publicaciones sin dato disponible`
+              : "Métricas disponibles de Facebook"}
+          </small>
+        </article>
       </section>
 
-      <section className="dashboard-grid">
-        <article className="panel campaigns-panel">
-          <div className="panel-heading">
+      <section className="dashboard-panels">
+        <article className="workspace-card dashboard-campaigns">
+          <header className="workspace-card__header">
             <div>
-              <span className="eyebrow">Rendimiento</span>
-
-              <h2>Resumen de campañas</h2>
+              <span className="eyebrow">Planifica</span>
+              <h3>Campañas</h3>
             </div>
-
             <button
-              className="text-button"
-
               type="button"
-
+              className="quiet-link"
               onClick={() => setActiveSection("Campañas")}
             >
-              Ver todas →
+              Ver campañas <ArrowRight size={15} aria-hidden="true" />
             </button>
-          </div>
-
-          <div className="campaign-list">
-            <div style={{ padding: "2rem", textAlign: "center" }}>
-              <p style={{ fontWeight: 600 }}>Aún no hay campañas</p>
-
-              <p style={{ color: "#64748b", marginTop: "0.5rem" }}>
-                Cuando el equipo IA cree campañas para este negocio, aparecerán
-                aquí.
-              </p>
+          </header>
+          {campaignsLoading ? (
+            <p className="workspace-state" role="status">Cargando campañas…</p>
+          ) : campaignsError ? (
+            <p className="workspace-state workspace-state--error" role="alert">
+              {campaignsError}
+            </p>
+          ) : campaigns.length ? (
+            <div className="dashboard-campaign-list">
+              {campaigns.slice(0, 3).map((campaign) => (
+                <div className="dashboard-campaign" key={campaign.id}>
+                  <div className="dashboard-campaign__top">
+                    <strong>{campaign.name}</strong>
+                    <span className={`status-pill status-pill--${campaign.status}`}>
+                      {campaign.status === "active"
+                        ? "Activa"
+                        : campaign.status === "paused"
+                          ? "Pausada"
+                          : campaign.status === "completed"
+                            ? "Completada"
+                            : campaign.status === "archived"
+                              ? "Archivada"
+                              : "Borrador"}
+                    </span>
+                  </div>
+                  <p>{campaign.objective}</p>
+                  <div className="dashboard-progress">
+                    <span style={{ width: `${campaign.progress}%` }} />
+                  </div>
+                  <small>
+                    {campaign.published_count} de {campaign.total_count} piezas
+                    publicadas · {campaign.progress}%
+                  </small>
+                </div>
+              ))}
             </div>
-          </div>
+          ) : (
+            <div className="workspace-empty">
+              <span className="workspace-empty__icon"><Megaphone size={20} /></span>
+              <strong>Tu primera campaña empieza aquí</strong>
+              <p>Define un objetivo y organiza el contenido de tu negocio.</p>
+              <button type="button" className="quiet-link" onClick={() => setActiveSection("Campañas")}>
+                Crear campaña <ArrowRight size={15} aria-hidden="true" />
+              </button>
+            </div>
+          )}
         </article>
 
-        <article className="panel activity-panel">
-          <div className="panel-heading">
+        <article className="workspace-card dashboard-approvals">
+          <header className="workspace-card__header">
             <div>
-              <span className="eyebrow">Automatización</span>
-
-              <h2>Actividad del Equipo IA</h2>
+              <span className="eyebrow">Revisión</span>
+              <h3>Necesitan tu atención</h3>
             </div>
+            <span className="dashboard-count">{pendingCount}</span>
+          </header>
+          {draftMessages}
+          {!loadingDrafts && !loadError && pendingDrafts.length ? (
+            <div className="dashboard-approval-list">
+              {pendingDrafts.map((draft) => (
+                <article className="dashboard-approval" key={draft.id}>
+                  <div>
+                    <span className="dashboard-approval__platform">
+                      {draft.platform}
+                    </span>
+                    <h4>{draft.title}</h4>
+                    <p>{draft.caption}</p>
+                    <small>{formatDraftDate(draft.created_at)}</small>
+                  </div>
+                  <div className="dashboard-approval__actions">
+                    <button
+                      type="button"
+                      className="dashboard-approval__review"
+                      onClick={() => startEditing(draft)}
+                      disabled={
+                        busyDraftIds.includes(draft.id) ||
+                        approvingIds.includes(draft.id) ||
+                        editingId === draft.id
+                      }
+                    >
+                      Revisar
+                    </button>
+                    <button
+                      type="button"
+                      className="dashboard-approval__approve"
+                      onClick={() => void handleApprove(draft.id)}
+                      disabled={
+                        approvingIds.includes(draft.id) ||
+                        busyDraftIds.includes(draft.id) ||
+                        imageBusyIds.includes(draft.id) ||
+                        editingId === draft.id
+                      }
+                    >
+                      <CheckCircle2 size={15} aria-hidden="true" />
+                      {approvingIds.includes(draft.id) ? "Aprobando…" : "Aprobar"}
+                    </button>
+                    <button
+                      type="button"
+                      className="dashboard-approval__reject"
+                      onClick={() => void handleReject(draft.id)}
+                      disabled={
+                        busyDraftIds.includes(draft.id) ||
+                        approvingIds.includes(draft.id) ||
+                        imageBusyIds.includes(draft.id) ||
+                        editingId === draft.id
+                      }
+                    >
+                      Rechazar
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : !loadingDrafts && !loadError ? (
+            <div className="workspace-empty workspace-empty--compact">
+              <CheckCircle2 size={22} aria-hidden="true" />
+              <strong>No hay aprobaciones pendientes</strong>
+              <p>Tu bandeja está al día.</p>
+            </div>
+          ) : null}
+          <button
+            type="button"
+            className="quiet-link dashboard-section-link"
+            onClick={() => setActiveSection("Aprobaciones")}
+          >
+            Abrir bandeja <ArrowRight size={15} aria-hidden="true" />
+          </button>
+        </article>
 
+        <article className="workspace-card dashboard-publications">
+          <header className="workspace-card__header">
+            <div>
+              <span className="eyebrow">Publicado</span>
+              <h3>Actividad reciente</h3>
+            </div>
             <button
-              className="text-button"
-
               type="button"
+              className="quiet-link"
+              onClick={() => setActiveSection("Contenido")}
+            >
+              Ver contenido <ArrowRight size={15} aria-hidden="true" />
+            </button>
+          </header>
+          {recentPosts.length ? (
+            <div className="dashboard-publication-list">
+              {recentPosts.map((draft) => (
+                <article className="dashboard-publication" key={draft.id}>
+                  <span className="dashboard-publication__platform">
+                    {draft.facebook_publish_status === "published"
+                      ? "f"
+                      : "♪"}
+                  </span>
+                  <div>
+                    <strong>{draft.title}</strong>
+                    <p>
+                      {draft.facebook_publish_status === "published"
+                        ? "Facebook"
+                        : "TikTok"}{" "}
+                      · {formatDraftDate(draft.published_at ?? "")}
+                    </p>
+                  </div>
+                  <CheckCircle2 size={17} aria-label="Publicado" />
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="workspace-empty workspace-empty--compact">
+              <p>
+                Las publicaciones aparecerán aquí después de confirmar su
+                publicación.
+              </p>
+            </div>
+          )}
+        </article>
 
+        <article className="workspace-card dashboard-team">
+          <header className="workspace-card__header">
+            <div>
+              <span className="eyebrow">Tu equipo de IA</span>
+              <h3>Roles y actividad</h3>
+            </div>
+            <button
+              type="button"
+              className="quiet-link"
               onClick={() => setActiveSection("Equipo IA")}
             >
-              Ver equipo →
+              Ir al equipo <ArrowRight size={15} aria-hidden="true" />
             </button>
-          </div>
-
-          <div className="agent-list">
+          </header>
+          <div className="dashboard-agent-list">
             {agents.map((agent) => (
-              <div className="agent-row" key={agent.name}>
-                <div className="agent-avatar">{agent.name[0]}</div>
-
-                <div className="agent-info">
+              <div className="dashboard-agent" key={agent.name}>
+                <span aria-hidden="true">{agent.name[0]}</span>
+                <div>
                   <strong>{agent.name}</strong>
-
-                  <span>{agent.role}</span>
-                </div>
-
-                <div className="agent-status">
-                  <span
-                    className={`status-dot ${
-                      ["Contenido generado", "Disponible"].includes(agent.state)
-                        ? "available"
-                        : ""
-                    }`}
-                  />
-
-                  {agent.state}
-
-                  <small>{agent.activity}</small>
+                  <small>{agent.role}</small>
+                  <p>{agent.activity}</p>
                 </div>
               </div>
             ))}
           </div>
         </article>
       </section>
-
-      <section className="bottom-grid">
-        <article className="panel">
-          <div className="panel-heading">
-            <div>
-              <span className="eyebrow">Contenido reciente</span>
-
-              <h2>Publicaciones sociales</h2>
-            </div>
-
-            <button
-              className="text-button"
-
-              type="button"
-
-              onClick={() => setActiveSection("Contenido")}
-            >
-              Ver contenido →
-            </button>
-          </div>
-
-          <div className="post-list">
-            {loadingDrafts ? (
-              <p className="empty-state">Cargando publicaciones...</p>
-            ) : loadError ? (
-              <p className="empty-state">
-                No se pudieron cargar las publicaciones.
-              </p>
-            ) : recentPosts.length > 0 ? (
-              recentPosts.map((post) => (
-                <div className="approval-row" key={post.id}>
-                  <div className="approval-content">
-                    <strong>{post.title}</strong>
-
-                    <span>
-                      Facebook ·{" "}
-                      {post.published_at
-                        ? formatDraftDate(post.published_at)
-                        : "Fecha no disponible"}
-                    </span>
-
-                    <span>
-                      {post.caption.length > 120
-                        ? `${post.caption.slice(0, 120).trimEnd()}...`
-                        : post.caption}
-                    </span>
-                  </div>
-                </div>
-              ))
-            ) : (
-              <div style={{ padding: "2rem", textAlign: "center" }}>
-                <p style={{ fontWeight: 600 }}>Aún no hay publicaciones</p>
-
-                <p style={{ color: "#64748b", marginTop: "0.5rem" }}>
-                  Las publicaciones aparecerán aquí cuando sean publicadas en
-                  las redes sociales.
-                </p>
-              </div>
-            )}
-          </div>
-        </article>
-
-        <article className="panel approval-panel">
-          <div className="panel-heading">
-            <div>
-              <span className="eyebrow">Tu bandeja</span>
-
-              <h2>Aprobaciones pendientes</h2>
-            </div>
-
-            <button
-              className="text-button"
-
-              type="button"
-
-              onClick={() => setActiveSection("Aprobaciones")}
-            >
-              Ver todas →
-            </button>
-          </div>
-
-          <div className="approval-list">
-            {draftMessages}
-
-            {!loadingDrafts &&
-              !loadError &&
-              visibleDrafts
-
-                .filter((draft) => !draft.deleted_at && draft.status === "pending")
-
-                .slice(0, 2)
-
-                .map((draft) => (
-                  <div className="approval-row" key={draft.id}>
-                    <div className="approval-content">
-                      <strong>{draft.title}</strong>
-
-                      <span>
-                        {draft.platform} · {formatDraftDate(draft.created_at)}
-                      </span>
-
-                      <span>{draft.caption}</span>
-                    </div>
-
-                    <div className="approval-actions">
-                      <button
-                        className="approve-button"
-
-                        type="button"
-
-                        disabled={
-                          approvingIds.includes(draft.id) ||
-                          busyDraftIds.includes(draft.id) ||
-                          imageBusyIds.includes(draft.id) ||
-                          editingId === draft.id
-                        }
-
-                        onClick={() => void handleApprove(draft.id)}
-                      >
-                        {approvingIds.includes(draft.id)
-                          ? "Aprobando..."
-                          : "Aprobar"}
-                      </button>
-
-                      <button
-                        className="text-button"
-
-                        type="button"
-
-                        disabled={
-                          busyDraftIds.includes(draft.id) ||
-                          approvingIds.includes(draft.id)
-                        }
-
-                        onClick={() => startEditing(draft)}
-                      >
-                        Editar
-                      </button>
-
-                      <button
-                        className="reject-button"
-
-                        type="button"
-
-                        disabled={
-                          busyDraftIds.includes(draft.id) ||
-                          approvingIds.includes(draft.id) ||
-                          imageBusyIds.includes(draft.id)
-                        }
-
-                        onClick={() => void handleReject(draft.id)}
-                      >
-                        Rechazar
-                      </button>
-                    </div>
-                  </div>
-                ))}
-
-            {!loadingDrafts && !loadError && pendingCount === 0 && (
-              <p className="empty-state">
-                Todo está al día. No hay aprobaciones pendientes.
-              </p>
-            )}
-          </div>
-        </article>
-      </section>
-    </>
+    </div>
   );
 };
 

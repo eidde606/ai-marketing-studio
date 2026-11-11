@@ -175,7 +175,7 @@ describe("CampaignsPage campaign management", () => {
     });
     fireEvent.click(await openDeletionForm());
 
-    await screen.findByText(/No hay campañas todavía/);
+    await screen.findByText(/Aún no hay campañas/);
     expect(screen.getByRole("status").textContent).toContain(
       "Campaña eliminada correctamente",
     );

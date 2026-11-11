@@ -191,9 +191,53 @@ it("previews and closes video using the authenticated preview endpoint", async (
   expect(view.container.querySelector("video")?.getAttribute("src")).toBe(
     "https://example.test/signed.mp4",
   );
+  expect(view.container.querySelector("video")?.classList.contains(
+    "approval-video-player",
+  )).toBe(true);
+  expect((view.container.querySelector("video") as HTMLVideoElement).controls).toBe(
+    true,
+  );
   fireEvent.click(screen.getByText("Cerrar video"));
   expect(view.container.querySelector("video")).toBeNull();
   expect(fetch).toHaveBeenCalledTimes(1);
+});
+it("keeps approval information, media, scripts, platform and actions in separate regions", () => {
+  const p = props({
+    visibleDrafts: [
+      {
+        ...draft,
+        status: "pending",
+        video_script: "Guion largo ".repeat(80),
+      },
+    ],
+  });
+  const { container } = render(<ApprovalPage {...p} />);
+  const card = container.querySelector(".approval-card");
+  expect(card).toBeTruthy();
+
+  const regions = Array.from(card!.children);
+  expect(regions.map((region) => region.className)).toEqual([
+    "approval-card-top",
+    "approval-card-information",
+    "draft-image-section",
+    "approval-card-caption",
+    "approval-card-controls",
+  ]);
+  expect(
+    container.querySelector(".approval-card-caption")?.textContent,
+  ).toContain(draft.caption);
+  expect(
+    container.querySelector(".approval-card-controls .approval-platform-selection"),
+  ).toBeTruthy();
+  expect(
+    container.querySelector(".approval-card-controls .approval-card-decisions"),
+  ).toBeTruthy();
+  expect(
+    container.querySelector(".approval-card-controls .approval-card-secondary"),
+  ).toBeTruthy();
+  expect(container.querySelector(".heygen-script-text")?.textContent).toBe(
+    "Guion largo ".repeat(80),
+  );
 });
 it("shows preview failure without retrying", async () => {
   vi.mocked(fetch).mockResolvedValue({ ok: false, status: 503 } as Response);

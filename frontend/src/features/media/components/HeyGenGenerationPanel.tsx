@@ -51,6 +51,26 @@ export function HeyGenGenerationPanel({
     return () => window.clearTimeout(timer);
   }, [job, state.busy, state.error]);
   const stored = job?.status === "COMPLETED" && job.storage_status === "STORED";
+  const savingVideo =
+    job?.status === "COMPLETED" &&
+    !["STORED", "FAILED"].includes(job.storage_status);
+  const showProgress =
+    state.busy ||
+    job?.status === "SUBMITTING" ||
+    job?.status === "PROCESSING" ||
+    savingVideo;
+  const progressLabel =
+    state.busy && !job
+      ? state.uncertain
+        ? "Enviando y confirmando la solicitud"
+        : "Consultando el estado guardado"
+      : job?.status === "SUBMITTING"
+        ? "Enviando solicitud a HeyGen"
+        : job?.status === "PROCESSING"
+          ? "HeyGen está generando el video"
+          : savingVideo
+            ? "Guardando el video en almacenamiento privado"
+            : "";
   const message =
     state.uncertain || job?.status === "UNKNOWN"
       ? "No sabemos si HeyGen recibió la solicitud. Recupera el estado; no generes otro video."
@@ -96,6 +116,19 @@ export function HeyGenGenerationPanel({
       <p className="heygen-status" role="status">
         {message}
       </p>
+      {showProgress && (
+        <div className="heygen-progress-status" role="status">
+          <span className="heygen-progress-spinner" aria-hidden="true" />
+          <span>{progressLabel}</span>
+          <div
+            className="heygen-progress-track"
+            role="progressbar"
+            aria-label={progressLabel}
+          >
+            <span />
+          </div>
+        </div>
+      )}
       {state.error && <p role="alert">{state.error}</p>}
       {(job || state.uncertain || state.error) && (
         <button
