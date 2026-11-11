@@ -485,6 +485,54 @@ class FacebookOAuthState(Base):
     )
 
 
+class InstagramOAuthState(Base):
+    __tablename__ = "instagram_oauth_states"
+
+    state_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    business_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("businesses.id"), nullable=False,
+    )
+    user_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    facebook_page_id: Mapped[str] = mapped_column(String, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+    )
+
+
+class InstagramConnection(Base):
+    __tablename__ = "instagram_connections"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('connected_and_authorized', 'linked_not_api_authorized', "
+            "'reauthorization_required', 'permission_error', 'discovery_error', "
+            "'not_connected')",
+            name="ck_instagram_connections_status",
+        ),
+    )
+
+    business_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("businesses.id"), primary_key=True,
+    )
+    instagram_account_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    username: Mapped[str | None] = mapped_column(String, nullable=True)
+    facebook_page_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    encrypted_access_token: Mapped[str | None] = mapped_column(String, nullable=True)
+    token_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    granted_permissions: Mapped[list[str]] = mapped_column(
+        JSON, nullable=False, default=list,
+    )
+    status: Mapped[str] = mapped_column(String(40), nullable=False)
+    last_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+
 class Conversation(Base):
     """A conversation with Sofía for a specific business."""
 

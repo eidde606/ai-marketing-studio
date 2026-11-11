@@ -9,6 +9,7 @@ import CampaignsPage from "./components/CampaignsPage";
 import DashboardOverview from "./components/DashboardOverview";
 import FacebookConnection from "./components/FacebookConnection";
 import TikTokConnection from "./components/TikTokConnection";
+import InstagramConnection from "./components/InstagramConnection";
 import SettingsPage from "./components/SettingsPage";
 import type { Section } from "./components/Sidebar";
 import type { Business } from "./services/businessesApi";
@@ -523,6 +524,7 @@ function AuthenticatedApp({
           userEmail={session.user.email ?? ""}
           onSaveDisplayName={onSaveDisplayName}
           facebookConnection={<FacebookConnection businessId={selectedBusinessId} />}
+          instagramConnection={<InstagramConnection businessId={selectedBusinessId} />}
           tiktokConnection={<TikTokConnection businessId={selectedBusinessId} />}
         />
       ) : (

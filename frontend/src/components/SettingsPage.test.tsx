@@ -42,6 +42,7 @@ describe("SettingsPage", () => {
         userEmail="user@example.com"
         onSaveDisplayName={vi.fn()}
         facebookConnection={<div>Facebook conexión</div>}
+        instagramConnection={<div>Instagram conexión</div>}
         tiktokConnection={<div>TikTok conexión</div>}
       />,
     );
@@ -159,6 +160,7 @@ describe("SettingsPage", () => {
         userEmail="maria@example.com"
         onSaveDisplayName={vi.fn()}
         facebookConnection={<div>Facebook conexión</div>}
+        instagramConnection={<div>Instagram conexión</div>}
         tiktokConnection={<div>TikTok conexión</div>}
       />,
     );
@@ -166,6 +168,7 @@ describe("SettingsPage", () => {
     expect(screen.queryByText("Facebook conexión")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Integraciones" }));
     expect(screen.getByText("Facebook conexión")).toBeTruthy();
+    expect(screen.getByText("Instagram conexión")).toBeTruthy();
     expect(screen.getByText("TikTok conexión")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Redes sociales" })).toBeTruthy();
   });
