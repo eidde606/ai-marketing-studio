@@ -1,5 +1,4 @@
 from datetime import datetime, timedelta, timezone
-from typing import Literal
 import os
 import httpx
 from app.facebook_service import get_page_info, publish_text_post, publish_image_post, publish_video_post
@@ -15,11 +14,15 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, UploadFile, File
 from app.facebook_auth_routes import router as facebook_auth_router
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 import logging
 
 from app.campaign_routes import router as campaign_router
+from app.features.businesses.routes import router as business_router
+from app.features.drafts.routes import router as draft_router
+from app.features.drafts.routes import draft_http_exception
+from app.features.drafts import service as draft_service
 from app.features.media.routes import router as media_router
 from app.features.media.routes import webhook_router as heygen_webhook_router
 from app.features.media.generation_service import (
@@ -92,46 +95,12 @@ class SofiaChatRequest(BaseModel):
     conversation_id: str | None = None
 
 
-class DraftCreate(BaseModel):
-    business_id: str
-    title: str
-    caption: str
-    platform: str
-    media_type: Literal["text", "image", "video"] = "text"
-
-
 class TikTokPublishRequest(BaseModel):
     account_id: str = Field(min_length=1)
     privacy_level: str = Field(min_length=1)
     disable_comment: bool = False
     disable_duet: bool = False
     disable_stitch: bool = False
-
-
-class DraftDestinationsUpdate(BaseModel):
-    destinations: list[Literal["facebook", "tiktok"]] = Field(
-        min_length=1,
-        max_length=2,
-    )
-
-
-class DraftUpdate(BaseModel):
-    title: str
-    caption: str
-
-
-class BusinessCreate(BaseModel):
-    name: str
-    description: str | None = None
-    target_audience: str | None = None
-    brand_voice: str | None = None
-    industry: str | None = None
-    products_services: str | None = None
-    service_area: str | None = None
-    website_url: str | None = None
-    marketing_goals: str | None = None
-    preferred_platforms: str | None = None
-    posting_frequency: str | None = None
 
 
 class ImageRevisionRequest(BaseModel):
@@ -188,32 +157,24 @@ async def get_valid_tiktok_token(
     return tokens["access_token"]
 
 
+# Compatibility wrapper for legacy handlers; remove when those handlers are extracted.
 def require_draft(
         db: Session, draft_id: str, *, include_deleted: bool = False,
 ) -> Draft:
-    draft = db.get(Draft, draft_id)
-
-    if draft is None or (draft.deleted_at is not None and not include_deleted):
-        raise HTTPException(
-            status_code=404,
-            detail="Draft not found",
+    try:
+        return draft_service.require_draft(
+            db, draft_id, include_deleted=include_deleted,
         )
+    except draft_service.DraftError as exc:
+        raise draft_http_exception(exc) from exc
 
-    return draft
 
-
+# Compatibility wrapper for legacy handlers; remove when those handlers are extracted.
 def require_pending_draft(db: Session, draft_id: str) -> Draft:
-    # Serialize edits and approval decisions with soft deletion.
-    db.execute(select(Draft).where(Draft.id == draft_id).with_for_update())
-    draft = require_draft(db, draft_id)
-
-    if draft.status != "pending":
-        raise HTTPException(
-            status_code=409,
-            detail="Only pending drafts can be edited",
-        )
-
-    return draft
+    try:
+        return draft_service.require_pending_draft(db, draft_id)
+    except draft_service.DraftError as exc:
+        raise draft_http_exception(exc) from exc
 
 
 def lock_draft_revisions(db: Session, draft_id: str) -> None:
@@ -862,205 +823,6 @@ async def verify_tiktok_publication(
 
 
 # --------------------------------------------------
-# Draft Endpoints
-# --------------------------------------------------
-
-
-@protected.post("/drafts", status_code=201)
-def create_draft(
-        request: DraftCreate,
-        db: Session = Depends(get_db),
-):
-    business = db.get(Business, request.business_id)
-
-    if business is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Business not found",
-        )
-
-    draft = Draft(
-        **request.model_dump(),
-        publish_destinations=(
-            [request.platform]
-            if request.platform in ("facebook", "tiktok")
-            else ["facebook"]
-        ),
-    )
-
-    db.add(draft)
-    db.commit()
-    db.refresh(draft)
-
-    return draft
-
-
-@protected.get("/drafts")
-def list_drafts(
-        business_id: str,
-        include_deleted_published: bool = False,
-        db: Session = Depends(get_db),
-):
-    business = db.get(Business, business_id)
-
-    if business is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Business not found",
-        )
-
-    visibility = Draft.deleted_at.is_(None)
-    if include_deleted_published:
-        visibility = or_(
-            visibility,
-            Draft.facebook_publish_status == "published",
-            Draft.tiktok_publish_status == "published",
-            Draft.published_at.is_not(None),
-        )
-    return db.scalars(select(Draft).where(
-        Draft.business_id == business_id, visibility,
-    )).all()
-
-
-@protected.delete("/drafts/{draft_id}")
-def delete_draft(draft_id: str, db: Session = Depends(get_db)):
-    # The protected router enforces the configured authorized Supabase user.
-    draft = require_draft(db, draft_id, include_deleted=True)
-    if draft.deleted_at is not None:
-        return draft
-
-    deleted = db.execute(
-        update(Draft)
-        .where(
-            Draft.id == draft_id,
-            Draft.deleted_at.is_(None),
-            Draft.facebook_publish_status != "publishing",
-            Draft.tiktok_publish_status != "publishing",
-            Draft.image_status != "generating",
-            Draft.video_status.not_in(["generating", "uploading"]),
-            ~select(ImageRevision.id).where(
-                ImageRevision.draft_id == draft_id,
-                ImageRevision.status == "generating",
-            ).exists(),
-        )
-        .values(deleted_at=datetime.now(timezone.utc))
-        .returning(Draft.id)
-    ).scalar_one_or_none()
-    if deleted is None:
-        db.rollback()
-        raise HTTPException(
-            status_code=409,
-            detail="Espera a que termine la operación en curso antes de eliminar.",
-        )
-    db.commit()
-    db.refresh(draft)
-    return draft
-
-
-@protected.patch("/drafts/{draft_id}/destinations")
-def update_draft_destinations(
-        draft_id: str,
-        request: DraftDestinationsUpdate,
-        db: Session = Depends(get_db),
-):
-    draft = require_pending_draft(db, draft_id)
-
-    destinations = request.destinations
-
-    if len(destinations) != len(set(destinations)):
-        raise HTTPException(
-            status_code=422,
-            detail="Duplicate destinations are not allowed",
-        )
-
-    if "tiktok" in destinations and not (
-            draft.media_type == "video" and draft.video_url
-            or draft.image_url
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="TikTok requires an image or video",
-        )
-
-    connected = set(
-        db.scalars(
-            select(SocialAccount.platform).where(
-                SocialAccount.business_id == draft.business_id,
-                SocialAccount.platform.in_(destinations),
-                SocialAccount.connection_status == "connected",
-            )
-        ).all()
-    )
-
-    if set(destinations) != connected:
-        raise HTTPException(
-            status_code=409,
-            detail="Connect the selected social accounts first",
-        )
-
-    draft.publish_destinations = destinations
-
-    db.commit()
-    db.refresh(draft)
-
-    return draft
-
-
-@protected.patch("/drafts/{draft_id}/approve")
-def approve_draft(
-        draft_id: str,
-        db: Session = Depends(get_db),
-):
-    draft = require_pending_draft(db, draft_id)
-
-    if draft.media_type == "video":
-        if draft.video_status != "completed" or not draft.video_url:
-            raise HTTPException(
-                status_code=409,
-                detail="Video must be completed before approval",
-            )
-
-    draft.status = "approved"
-
-    db.commit()
-    db.refresh(draft)
-
-    return draft
-
-
-@protected.patch("/drafts/{draft_id}")
-def update_draft(
-        draft_id: str,
-        request: DraftUpdate,
-        db: Session = Depends(get_db),
-):
-    draft = require_pending_draft(db, draft_id)
-
-    draft.title = request.title
-    draft.caption = request.caption
-
-    db.commit()
-    db.refresh(draft)
-
-    return draft
-
-
-@protected.patch("/drafts/{draft_id}/reject")
-def reject_draft(
-        draft_id: str,
-        db: Session = Depends(get_db),
-):
-    draft = require_pending_draft(db, draft_id)
-
-    draft.status = "rejected"
-
-    db.commit()
-    db.refresh(draft)
-
-    return draft
-
-
-# --------------------------------------------------
 # AI Content Generation
 # --------------------------------------------------
 
@@ -1556,32 +1318,6 @@ def generate_sofia_conversation_draft(
     db.refresh(draft)
 
     return draft
-
-
-# --------------------------------------------------
-# Business Endpoints
-# --------------------------------------------------
-
-
-@protected.post("/businesses", status_code=201)
-def create_business(
-        request: BusinessCreate,
-        db: Session = Depends(get_db),
-):
-    business = Business(**request.model_dump())
-
-    db.add(business)
-    db.commit()
-    db.refresh(business)
-
-    return business
-
-
-@protected.get("/businesses")
-def list_businesses(
-        db: Session = Depends(get_db),
-):
-    return db.scalars(select(Business)).all()
 
 
 # --------------------------------------------------
@@ -2248,6 +1984,8 @@ async def test_facebook_reach(
 # --------------------------------------------------
 
 app.include_router(protected)
+app.include_router(draft_router)
+app.include_router(business_router)
 app.include_router(campaign_router)
 app.include_router(media_router)
 app.include_router(heygen_webhook_router)
