@@ -53,6 +53,7 @@ from app.tiktok_service import (
 )
 from app.tiktok_oauth import refresh_tiktok_token
 from app.token_service import encrypt_token
+from app.features.instagram.routes import router as instagram_auth_router
 
 app = FastAPI()
 
@@ -2247,5 +2248,6 @@ app.include_router(campaign_router)
 app.include_router(media_router)
 app.include_router(heygen_webhook_router)
 app.include_router(facebook_auth_router)
+app.include_router(instagram_auth_router)
 
 app.include_router(tiktok_auth_router)
