@@ -1,7 +1,18 @@
 from datetime import date, datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, JSON, String, UniqueConstraint
+from sqlalchemy import (
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    JSON,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -225,6 +236,94 @@ class Draft(Base):
     image_revisions: Mapped[list["ImageRevision"]] = relationship(
         back_populates="draft",
     )
+
+
+class HeyGenGenerationAttempt(Base):
+    __tablename__ = "heygen_generation_attempts"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('SUBMITTING', 'UNKNOWN', 'PROCESSING', 'COMPLETED', 'FAILED')",
+            name="ck_heygen_generation_attempts_status",
+        ),
+        CheckConstraint(
+            "storage_status IN ('PENDING', 'PROCESSING', 'RETRY', 'STORED', 'FAILED')",
+            name="ck_heygen_generation_attempts_storage_status",
+        ),
+        UniqueConstraint(
+            "idempotency_key",
+            name="uq_heygen_generation_attempts_idempotency_key",
+        ),
+        UniqueConstraint(
+            "provider_video_id",
+            name="uq_heygen_generation_attempts_provider_video_id",
+        ),
+        Index(
+            "uq_heygen_generation_attempts_active_draft",
+            "draft_id",
+            unique=True,
+            postgresql_where=text(
+                "status IN ('SUBMITTING', 'UNKNOWN', 'PROCESSING')"
+            ),
+            sqlite_where=text(
+                "status IN ('SUBMITTING', 'UNKNOWN', 'PROCESSING')"
+            ),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    business_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("businesses.id"), nullable=False, index=True,
+    )
+    draft_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("drafts.id"), nullable=False, index=True,
+    )
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(36), nullable=False)
+    avatar_id: Mapped[str] = mapped_column(String, nullable=False)
+    voice_id: Mapped[str] = mapped_column(String, nullable=False)
+    script: Mapped[str] = mapped_column(Text, nullable=False)
+    aspect_ratio: Mapped[str] = mapped_column(String(10), nullable=False)
+    resolution: Mapped[str] = mapped_column(String(20), nullable=False)
+    provider_video_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    storage_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="PENDING", server_default="PENDING",
+    )
+    storage_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    completion_lease_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    first_submitted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+    )
+    submission_lease_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+    )
+
+
+class HeyGenWebhookDelivery(Base):
+    __tablename__ = "heygen_webhook_deliveries"
+    __table_args__ = (
+        UniqueConstraint(
+            "deduplication_key",
+            name="uq_heygen_webhook_deliveries_deduplication_key",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    deduplication_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    provider_video_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    callback_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ImageRevision(Base):

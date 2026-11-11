@@ -1,14 +1,5 @@
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import type { Session } from "@supabase/supabase-js";
-import { ChevronDown, LogOut } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type FC } from "react";
+import { useEffect, useState, type FC } from "react";
 import AnalyticsPage from "./components/AnalyticsPage";
 import ApprovalPage from "./components/ApprovalPage";
 import AuthPage from "./components/AuthPage";
@@ -18,32 +9,20 @@ import CampaignsPage from "./components/CampaignsPage";
 import DashboardOverview from "./components/DashboardOverview";
 import FacebookConnection from "./components/FacebookConnection";
 import TikTokConnection from "./components/TikTokConnection";
-import Sidebar, { type Section } from "./components/Sidebar";
-import { useDraftImages } from "./hooks/useDraftImages";
-import { getBusinesses, type Business } from "./services/businessesApi";
-import {
-  acceptImageRevision,
-  approveDraft,
-  createImageRevision,
-  deleteDraft,
-  generateContent,
-  generateDraftImage,
-  getDraftImage,
-  getDrafts,
-  getImageRevisions,
-  publishDraftToFacebook,
-  publishDraftToTikTok,
-  verifyFacebookVideo,
-  verifyTikTokPublication,
-  rejectDraft,
-  rejectImageRevision,
-  updateDraft,
-  updateDraftDestinations,
-  type Draft,
-  type ImageRevision,
-} from "./services/draftsApi";
+import SettingsPage from "./components/SettingsPage";
+import type { Section } from "./components/Sidebar";
+import type { Business } from "./services/businessesApi";
+import type { Draft } from "./services/draftsApi";
+import { useDraftCollection } from "./features/drafts/hooks/useDraftCollection";
+import { useDraftOperations } from "./features/drafts/hooks/useDraftOperations";
+import { useDraftActions } from "./features/drafts/hooks/useDraftActions";
+import { useApprovalActions } from "./features/approvals/hooks/useApprovalActions";
+import { useHeyGenGeneration } from "./features/media/hooks/useHeyGenGeneration";
+import { useDraftMedia } from "./features/media/hooks/useDraftMedia";
 import { getConnectedFacebookAccounts } from "./services/facebookApi";
-import { supabase } from "./services/supabaseClient";
+import AppShell from "./app/AppShell";
+import { useAuthSession } from "./app/useAuthSession";
+import { useBusinessSelection } from "./app/useBusinessSelection";
 import SofiaChat from "./components/SofiaChat";
 
 function formatDraftDate(value: string): string {
@@ -60,11 +39,57 @@ function formatDraftDate(value: string): string {
     timeStyle: "short",
   }).format(date);
 }
-const App: FC = () => {
-  const [session, setSession] = useState<Session | null>(null);
-  const [isRecoveringPassword, setIsRecoveringPassword] = useState(false);
 
-  const [checkingAuth, setCheckingAuth] = useState(true);
+function getUserDisplayName(session: Session): string {
+  const metadata = session.user.user_metadata ?? {};
+  const name = [
+    metadata.display_name,
+    metadata.full_name,
+    metadata.name,
+  ].find(
+    (value): value is string =>
+      typeof value === "string" && value.trim().length > 0,
+  );
+  return name?.trim() || "Mi cuenta";
+}
+
+const App: FC = () => {
+  const {
+    session,
+    checkingAuth,
+    isRecoveringPassword,
+    completeRecovery,
+    signOut,
+    updateDisplayName,
+  } = useAuthSession();
+  if (checkingAuth) return <div className="auth-loading">Cargando...</div>;
+  if (!session) return <AuthPage />;
+  // A different account gets a fresh workspace; late callbacks cannot reach it.
+  return (
+    <AuthenticatedApp
+      key={session.user.id}
+      session={session}
+      onSignOut={signOut}
+      isRecoveringPassword={isRecoveringPassword}
+      onRecoveryComplete={completeRecovery}
+      onSaveDisplayName={updateDisplayName}
+    />
+  );
+};
+
+function AuthenticatedApp({
+  session,
+  onSignOut,
+  isRecoveringPassword,
+  onRecoveryComplete,
+  onSaveDisplayName,
+}: {
+  session: Session;
+  onSignOut: () => Promise<unknown>;
+  isRecoveringPassword: boolean;
+  onRecoveryComplete: () => void;
+  onSaveDisplayName: (displayName: string) => Promise<string>;
+}) {
   const [activeSection, setActiveSection] = useState<Section>(() => {
     try {
       const saved = window.localStorage.getItem("ai-marketing-studio:section");
@@ -74,30 +99,21 @@ const App: FC = () => {
         "Contenido",
         "Equipo IA",
         "Aprobaciones",
+        "Analíticas",
+        "Configuración",
       ];
       return validSections.find((section) => section === saved) ?? "Resumen";
     } catch {
       return "Resumen";
     }
   });
-  const [approvals, setApprovals] = useState<Draft[]>([]);
-  const [generating, setGenerating] = useState(false);
-  const [generationError, setGenerationError] = useState<string | null>(null);
-  const [loadingDrafts, setLoadingDrafts] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [approvalError, setApprovalError] = useState<string | null>(null);
-  const [publishingIds, setPublishingIds] = useState<string[]>([]);
-  const [draftDestinations, setDraftDestinations] = useState<
-    Record<string, { facebook: boolean; tiktok: boolean }>
-  >({});
-  const [publishError, setPublishError] = useState<string | null>(null);
-  const [approvingIds, setApprovingIds] = useState<string[]>([]);
-  const [busyDraftIds, setBusyDraftIds] = useState<string[]>([]);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editTitle, setEditTitle] = useState("");
-  const [editCaption, setEditCaption] = useState("");
-  const [businesses, setBusinesses] = useState<Business[]>([]);
-  const [selectedBusinessId, setSelectedBusinessId] = useState("");
+  const {
+    businesses,
+    selectedBusinessId,
+    setSelectedBusinessId,
+    businessError,
+    addBusiness,
+  } = useBusinessSelection(session.user.id);
 
   type FacebookConnectionStatus = "connected" | "disconnected" | "error";
 
@@ -150,177 +166,80 @@ const App: FC = () => {
       // The application still works when browser storage is unavailable.
     }
   }, [activeSection]);
-  const userId = session?.user.id;
-  useEffect(() => {
-    if (!userId || !selectedBusinessId) return;
-    try {
-      window.localStorage.setItem(
-        `ai-marketing-studio:business:${userId}`,
-        selectedBusinessId,
-      );
-    } catch {
-      // Ignore unavailable browser storage.
-    }
-  }, [userId, selectedBusinessId]);
-  const [businessError, setBusinessError] = useState<string | null>(null);
   const [showBusinessForm, setShowBusinessForm] = useState(false);
-  const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
-  const [imageBusyIds, setImageBusyIds] = useState<string[]>([]);
-  const [imageErrors, setImageErrors] = useState<Record<string, string>>({});
+
+  // These hooks share one collection and lock owner for the authenticated workspace.
+  // Keep them above the recovery return so pending work and edits survive recovery.
+  const collection = useDraftCollection(selectedBusinessId, session.user.id);
+  const operations = useDraftOperations(selectedBusinessId);
+  const draftActions = useDraftActions(
+    selectedBusinessId,
+    collection,
+    operations,
+    setActiveSection,
+  );
+  const approvalActions = useApprovalActions(
+    selectedBusinessId,
+    collection,
+    operations,
+  );
+  const media = useDraftMedia(selectedBusinessId, collection, operations);
+  const heygen = useHeyGenGeneration(selectedBusinessId, collection, operations);
   const {
+    setApprovals,
+    loadingDrafts,
+    loadError,
+    historyDrafts,
+    visibleDrafts,
+    pendingCount,
+    isCurrentBusiness,
+  } = collection;
+  const { approvalError, approvingIds, publishingIds, busyDraftIds } =
+    operations;
+  const {
+    generating,
+    generationError,
+    editingId,
+    editTitle,
+    editCaption,
+    setEditTitle,
+    setEditCaption,
+    setEditingId,
+    deletingIds,
+    handleGenerateContent,
+    startEditing,
+    handleSaveEdit,
+    handleDelete,
+    handleReject,
+  } = draftActions;
+  const {
+    draftDestinations,
+    setDraftDestinations,
+    publishError,
+    handleApprove,
+    handlePublishTikTok,
+    handlePublishFacebook,
+    handleVerifyTikTok,
+    handleVerifyFacebookVideo,
+  } = approvalActions;
+  const {
+    imageUrls,
+    imageBusyIds,
+    imageErrors,
     imageInstructions,
-    setImageInstructions,
     showImageEditor,
-    setShowImageEditor,
     updateImageInstructions,
     addImageSuggestion,
-  } = useDraftImages();
-  const [revisions, setRevisions] = useState<
-    Record<string, ImageRevision | null>
-  >({});
-  const [revisionBusyIds, setRevisionBusyIds] = useState<string[]>([]);
-  const [revisionErrors, setRevisionErrors] = useState<Record<string, string>>(
-    {},
-  );
-  const imageLocks = useRef(new Set<string>());
-  const selectedBusinessRef = useRef(selectedBusinessId);
-  useEffect(() => {
-    selectedBusinessRef.current = selectedBusinessId;
-  }, [selectedBusinessId]);
-  const toggleImageEditor = (draftId: string) => {
-    if (!showImageEditor[draftId]) void refreshRevision(draftId);
-    setShowImageEditor((current) => ({
-      ...current,
-      [draftId]: !current[draftId],
-    }));
-  };
-  useEffect(() => {
-    let active = true;
-    supabase.auth
-      .getSession()
-      .then(({ data: { session } }) => {
-        if (active) {
-          setSession(session);
-          setCheckingAuth(false);
-        }
-      })
-      .catch(() => {
-        if (active) setCheckingAuth(false);
-      });
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, nextSession) => {
-      if (active) {
-        if (event === "PASSWORD_RECOVERY") {
-          setIsRecoveringPassword(true);
-        }
-
-        setSession(nextSession);
-        setCheckingAuth(false);
-      }
-    });
-    return () => {
-      active = false;
-      subscription.unsubscribe();
-    };
-  }, []);
-  useEffect(() => {
-    if (!userId) return;
-    let active = true;
-    getBusinesses()
-      .then((data) => {
-        if (!active) return;
-        setBusinesses(data);
-        setSelectedBusinessId((current) => {
-          let saved = "";
-          try {
-            saved =
-              window.localStorage.getItem(
-                `ai-marketing-studio:business:${userId}`,
-              ) ?? "";
-          } catch {
-            // Continue with a default if storage is unavailable.
-          }
-          const valid = (id: string) =>
-            data.some((business) => business.id === id);
-          return valid(current)
-            ? current
-            : valid(saved)
-              ? saved
-              : (data[0]?.id ?? "");
-        });
-        setBusinessError(null);
-      })
-      .catch(() => {
-        if (active) {
-          setBusinessError("No se pudieron cargar los negocios.");
-        }
-      });
-    return () => {
-      active = false;
-    };
-  }, [userId]);
-  useEffect(() => {
-    let active = true;
-    // Reset business-specific state before loading another business.
-    /* eslint-disable react-hooks/set-state-in-effect */
-    setApprovals([]);
-    setImageUrls({});
-    setImageErrors({});
-    setImageInstructions({});
-    setShowImageEditor({});
-    setRevisions({});
-    setRevisionErrors({});
-    setEditingId(null);
-    setApprovalError(null);
-    setLoadError(null);
-    if (!selectedBusinessId || !userId) {
-      setLoadingDrafts(false);
-      return;
-    }
-    setLoadingDrafts(true);
-    /* eslint-enable react-hooks/set-state-in-effect */
-    const businessId = selectedBusinessId;
-    getDrafts(businessId, true)
-      .then((drafts) => {
-        if (active) setApprovals(drafts);
-      })
-      .catch(() => {
-        if (active) {
-          setLoadError(
-            "No se pudieron cargar los borradores. Comprueba la conexión con el servidor.",
-          );
-        }
-      })
-      .finally(() => {
-        if (active) setLoadingDrafts(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, [selectedBusinessId, userId, setImageInstructions, setShowImageEditor]);
-  const historyDrafts = useMemo(
-    () =>
-      approvals.filter(
-        (draft) =>
-          draft.business_id === selectedBusinessId &&
-          (!draft.deleted_at ||
-            draft.facebook_publish_status === "published" ||
-            draft.tiktok_publish_status === "published" ||
-            draft.published_at !== null),
-      ),
-    [approvals, selectedBusinessId],
-  );
-  const visibleDrafts = useMemo(
-    () => historyDrafts.filter((draft) => !draft.deleted_at),
-    [historyDrafts],
-  );
-  const [deletingIds, setDeletingIds] = useState<string[]>([]);
-  const deleteLocks = useRef(new Set<string>());
-  const pendingCount = useMemo(
-    () => visibleDrafts.filter((draft) => draft.status === "pending").length,
-    [visibleDrafts],
-  );
+    revisions,
+    revisionBusyIds,
+    revisionErrors,
+    toggleImageEditor,
+    handleGenerateImage,
+    handlePreviewImage,
+    refreshRevision,
+    handleCreateRevision,
+    handleDecideRevision,
+  } = media;
   const hasAiActivity =
     !loadingDrafts &&
     !loadError &&
@@ -384,594 +303,8 @@ const App: FC = () => {
     setShowBusinessForm(false);
   };
   const handleBusinessCreated = (business: Business) => {
-    setBusinesses((current) => [...current, business]);
-    setSelectedBusinessId(business.id);
+    addBusiness(business);
     setShowBusinessForm(false);
-  };
-  const updateLocalDraft = (updated: Draft) => {
-    setApprovals((current) =>
-      current.map((draft) => (draft.id === updated.id ? updated : draft)),
-    );
-  };
-  const handleGenerateContent = async () => {
-    if (!selectedBusinessId || generating) return;
-    const businessId = selectedBusinessId;
-    setGenerating(true);
-    setGenerationError(null);
-    try {
-      const draft = await generateContent(businessId);
-      if (selectedBusinessRef.current === businessId) {
-        setApprovals((current) => [draft, ...current]);
-        setActiveSection("Aprobaciones");
-      }
-    } catch (error) {
-      console.error("Content generation failed:", error);
-      if (selectedBusinessRef.current === businessId) {
-        setGenerationError(
-          "No se pudo generar el contenido. Inténtalo de nuevo.",
-        );
-      }
-    } finally {
-      setGenerating(false);
-    }
-  };
-  const handleApprove = async (id: string) => {
-    if (
-      approvingIds.includes(id) ||
-      busyDraftIds.includes(id) ||
-      imageLocks.current.has(id)
-    )
-      return;
-    const draft = visibleDrafts.find((item) => item.id === id);
-    if (!draft || draft.status !== "pending") return;
-    setApprovalError(null);
-    setApprovingIds((current) => [...current, id]);
-    try {
-      const selection = draftDestinations[id];
-
-      const savedDestinations = draft.publish_destinations ?? ["facebook"];
-
-      const destinations: ("facebook" | "tiktok")[] = [];
-
-      if (selection?.facebook ?? savedDestinations.includes("facebook")) {
-        destinations.push("facebook");
-      }
-
-      if (selection?.tiktok ?? savedDestinations.includes("tiktok")) {
-        destinations.push("tiktok");
-      }
-
-      if (destinations.length === 0) {
-        throw new Error("Select at least one publishing platform.");
-      }
-
-      await updateDraftDestinations(id, destinations);
-      const updated = await approveDraft(id);
-
-      updateLocalDraft(updated);
-    } catch {
-      setApprovalError("No se pudo aprobar el borrador. Inténtalo de nuevo.");
-    } finally {
-      setApprovingIds((current) => current.filter((value) => value !== id));
-    }
-  };
-
-  const handlePublishTikTok = async (
-    id: string,
-    accountId: string,
-    privacyLevel: string,
-    interactions: {
-      disable_comment: boolean;
-      disable_duet: boolean;
-      disable_stitch: boolean;
-    },
-  ) => {
-    const draft = visibleDrafts.find((item) => item.id === id);
-
-    if (
-      !draft ||
-      draft.status !== "approved" ||
-      draft.tiktok_publish_status !== "not_published" ||
-      publishingIds.includes(id)
-    ) {
-      return;
-    }
-
-    setPublishError(null);
-    setPublishingIds((current) => [...current, id]);
-
-    try {
-      const result = await publishDraftToTikTok(id, {
-        account_id: accountId,
-        privacy_level: privacyLevel,
-        ...interactions,
-      });
-
-      setApprovals((current) =>
-        current.map((item) =>
-          item.id === id
-            ? {
-                ...item,
-                tiktok_publish_id: result.tiktok_publish_id,
-                tiktok_publish_status: "needs_review",
-              }
-            : item,
-        ),
-      );
-    } catch (error) {
-      console.error("TikTok publishing failed:", error);
-
-      setPublishError(
-        "No se pudo confirmar la publicación en TikTok. Verifica el estado antes de intentar nuevamente.",
-      );
-
-      // The request may have reached TikTok.
-      // Do not automatically retry.
-    } finally {
-      setPublishingIds((current) => current.filter((value) => value !== id));
-    }
-  };
-
-  // Publishing button will use this handler when ApprovalPage is connected.
-  const handlePublishFacebook = async (id: string) => {
-    const draft = visibleDrafts.find((item) => item.id === id);
-    if (
-      !draft ||
-      draft.status !== "approved" ||
-      draft.facebook_publish_status !== "not_published" ||
-      publishingIds.includes(id)
-    ) {
-      return;
-    }
-    setPublishError(null);
-    setPublishingIds((current) => [...current, id]);
-    try {
-      const result = await publishDraftToFacebook(id);
-      setApprovals((current) =>
-        current.map((item) =>
-          item.id === id
-            ? {
-                ...item,
-                facebook_post_id: result.facebook_post_id,
-                facebook_publish_status:
-                  result.status === "published" ? "published" : "needs_review",
-                published_at:
-                  result.status === "published"
-                    ? new Date().toISOString()
-                    : null,
-              }
-            : item,
-        ),
-      );
-    } catch {
-      setPublishError(
-        "No se pudo confirmar la publicación. Revisa Facebook antes de intentar nuevamente.",
-      );
-      // The server may have marked the draft as needing review.
-      // Reloading drafts later will retrieve the authoritative status.
-    } finally {
-      setPublishingIds((current) => current.filter((value) => value !== id));
-    }
-  };
-
-  const handleVerifyTikTok = async (id: string) => {
-    if (publishingIds.includes(id)) return;
-
-    setPublishError(null);
-    setPublishingIds((current) => [...current, id]);
-
-    try {
-      const result = await verifyTikTokPublication(id);
-
-      setApprovals((current) =>
-        current.map((draft) =>
-          draft.id === id
-            ? {
-                ...draft,
-                tiktok_publish_status:
-                  result.status === "published" ? "published" : "needs_review",
-              }
-            : draft,
-        ),
-      );
-    } catch (error) {
-      console.error("TikTok verification failed:", error);
-
-      setPublishError(
-        "No se pudo verificar la publicación en TikTok. Inténtalo nuevamente más tarde.",
-      );
-    } finally {
-      setPublishingIds((current) => current.filter((value) => value !== id));
-    }
-  };
-
-  const handleVerifyFacebookVideo = async (id: string) => {
-    setPublishError(null);
-
-    try {
-      const result = await verifyFacebookVideo(id);
-
-      if (result.status === "published") {
-        setApprovals((current) =>
-          current.map((item) =>
-            item.id === id
-              ? {
-                  ...item,
-                  facebook_publish_status: "published",
-                  published_at: new Date().toISOString(),
-                }
-              : item,
-          ),
-        );
-      }
-    } catch (error) {
-      console.error("Facebook video verification failed:", error);
-      setPublishError(
-        "No se pudo verificar el video. Inténtalo nuevamente más tarde.",
-      );
-    }
-  };
-
-  useEffect(() => {
-    const videosToVerify = visibleDrafts.filter(
-      (draft) =>
-        draft.status === "approved" &&
-        draft.media_type === "video" &&
-        draft.facebook_publish_status === "needs_review" &&
-        !!draft.facebook_post_id,
-    );
-
-    if (videosToVerify.length === 0) return;
-
-    let checking = false;
-
-    const checkVideos = async () => {
-      if (checking) return;
-
-      checking = true;
-
-      try {
-        for (const draft of videosToVerify) {
-          const result = await verifyFacebookVideo(draft.id);
-
-          if (result.status === "published") {
-            setApprovals((current) =>
-              current.map((item) =>
-                item.id === draft.id
-                  ? {
-                      ...item,
-                      facebook_publish_status: "published",
-                      published_at: new Date().toISOString(),
-                    }
-                  : item,
-              ),
-            );
-          }
-        }
-      } catch (error) {
-        console.error("Automatic Facebook verification failed:", error);
-      } finally {
-        checking = false;
-      }
-    };
-
-    void checkVideos();
-
-    const interval = window.setInterval(() => {
-      void checkVideos();
-    }, 30000);
-
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [visibleDrafts]);
-
-  const startEditing = (draft: Draft) => {
-    setApprovalError(null);
-    setEditingId(draft.id);
-    setEditTitle(draft.title);
-    setEditCaption(draft.caption);
-    setActiveSection("Aprobaciones");
-  };
-  const handleSaveEdit = async (id: string) => {
-    if (!editTitle.trim() || !editCaption.trim()) {
-      setApprovalError("El título y el texto no pueden estar vacíos.");
-      return;
-    }
-    if (busyDraftIds.includes(id) || approvingIds.includes(id)) return;
-    setBusyDraftIds((current) => [...current, id]);
-    setApprovalError(null);
-    try {
-      const updated = await updateDraft(id, {
-        title: editTitle.trim(),
-        caption: editCaption.trim(),
-      });
-      updateLocalDraft(updated);
-      setEditingId(null);
-    } catch {
-      setApprovalError("No se pudo guardar el borrador. Inténtalo de nuevo.");
-    } finally {
-      setBusyDraftIds((current) => current.filter((value) => value !== id));
-    }
-  };
-  const handleDelete = async (id: string) => {
-    if (
-      deleteLocks.current.has(id) ||
-      busyDraftIds.includes(id) ||
-      approvingIds.includes(id) ||
-      publishingIds.includes(id) ||
-      imageLocks.current.has(id)
-    ) return;
-    if (
-      !window.confirm(
-        "¿Eliminar este elemento de Aprobaciones? Las publicaciones ya realizadas en redes sociales no se eliminarán.",
-      )
-    ) return;
-    deleteLocks.current.add(id);
-    setDeletingIds((current) => [...current, id]);
-    setBusyDraftIds((current) => [...current, id]);
-    setApprovalError(null);
-    try {
-      const deleted = await deleteDraft(id);
-      updateLocalDraft(deleted);
-      if (editingId === id) setEditingId(null);
-    } catch {
-      setApprovalError(
-        "No se pudo eliminar el elemento. Si hay una operación en curso, espera a que termine e inténtalo de nuevo.",
-      );
-    } finally {
-      deleteLocks.current.delete(id);
-      setDeletingIds((current) => current.filter((value) => value !== id));
-      setBusyDraftIds((current) => current.filter((value) => value !== id));
-    }
-  };
-  const handleReject = async (id: string) => {
-    if (
-      busyDraftIds.includes(id) ||
-      approvingIds.includes(id) ||
-      imageLocks.current.has(id)
-    )
-      return;
-    if (
-      !window.confirm(
-        "¿Rechazar esta publicación? Se conservará en el historial.",
-      )
-    )
-      return;
-    setBusyDraftIds((current) => [...current, id]);
-    setApprovalError(null);
-    try {
-      const rejected = await rejectDraft(id);
-      updateLocalDraft(rejected);
-      if (editingId === id) setEditingId(null);
-    } catch {
-      setApprovalError("No se pudo rechazar el borrador. Inténtalo de nuevo.");
-    } finally {
-      setBusyDraftIds((current) => current.filter((value) => value !== id));
-    }
-  };
-  const handleGenerateImage = async (draft: Draft) => {
-    if (
-      imageLocks.current.has(draft.id) ||
-      draft.status !== "pending" ||
-      !draft.image_prompt ||
-      draft.image_url ||
-      !["not_started", "failed"].includes(draft.image_status)
-    )
-      return;
-    if (
-      !window.confirm(
-        "¿Generar una imagen con IA? Esta operación puede generar un cargo en la API de OpenAI.",
-      )
-    )
-      return;
-    const businessId = draft.business_id;
-    imageLocks.current.add(draft.id);
-    setImageBusyIds((current) => [...current, draft.id]);
-    setImageErrors((current) => {
-      const next = { ...current };
-      delete next[draft.id];
-      return next;
-    });
-    setApprovals((current) =>
-      current.map((item) =>
-        item.id === draft.id ? { ...item, image_status: "generating" } : item,
-      ),
-    );
-    try {
-      const result = await generateDraftImage(draft.id);
-      if (selectedBusinessRef.current === businessId) {
-        setImageUrls((current) => ({
-          ...current,
-          [draft.id]: result.image_url,
-        }));
-        // Reload the authoritative image status and storage path.
-        const refreshedDrafts = await getDrafts(businessId, true);
-        if (selectedBusinessRef.current === businessId) {
-          setApprovals(refreshedDrafts);
-        }
-      }
-    } catch (error) {
-      console.error("Image generation failed:", error);
-      if (selectedBusinessRef.current === businessId) {
-        try {
-          const refreshedDrafts = await getDrafts(businessId, true);
-          if (selectedBusinessRef.current === businessId) {
-            setApprovals(refreshedDrafts);
-          }
-        } catch {
-          // The request may have completed despite a network error.
-        }
-        if (selectedBusinessRef.current === businessId) {
-          setImageErrors((current) => ({
-            ...current,
-            [draft.id]:
-              "No se pudo confirmar la generación. Actualiza la página antes de intentar nuevamente.",
-          }));
-        }
-      }
-    } finally {
-      imageLocks.current.delete(draft.id);
-      setImageBusyIds((current) =>
-        current.filter((value) => value !== draft.id),
-      );
-    }
-  };
-  const handlePreviewImage = async (draft: Draft) => {
-    if (imageLocks.current.has(draft.id)) return;
-    const businessId = draft.business_id;
-    imageLocks.current.add(draft.id);
-    setImageBusyIds((current) => [...current, draft.id]);
-    setImageErrors((current) => {
-      const next = { ...current };
-      delete next[draft.id];
-      return next;
-    });
-    try {
-      const result = await getDraftImage(draft.id);
-      if (selectedBusinessRef.current === businessId) {
-        setImageUrls((current) => ({
-          ...current,
-          [draft.id]: result.image_url,
-        }));
-      }
-    } catch (error) {
-      console.error("Image preview failed:", error);
-      if (selectedBusinessRef.current === businessId) {
-        setImageErrors((current) => ({
-          ...current,
-          [draft.id]: "No se pudo cargar la imagen. Inténtalo nuevamente.",
-        }));
-      }
-    } finally {
-      imageLocks.current.delete(draft.id);
-      setImageBusyIds((current) =>
-        current.filter((value) => value !== draft.id),
-      );
-    }
-  };
-  const refreshRevision = async (draftId: string) => {
-    const businessId = selectedBusinessRef.current;
-    try {
-      const history = await getImageRevisions(draftId);
-      if (selectedBusinessRef.current !== businessId) return;
-      setRevisions((current) => ({
-        ...current,
-        [draftId]:
-          history.find(
-            (r) => r.status === "ready" || r.status === "generating",
-          ) ?? null,
-      }));
-      setRevisionErrors((current) => ({ ...current, [draftId]: "" }));
-    } catch (error) {
-      console.error("Could not load revisions", error);
-      if (selectedBusinessRef.current === businessId) {
-        setRevisionErrors((current) => ({
-          ...current,
-          [draftId]: "No se pudo consultar el estado de la edición.",
-        }));
-      }
-    }
-  };
-  const handleCreateRevision = async (draft: Draft) => {
-    const instructions = imageInstructions[draft.id]?.trim() ?? "";
-    if (
-      !instructions ||
-      instructions.length > 1000 ||
-      imageLocks.current.has(draft.id)
-    )
-      return;
-    if (
-      revisions[draft.id]?.status === "ready" ||
-      revisions[draft.id]?.status === "generating"
-    )
-      return;
-    if (
-      !window.confirm(
-        "¿Crear una nueva imagen con IA? Esta solicitud puede generar un cargo adicional en OpenAI. La original se conservará.",
-      )
-    )
-      return;
-    const businessId = draft.business_id;
-    imageLocks.current.add(draft.id);
-    setRevisionBusyIds((ids) => [...ids, draft.id]);
-    setRevisionErrors((current) => ({ ...current, [draft.id]: "" }));
-    try {
-      const result = await createImageRevision(draft.id, instructions);
-      if (selectedBusinessRef.current === businessId) {
-        setRevisions((current) => ({ ...current, [draft.id]: result }));
-      }
-    } catch (error) {
-      console.error("Revision request failed", error);
-      if (selectedBusinessRef.current === businessId) {
-        await refreshRevision(draft.id);
-        setRevisionErrors((current) => ({
-          ...current,
-          [draft.id]:
-            "No se pudo confirmar la generación. Consulta el estado antes de volver a intentarlo para evitar cargos duplicados.",
-        }));
-      }
-    } finally {
-      imageLocks.current.delete(draft.id);
-      setRevisionBusyIds((ids) => ids.filter((id) => id !== draft.id));
-    }
-  };
-  const handleDecideRevision = async (
-    draft: Draft,
-    decision: "accept" | "reject",
-  ) => {
-    const revision = revisions[draft.id];
-    if (
-      !revision ||
-      revision.status !== "ready" ||
-      imageLocks.current.has(draft.id)
-    )
-      return;
-    if (
-      decision === "accept" &&
-      !window.confirm("¿Usar la nueva versión para esta publicación?")
-    )
-      return;
-    const businessId = draft.business_id;
-    imageLocks.current.add(draft.id);
-    setRevisionBusyIds((ids) => [...ids, draft.id]);
-    setRevisionErrors((current) => ({ ...current, [draft.id]: "" }));
-    try {
-      if (decision === "accept") {
-        await acceptImageRevision(draft.id, revision.id);
-        if (businessId) {
-          const [freshDrafts, freshImage] = await Promise.all([
-            getDrafts(businessId, true),
-            getDraftImage(draft.id),
-          ]);
-          if (selectedBusinessRef.current === businessId) {
-            setApprovals(freshDrafts);
-            setImageUrls((current) => ({
-              ...current,
-              [draft.id]: freshImage.image_url,
-            }));
-          }
-        }
-      } else {
-        await rejectImageRevision(draft.id, revision.id);
-      }
-      if (selectedBusinessRef.current === businessId) {
-        setRevisions((current) => ({ ...current, [draft.id]: null }));
-        setImageInstructions((current) => ({ ...current, [draft.id]: "" }));
-      }
-    } catch (error) {
-      console.error("Revision decision failed", error);
-      if (selectedBusinessRef.current === businessId) {
-        setRevisionErrors((current) => ({
-          ...current,
-          [draft.id]:
-            "No se pudo confirmar el cambio. Actualiza la página y comprueba el resultado.",
-        }));
-      }
-    } finally {
-      imageLocks.current.delete(draft.id);
-      setRevisionBusyIds((ids) => ids.filter((id) => id !== draft.id));
-    }
   };
   const draftMessages = (
     <>
@@ -997,258 +330,219 @@ const App: FC = () => {
       )}
     </>
   );
-  if (checkingAuth) {
-    return <div className="auth-loading">Cargando...</div>;
-  }
-
+  // Keep workspace state and operation locks alive for same-account recovery.
+  // Only its rendered page changes; the user-keyed owner still resets on logout
+  // or account changes. No workspace content remains rendered during recovery.
   if (isRecoveringPassword) {
-    return (
-      <AuthPage
-        recoveryMode
-        onRecoveryComplete={() => setIsRecoveringPassword(false)}
-      />
-    );
+    return <AuthPage recoveryMode onRecoveryComplete={onRecoveryComplete} />;
   }
-
-  if (!session) {
-    return <AuthPage />;
-  }
-
   return (
-    <div className="app-shell">
-      <Sidebar
-        activeSection={activeSection}
-        onSectionChange={handleSectionChange}
-        pendingCount={pendingCount}
-      />
-      <main className="main-content">
-        <header className="topbar">
-          <div className="topbar-heading">
-            <span className="eyebrow">Estudio de marketing</span>
-            <h1>{activeSection}</h1>
-          </div>
-          <div className="topbar-actions">
-            <select
-              aria-label="Seleccionar negocio"
-              value={selectedBusinessId}
-              onChange={(event) => setSelectedBusinessId(event.target.value)}
-              disabled={businesses.length === 0}
-            >
-              {businesses.length === 0 && (
-                <option value="">Sin negocios</option>
-              )}
-              {businesses.map((business) => (
-                <option key={business.id} value={business.id}>
-                  {business.name}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              className="primary-button add-business-button"
-              onClick={() => setShowBusinessForm(true)}
-            >
-              + Agregar negocio
-            </button>
-            <div className="topbar-account">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    className="account-trigger"
-                    aria-label="Abrir menú de Ángela"
-                  >
-                    <span className="avatar small">Á</span>
-                    <span className="account-name">Ángela</span>
-                    <ChevronDown size={16} aria-hidden="true" />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-52">
-                  <DropdownMenuLabel>
-                    <div className="flex flex-col gap-1">
-                      <span>Ángela</span>
-                      <span className="text-xs font-normal text-muted-foreground">
-                        Administradora
-                      </span>
-                    </div>
-                  </DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onSelect={() => void supabase.auth.signOut()}
-                    className="cursor-pointer"
-                  >
-                    <LogOut className="mr-2 size-4" />
-                    Cerrar sesión
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+    <AppShell
+      activeSection={activeSection}
+      onSectionChange={handleSectionChange}
+      pendingCount={pendingCount}
+      businesses={businesses}
+      selectedBusinessId={selectedBusinessId}
+      onBusinessChange={setSelectedBusinessId}
+      onAddBusiness={() => setShowBusinessForm(true)}
+      onSignOut={onSignOut}
+      businessError={businessError}
+      userDisplayName={getUserDisplayName(session)}
+      userEmail={session.user.email ?? ""}
+    >
+      {showBusinessForm ? (
+        <BusinessForm
+          onCreated={handleBusinessCreated}
+          onCancel={() => setShowBusinessForm(false)}
+        />
+      ) : activeSection === "Resumen" ? (
+        <DashboardOverview
+          key={selectedBusinessId}
+          selectedBusinessId={selectedBusinessId}
+          generating={generating}
+          generationError={generationError}
+          loadingDrafts={loadingDrafts}
+          loadError={loadError}
+          visibleDrafts={historyDrafts}
+          pendingCount={pendingCount}
+          agents={agents}
+          userDisplayName={getUserDisplayName(session)}
+          draftMessages={draftMessages}
+          approvingIds={approvingIds}
+          busyDraftIds={busyDraftIds}
+          imageBusyIds={imageBusyIds}
+          editingId={editingId}
+          formatDraftDate={formatDraftDate}
+          handleGenerateContent={handleGenerateContent}
+          handleApprove={handleApprove}
+          handleReject={handleReject}
+          startEditing={startEditing}
+          setActiveSection={setActiveSection}
+        />
+      ) : activeSection === "Campañas" ? (
+        <CampaignsPage
+          key={selectedBusinessId}
+          businessId={selectedBusinessId}
+        />
+      ) : activeSection === "Contenido" ? (
+        <ContentPage
+          key={selectedBusinessId}
+          drafts={historyDrafts}
+          loading={loadingDrafts}
+          error={loadError}
+        />
+      ) : activeSection === "Analíticas" ? (
+        <AnalyticsPage
+          key={selectedBusinessId}
+          drafts={historyDrafts}
+          loading={loadingDrafts}
+          error={loadError}
+        />
+      ) : activeSection === "Aprobaciones" ? (
+        <ApprovalPage
+          heygen={heygen}
+          handleDelete={handleDelete}
+          deletingIds={deletingIds}
+          businessId={selectedBusinessId}
+          loadingDrafts={loadingDrafts}
+          loadError={loadError}
+          pendingCount={pendingCount}
+          draftMessages={draftMessages}
+          visibleDrafts={visibleDrafts}
+          draftDestinations={draftDestinations}
+          setDraftDestinations={setDraftDestinations}
+          approvingIds={approvingIds}
+          publishingIds={publishingIds}
+          busyDraftIds={busyDraftIds}
+          editingId={editingId}
+          editTitle={editTitle}
+          editCaption={editCaption}
+          setEditTitle={setEditTitle}
+          setEditCaption={setEditCaption}
+          setEditingId={setEditingId}
+          imageUrls={imageUrls}
+          imageBusyIds={imageBusyIds}
+          imageErrors={imageErrors}
+          imageInstructions={imageInstructions}
+          showImageEditor={showImageEditor}
+          revisions={revisions}
+          revisionBusyIds={revisionBusyIds}
+          revisionErrors={revisionErrors}
+          formatDraftDate={formatDraftDate}
+          handleApprove={handleApprove}
+          handlePublishFacebook={handlePublishFacebook}
+          onVerifyFacebookVideo={handleVerifyFacebookVideo}
+          handlePublishTikTok={handlePublishTikTok}
+          onVerifyTikTok={handleVerifyTikTok}
+          handleReject={handleReject}
+          handleSaveEdit={handleSaveEdit}
+          handleGenerateImage={handleGenerateImage}
+          handlePreviewImage={handlePreviewImage}
+          handleCreateRevision={handleCreateRevision}
+          handleDecideRevision={handleDecideRevision}
+          refreshRevision={refreshRevision}
+          addImageSuggestion={addImageSuggestion}
+          updateImageInstructions={updateImageInstructions}
+          toggleImageEditor={toggleImageEditor}
+          startEditing={startEditing}
+        />
+      ) : activeSection === "Equipo IA" ? (
+        <div className="ai-team-workspace">
+          <section className="page-intro">
+            <div>
+              <span className="eyebrow">Planifica y crea</span>
+              <h2>Tu equipo de marketing con IA</h2>
+              <p>
+                Sofía define la estrategia, Leo convierte el plan en contenido
+                y Mía analiza las métricas disponibles.
+              </p>
             </div>
-            {businessError && (
-              <span className="topbar-error" role="alert">
-                {businessError}
-              </span>
-            )}
-          </div>
-        </header>
-
-        <FacebookConnection businessId={selectedBusinessId} />
-
-        {showBusinessForm ? (
-          <BusinessForm
-            onCreated={handleBusinessCreated}
-            onCancel={() => setShowBusinessForm(false)}
-          />
-        ) : activeSection === "Resumen" ? (
-          <DashboardOverview
-            key={selectedBusinessId}
-            selectedBusinessId={selectedBusinessId}
-            generating={generating}
-            generationError={generationError}
-            loadingDrafts={loadingDrafts}
-            loadError={loadError}
-            visibleDrafts={historyDrafts}
-            pendingCount={pendingCount}
-            agents={agents}
-            draftMessages={draftMessages}
-            approvingIds={approvingIds}
-            busyDraftIds={busyDraftIds}
-            imageBusyIds={imageBusyIds}
-            editingId={editingId}
-            formatDraftDate={formatDraftDate}
-            handleGenerateContent={handleGenerateContent}
-            handleApprove={handleApprove}
-            handleReject={handleReject}
-            startEditing={startEditing}
-            setActiveSection={setActiveSection}
-          />
-        ) : activeSection === "Campañas" ? (
-          <CampaignsPage key={selectedBusinessId} businessId={selectedBusinessId} />
-        ) : activeSection === "Contenido" ? (
-          <ContentPage
-            key={selectedBusinessId}
-            drafts={historyDrafts}
-            loading={loadingDrafts}
-            error={loadError}
-          />
-        ) : activeSection === "Analíticas" ? (
-          <AnalyticsPage
-            key={selectedBusinessId}
-            drafts={historyDrafts}
-            loading={loadingDrafts}
-            error={loadError}
-          />
-        ) : activeSection === "Aprobaciones" ? (
-          <ApprovalPage
-            handleDelete={handleDelete}
-            deletingIds={deletingIds}
-            businessId={selectedBusinessId}
-            loadingDrafts={loadingDrafts}
-            loadError={loadError}
-            pendingCount={pendingCount}
-            draftMessages={draftMessages}
-            visibleDrafts={visibleDrafts}
-            draftDestinations={draftDestinations}
-            setDraftDestinations={setDraftDestinations}
-            approvingIds={approvingIds}
-            publishingIds={publishingIds}
-            busyDraftIds={busyDraftIds}
-            editingId={editingId}
-            editTitle={editTitle}
-            editCaption={editCaption}
-            setEditTitle={setEditTitle}
-            setEditCaption={setEditCaption}
-            setEditingId={setEditingId}
-            imageUrls={imageUrls}
-            imageBusyIds={imageBusyIds}
-            imageErrors={imageErrors}
-            imageInstructions={imageInstructions}
-            showImageEditor={showImageEditor}
-            revisions={revisions}
-            revisionBusyIds={revisionBusyIds}
-            revisionErrors={revisionErrors}
-            formatDraftDate={formatDraftDate}
-            handleApprove={handleApprove}
-            handlePublishFacebook={handlePublishFacebook}
-            onVerifyFacebookVideo={handleVerifyFacebookVideo}
-            handlePublishTikTok={handlePublishTikTok}
-            onVerifyTikTok={handleVerifyTikTok}
-            handleReject={handleReject}
-            handleSaveEdit={handleSaveEdit}
-            handleGenerateImage={handleGenerateImage}
-            handlePreviewImage={handlePreviewImage}
-            handleCreateRevision={handleCreateRevision}
-            handleDecideRevision={handleDecideRevision}
-            refreshRevision={refreshRevision}
-            addImageSuggestion={addImageSuggestion}
-            updateImageInstructions={updateImageInstructions}
-            toggleImageEditor={toggleImageEditor}
-            startEditing={startEditing}
-          />
-        ) : activeSection === "Equipo IA" ? (
-          <div className="ai-team-section">
-            {selectedBusinessId && (
-              <SofiaChat
-                key={selectedBusinessId}
-                businessId={selectedBusinessId}
-                onDraftCreated={(draft) => {
-                  setApprovals((current) => [draft as Draft, ...current]);
-                  setActiveSection("Aprobaciones");
-                }}
-              />
-            )}
-
-            <section className="panel activity-panel">
-              <div className="panel-heading">
-                <div>
-                  <span className="eyebrow">Automatización</span>
-                  <h2>Actividad del Equipo IA</h2>
-                </div>
-              </div>
-              <div className="agent-list">
-                {agents.map((agent) => (
-                  <div className="agent-row" key={agent.name}>
-                    <div className="agent-avatar">{agent.name[0]}</div>
-                    <div className="agent-info">
-                      <strong>{agent.name}</strong>
-                      <span>{agent.role}</span>
-                    </div>
-                    <div className="agent-status">
-                      <span
-                        className={`status-dot ${
-                          ["Contenido generado", "Disponible"].includes(
-                            agent.state,
-                          )
-                            ? "available"
-                            : ""
-                        }`}
-                      />
-                      {agent.state}
-                      <small>{agent.activity}</small>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </section>
-          </div>
-        ) : (
-          <section className="panel placeholder-panel">
-            <div className="placeholder-icon">✦</div>
-            <h2>{activeSection}</h2>
-            <p>
-              Esta sección está lista para que empieces a trabajar. Selecciona
-              otra opción para volver al resumen.
-            </p>
-            <button
-              className="primary-button"
-              type="button"
-              onClick={() => setActiveSection("Resumen")}
-            >
-              Volver al resumen
-            </button>
           </section>
-        )}
-      </main>
-    </div>
+          <section className="ai-team-roles" aria-label="Roles del equipo IA">
+            {agents.map((agent) => (
+              <article className="ai-team-role" key={agent.name}>
+                <span className="ai-team-role__avatar" aria-hidden="true">
+                  {agent.name[0]}
+                </span>
+                <div>
+                  <h3>{agent.name}</h3>
+                  <p>{agent.role}</p>
+                </div>
+              </article>
+            ))}
+          </section>
+          {selectedBusinessId && (
+            <SofiaChat
+              key={selectedBusinessId}
+              businessId={selectedBusinessId}
+              onDraftCreated={(draft) => {
+                if (!isCurrentBusiness()) return;
+                setApprovals((current) => [draft as Draft, ...current]);
+                setActiveSection("Aprobaciones");
+              }}
+            />
+          )}
+
+          <section className="panel activity-panel">
+            <div className="panel-heading">
+              <div>
+                <span className="eyebrow">Automatización</span>
+                <h2>Actividad del Equipo IA</h2>
+              </div>
+            </div>
+            <div className="agent-list">
+              {agents.map((agent) => (
+                <div className="agent-row" key={agent.name}>
+                  <div className="agent-avatar">{agent.name[0]}</div>
+                  <div className="agent-info">
+                    <strong>{agent.name}</strong>
+                    <span>{agent.role}</span>
+                  </div>
+                  <div className="agent-status">
+                    <span
+                      className={`status-dot ${
+                        ["Contenido generado", "Disponible"].includes(
+                          agent.state,
+                        )
+                          ? "available"
+                          : ""
+                      }`}
+                    />
+                    {agent.state}
+                    <small>{agent.activity}</small>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
+      ) : activeSection === "Configuración" ? (
+        <SettingsPage
+          businessId={selectedBusinessId}
+          userDisplayName={getUserDisplayName(session)}
+          userEmail={session.user.email ?? ""}
+          onSaveDisplayName={onSaveDisplayName}
+          facebookConnection={<FacebookConnection businessId={selectedBusinessId} />}
+          tiktokConnection={<TikTokConnection businessId={selectedBusinessId} />}
+        />
+      ) : (
+        <section className="panel placeholder-panel">
+          <div className="placeholder-icon">✦</div>
+          <h2>{activeSection}</h2>
+          <p>
+            Esta sección está lista para que empieces a trabajar. Selecciona
+            otra opción para volver al resumen.
+          </p>
+          <button
+            className="primary-button"
+            type="button"
+            onClick={() => setActiveSection("Resumen")}
+          >
+            Volver al resumen
+          </button>
+        </section>
+      )}
+    </AppShell>
   );
-};
+}
 export default App;

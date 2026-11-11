@@ -185,6 +185,9 @@ def get_marketing_image_url(
 def upload_marketing_video(
         video_bytes: bytes,
         business_id: str,
+        *,
+        storage_path: str | None = None,
+        upsert: bool = False,
 ) -> str:
     """Upload an MP4 video to private Supabase storage."""
 
@@ -203,9 +206,18 @@ def upload_marketing_video(
     except (ValueError, TypeError, AttributeError):
         raise ValueError("Invalid business ID.") from None
 
-    storage_path = (
-        f"businesses/{business_id}/{uuid4()}.mp4"
-    )
+    if storage_path is None:
+        storage_path = f"businesses/{business_id}/{uuid4()}.mp4"
+    else:
+        prefix = f"businesses/{business_id}/"
+        suffix = storage_path[len(prefix):] if storage_path.startswith(prefix) else ""
+        if (
+            not suffix
+            or any(part in {"", ".", ".."} for part in suffix.split("/"))
+            or "\\" in suffix
+            or not suffix.lower().endswith(".mp4")
+        ):
+            raise ValueError("Invalid video storage path.")
 
     client = get_storage_client()
     bucket = os.environ["SUPABASE_STORAGE_BUCKET"]
@@ -215,7 +227,7 @@ def upload_marketing_video(
         file=video_bytes,
         file_options={
             "content-type": "video/mp4",
-            "upsert": "false",
+            "upsert": "true" if upsert else "false",
         },
     )
 

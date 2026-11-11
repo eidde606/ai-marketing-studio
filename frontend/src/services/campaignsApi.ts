@@ -1,4 +1,4 @@
-import { supabase } from "./supabaseClient";
+import { apiRequest } from "../lib/apiClient";
 
 export type CampaignStatus =
   "draft" | "active" | "paused" | "completed" | "archived";
@@ -29,35 +29,18 @@ export type Campaign = CampaignInput & {
   }[];
 };
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL?.trim() || "http://127.0.0.1:8000";
-
-async function request<T>(
+function request<T>(
   businessId: string,
   path = "",
   options?: RequestInit,
 ): Promise<T> {
-  const {
-    data: { session },
-    error,
-  } = await supabase.auth.getSession();
-  if (error || !session?.access_token) throw new Error("Debes iniciar sesión.");
   const headers = new Headers(options?.headers);
-  headers.set("Authorization", `Bearer ${session.access_token}`);
   if (options?.body) headers.set("Content-Type", "application/json");
-  const response = await fetch(
-    `${API_BASE_URL}/businesses/${encodeURIComponent(businessId)}/campaigns${path}`,
+  return apiRequest<T>(
+    `/businesses/${encodeURIComponent(businessId)}/campaigns${path}`,
     { ...options, headers },
+    "No se pudo completar la operación de campaña.",
   );
-  if (!response.ok) {
-    const body = await response.json().catch(() => null);
-    throw new Error(
-      typeof body?.detail === "string"
-        ? body.detail
-        : "No se pudo completar la operación de campaña.",
-    );
-  }
-  return response.json() as Promise<T>;
 }
 
 export const getCampaigns = (businessId: string) =>
