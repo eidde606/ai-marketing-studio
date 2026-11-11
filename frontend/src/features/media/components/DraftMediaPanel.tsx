@@ -44,27 +44,21 @@ export function DraftMediaPanel({
     handlePreviewVideo,
   } = browserMedia;
   return (
-    <div
+    <section
       className="draft-image-section"
-      style={{
-        marginTop: "1.25rem",
-        marginBottom: "1.25rem",
-        display: "grid",
-        gap: "0.75rem",
-      }}
+      aria-label="Multimedia y herramientas para el borrador"
     >
-      <strong>Imagen de la publicación</strong>
+      <strong>
+        {draft.media_type === "video"
+          ? "Multimedia del video"
+          : "Imagen de la publicación"}
+      </strong>
 
       {imageUrls[draft.id] && (
         <img
+          className="approval-media-image"
           src={imageUrls[draft.id]}
           alt={`Imagen para ${draft.title}`}
-          style={{
-            width: "100%",
-            maxWidth: "420px",
-            borderRadius: "12px",
-            objectFit: "contain",
-          }}
         />
       )}
 
@@ -130,12 +124,7 @@ export function DraftMediaPanel({
       {draft.media_type === "video" &&
         draft.video_status === "completed" &&
         !!draft.video_url && (
-          <div
-            style={{
-              display: "grid",
-              gap: "0.75rem",
-            }}
-          >
+          <div className="approval-video-preview">
             <strong>Video de la publicación</strong>
 
             <button
@@ -163,16 +152,12 @@ export function DraftMediaPanel({
 
             {videoUrls[draft.id] && (
               <video
+                className="approval-video-player"
                 key={videoUrls[draft.id]}
                 src={videoUrls[draft.id]}
                 controls
                 playsInline
                 preload="metadata"
-                style={{
-                  width: "100%",
-                  maxWidth: "420px",
-                  borderRadius: "12px",
-                }}
               >
                 Tu navegador no admite la reproducción de video.
               </video>
@@ -185,25 +170,9 @@ export function DraftMediaPanel({
         )}
 
       {draft.video_script && (
-        <div
-          className="heygen-script"
-          style={{
-            padding: "1rem",
-            border: "1px solid #e9ddff",
-            borderRadius: "12px",
-            background: "#faf7ff",
-            display: "grid",
-            gap: "0.75rem",
-          }}
-        >
+        <section className="heygen-script">
           <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: "0.75rem",
-              flexWrap: "wrap",
-            }}
+            className="heygen-script-header"
           >
             <strong>🎬 Guion para HeyGen</strong>
 
@@ -217,20 +186,16 @@ export function DraftMediaPanel({
           </div>
 
           <p
-            style={{
-              whiteSpace: "pre-wrap",
-              lineHeight: 1.6,
-              margin: 0,
-            }}
+            className="heygen-script-text"
           >
             {draft.video_script}
           </p>
-        </div>
+        </section>
       )}
 
       {heygen &&
         (draft.status === "pending" || draft.media_type === "video") && (
-          <div>
+          <div className="heygen-generation-section">
             <button
               type="button"
               className="text-button"
@@ -283,6 +248,6 @@ export function DraftMediaPanel({
           Este borrador no tiene una descripción de imagen generada por IA.
         </small>
       )}
-    </div>
+    </section>
   );
 }

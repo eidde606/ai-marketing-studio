@@ -8,6 +8,8 @@ import ContentPage from "./components/ContentPage";
 import CampaignsPage from "./components/CampaignsPage";
 import DashboardOverview from "./components/DashboardOverview";
 import FacebookConnection from "./components/FacebookConnection";
+import TikTokConnection from "./components/TikTokConnection";
+import SettingsPage from "./components/SettingsPage";
 import type { Section } from "./components/Sidebar";
 import type { Business } from "./services/businessesApi";
 import type { Draft } from "./services/draftsApi";
@@ -37,6 +39,20 @@ function formatDraftDate(value: string): string {
     timeStyle: "short",
   }).format(date);
 }
+
+function getUserDisplayName(session: Session): string {
+  const metadata = session.user.user_metadata ?? {};
+  const name = [
+    metadata.display_name,
+    metadata.full_name,
+    metadata.name,
+  ].find(
+    (value): value is string =>
+      typeof value === "string" && value.trim().length > 0,
+  );
+  return name?.trim() || "Mi cuenta";
+}
+
 const App: FC = () => {
   const {
     session,
@@ -44,6 +60,7 @@ const App: FC = () => {
     isRecoveringPassword,
     completeRecovery,
     signOut,
+    updateDisplayName,
   } = useAuthSession();
   if (checkingAuth) return <div className="auth-loading">Cargando...</div>;
   if (!session) return <AuthPage />;
@@ -55,6 +72,7 @@ const App: FC = () => {
       onSignOut={signOut}
       isRecoveringPassword={isRecoveringPassword}
       onRecoveryComplete={completeRecovery}
+      onSaveDisplayName={updateDisplayName}
     />
   );
 };
@@ -64,11 +82,13 @@ function AuthenticatedApp({
   onSignOut,
   isRecoveringPassword,
   onRecoveryComplete,
+  onSaveDisplayName,
 }: {
   session: Session;
   onSignOut: () => Promise<unknown>;
   isRecoveringPassword: boolean;
   onRecoveryComplete: () => void;
+  onSaveDisplayName: (displayName: string) => Promise<string>;
 }) {
   const [activeSection, setActiveSection] = useState<Section>(() => {
     try {
@@ -79,6 +99,8 @@ function AuthenticatedApp({
         "Contenido",
         "Equipo IA",
         "Aprobaciones",
+        "Analíticas",
+        "Configuración",
       ];
       return validSections.find((section) => section === saved) ?? "Resumen";
     } catch {
@@ -325,9 +347,9 @@ function AuthenticatedApp({
       onAddBusiness={() => setShowBusinessForm(true)}
       onSignOut={onSignOut}
       businessError={businessError}
+      userDisplayName={getUserDisplayName(session)}
+      userEmail={session.user.email ?? ""}
     >
-      <FacebookConnection businessId={selectedBusinessId} />
-
       {showBusinessForm ? (
         <BusinessForm
           onCreated={handleBusinessCreated}
@@ -344,6 +366,7 @@ function AuthenticatedApp({
           visibleDrafts={historyDrafts}
           pendingCount={pendingCount}
           agents={agents}
+          userDisplayName={getUserDisplayName(session)}
           draftMessages={draftMessages}
           approvingIds={approvingIds}
           busyDraftIds={busyDraftIds}
@@ -424,7 +447,30 @@ function AuthenticatedApp({
           startEditing={startEditing}
         />
       ) : activeSection === "Equipo IA" ? (
-        <div className="ai-team-section">
+        <div className="ai-team-workspace">
+          <section className="page-intro">
+            <div>
+              <span className="eyebrow">Planifica y crea</span>
+              <h2>Tu equipo de marketing con IA</h2>
+              <p>
+                Sofía define la estrategia, Leo convierte el plan en contenido
+                y Mía analiza las métricas disponibles.
+              </p>
+            </div>
+          </section>
+          <section className="ai-team-roles" aria-label="Roles del equipo IA">
+            {agents.map((agent) => (
+              <article className="ai-team-role" key={agent.name}>
+                <span className="ai-team-role__avatar" aria-hidden="true">
+                  {agent.name[0]}
+                </span>
+                <div>
+                  <h3>{agent.name}</h3>
+                  <p>{agent.role}</p>
+                </div>
+              </article>
+            ))}
+          </section>
           {selectedBusinessId && (
             <SofiaChat
               key={selectedBusinessId}
@@ -470,6 +516,15 @@ function AuthenticatedApp({
             </div>
           </section>
         </div>
+      ) : activeSection === "Configuración" ? (
+        <SettingsPage
+          businessId={selectedBusinessId}
+          userDisplayName={getUserDisplayName(session)}
+          userEmail={session.user.email ?? ""}
+          onSaveDisplayName={onSaveDisplayName}
+          facebookConnection={<FacebookConnection businessId={selectedBusinessId} />}
+          tiktokConnection={<TikTokConnection businessId={selectedBusinessId} />}
+        />
       ) : (
         <section className="panel placeholder-panel">
           <div className="placeholder-icon">✦</div>

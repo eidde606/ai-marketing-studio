@@ -192,15 +192,32 @@ export default function CampaignsPage({ businessId }: { businessId: string }) {
     );
 
   return (
-    <div className="campaign-page">
-      <section className="panel">
+    <div className="campaign-workspace">
+      <section className="page-intro campaign-page-intro">
+        <div>
+          <span className="eyebrow">Planifica</span>
+          <h2>Campañas</h2>
+          <p>Define objetivos y organiza las piezas de contenido de tu negocio.</p>
+        </div>
+        <button
+          type="button"
+          className="primary-button"
+          disabled={busy || loading}
+          onClick={() => {
+            setEditingId(null);
+            setForm({ ...emptyForm });
+            setError(null);
+          }}
+        >
+          Nueva campaña
+        </button>
+      </section>
+      <section className="panel campaign-management">
         <div className="panel-heading">
           <div>
-            <span className="eyebrow">Planificación de marketing</span>
-            <h2>Campañas</h2>
-            <p>
-              Organiza el contenido de tu negocio y sigue sus publicaciones.
-            </p>
+            <span className="eyebrow">Organización del trabajo</span>
+            <h3>Tu plan de marketing</h3>
+            <p>Selecciona una campaña para consultar sus objetivos y resultados.</p>
           </div>
           <div className="campaign-actions">
             <button
@@ -210,18 +227,6 @@ export default function CampaignsPage({ businessId }: { businessId: string }) {
               onClick={() => void refresh()}
             >
               Actualizar
-            </button>
-            <button
-              type="button"
-              className="primary-button"
-              disabled={busy || loading}
-              onClick={() => {
-                setEditingId(null);
-                setForm({ ...emptyForm });
-                setError(null);
-              }}
-            >
-              Nueva campaña
             </button>
           </div>
         </div>
@@ -235,12 +240,13 @@ export default function CampaignsPage({ businessId }: { businessId: string }) {
             {success}
           </p>
         )}
-        {loading && <p role="status">Cargando campañas...</p>}
+        {loading && <p className="workspace-state" role="status">Cargando campañas…</p>}
         {!loading && !campaigns.length && (
-          <p>
-            No hay campañas todavía. Crea la primera para organizar tu
-            contenido.
-          </p>
+          <div className="campaign-empty">
+            <span aria-hidden="true">✦</span>
+            <strong>Aún no hay campañas</strong>
+            <p>Crea una para definir objetivos y dar estructura a tu contenido.</p>
+          </div>
         )}
         <CampaignList
           campaigns={campaigns}
