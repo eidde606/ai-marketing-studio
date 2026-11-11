@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -18,6 +19,24 @@ STATUS_MESSAGES = {
     "permission_error": "Meta no concedió todos los permisos necesarios. Revisa la configuración y vuelve a autorizar.",
     "discovery_error": "No se pudo verificar la cuenta de Instagram asociada a la página autorizada.",
 }
+
+logger = logging.getLogger(__name__)
+
+
+def _log_provider_failure(stage: str, error: Exception) -> None:
+    if isinstance(error, MetaAPIError):
+        logger.warning(
+            "Instagram %s failed (Meta status=%s, code=%s)",
+            stage,
+            error.status_code,
+            error.error_code,
+        )
+    else:
+        logger.warning(
+            "Instagram %s failed (%s)",
+            stage,
+            type(error).__name__,
+        )
 
 
 def start_connection(db: Session, business_id: str, user_id: str) -> str:
@@ -102,8 +121,8 @@ async def complete_authorization(
         access_token, expires_in = await provider.exchange_code_for_long_lived_token(
             code,
         )
-        permissions = await provider.get_granted_permissions(access_token)
     except MetaAPIError as exc:
+        _log_provider_failure("token exchange", exc)
         status = (
             "reauthorization_required"
             if exc.error_code == 190
@@ -113,18 +132,39 @@ async def complete_authorization(
         )
         _save_status(db, authorization.business_id, status=status)
         return status
-    except (httpx.HTTPError, KeyError, TypeError, ValueError):
+    except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+        _log_provider_failure("token exchange", exc)
+        _save_status(db, authorization.business_id, status="discovery_error")
+        return "discovery_error"
+
+    try:
+        permissions = await provider.get_granted_permissions(access_token)
+    except MetaAPIError as exc:
+        _log_provider_failure("permission lookup", exc)
+        status = (
+            "reauthorization_required"
+            if exc.error_code == 190
+            else "permission_error"
+            if exc.error_code in (10, 200)
+            else "discovery_error"
+        )
+        _save_status(db, authorization.business_id, status=status)
+        return status
+    except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+        _log_provider_failure("permission lookup", exc)
         _save_status(db, authorization.business_id, status="discovery_error")
         return "discovery_error"
 
     required_page_permissions = {"pages_show_list", "pages_read_engagement"}
     if not required_page_permissions.issubset(permissions):
+        logger.warning("Instagram permission lookup omitted required Page grants")
         _save_status(
             db, authorization.business_id, status="permission_error",
             permissions=permissions,
         )
         return "permission_error"
     if "instagram_basic" not in permissions:
+        logger.warning("Instagram permission lookup omitted instagram_basic")
         _save_status(
             db, authorization.business_id, status="permission_error",
             permissions=permissions,
@@ -134,6 +174,7 @@ async def complete_authorization(
     try:
         pages = await provider.get_managed_pages(access_token)
     except MetaAPIError as exc:
+        _log_provider_failure("Page listing", exc)
         status = (
             "reauthorization_required"
             if exc.error_code == 190
@@ -146,7 +187,8 @@ async def complete_authorization(
             permissions=permissions, page_id=authorization.facebook_page_id,
         )
         return status
-    except (httpx.HTTPError, KeyError, TypeError, ValueError):
+    except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+        _log_provider_failure("Page listing", exc)
         _save_status(
             db, authorization.business_id, status="discovery_error",
             permissions=permissions, page_id=authorization.facebook_page_id,
@@ -161,14 +203,64 @@ async def complete_authorization(
         None,
     )
     if page is None:
+        logger.warning(
+            "Instagram Page listing did not include the authorized business Page"
+        )
         _save_status(
             db, authorization.business_id, status="discovery_error",
             permissions=permissions, page_id=authorization.facebook_page_id,
         )
         return "discovery_error"
 
-    instagram = page.get("instagram_business_account")
+    try:
+        page_details = await provider.get_page_instagram_account(
+            access_token,
+            authorization.facebook_page_id,
+        )
+    except MetaAPIError as exc:
+        _log_provider_failure("account lookup", exc)
+        status = (
+            "reauthorization_required"
+            if exc.error_code == 190
+            else "permission_error"
+            if exc.error_code in (10, 200)
+            else "discovery_error"
+        )
+        _save_status(
+            db, authorization.business_id, status=status,
+            permissions=permissions, page_id=authorization.facebook_page_id,
+        )
+        return status
+    except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+        _log_provider_failure("account lookup", exc)
+        _save_status(
+            db, authorization.business_id, status="discovery_error",
+            permissions=permissions, page_id=authorization.facebook_page_id,
+        )
+        return "discovery_error"
+
+    returned_page_id = page_details.get("id")
+    if returned_page_id != authorization.facebook_page_id:
+        logger.warning(
+            "Instagram account lookup returned a different Page than authorized"
+        )
+        _save_status(
+            db, authorization.business_id, status="discovery_error",
+            permissions=permissions, page_id=authorization.facebook_page_id,
+        )
+        return "discovery_error"
+
+    instagram = page_details.get("instagram_business_account")
     if not isinstance(instagram, dict):
+        if instagram is not None:
+            logger.warning(
+                "Instagram account lookup returned an invalid account structure"
+            )
+            _save_status(
+                db, authorization.business_id, status="discovery_error",
+                permissions=permissions, page_id=authorization.facebook_page_id,
+            )
+            return "discovery_error"
         _save_status(
             db, authorization.business_id, status="not_connected",
             permissions=permissions, page_id=authorization.facebook_page_id,
@@ -177,12 +269,17 @@ async def complete_authorization(
 
     account_id = instagram.get("id")
     username = instagram.get("username")
-    if not isinstance(account_id, str) or not account_id or not isinstance(username, str) or not username:
+    if not isinstance(account_id, str) or not account_id:
+        logger.warning(
+            "Instagram account lookup returned an invalid account ID"
+        )
         _save_status(
             db, authorization.business_id, status="discovery_error",
             permissions=permissions, page_id=authorization.facebook_page_id,
         )
         return "discovery_error"
+    if not isinstance(username, str) or not username:
+        username = None
 
     status = (
         "connected_and_authorized"

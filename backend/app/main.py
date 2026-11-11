@@ -53,9 +53,13 @@ from app.tiktok_service import (
 )
 from app.tiktok_oauth import refresh_tiktok_token
 from app.token_service import encrypt_token
-from app.features.instagram.routes import router as instagram_auth_router
+from app.features.instagram.routes import (
+    InstagramCallbackAccessLogRedactionMiddleware,
+    router as instagram_auth_router,
+)
 
 app = FastAPI()
+app.add_middleware(InstagramCallbackAccessLogRedactionMiddleware)
 
 # Only Ángela's authorized Supabase account can access these endpoints.
 protected = APIRouter(dependencies=[Depends(verify_token)])
