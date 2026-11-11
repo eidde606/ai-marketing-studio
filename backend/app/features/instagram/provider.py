@@ -21,6 +21,12 @@ class MetaAPIError(Exception):
         super().__init__("Meta API request failed")
 
 
+class TokenExchangeError(ValueError):
+    def __init__(self, reason_code: str):
+        self.reason_code = reason_code
+        super().__init__(reason_code)
+
+
 def build_login_url(state: str) -> str:
     app_id = os.getenv("FACEBOOK_APP_ID")
     config_id = os.getenv("INSTAGRAM_CONFIG_ID")
@@ -61,7 +67,8 @@ async def exchange_code_for_long_lived_token(code: str) -> tuple[str, int]:
             },
         )
         _raise_meta_error(response)
-        short_token = response.json()["access_token"]
+        short_payload = _parse_token_response(response, "short")
+        short_token = _read_access_token(short_payload, "short")
         response = await client.get(
             f"{GRAPH_API_URL}/oauth/access_token",
             params={
@@ -72,13 +79,38 @@ async def exchange_code_for_long_lived_token(code: str) -> tuple[str, int]:
             },
         )
         _raise_meta_error(response)
-        payload = response.json()
+        payload = _parse_token_response(response, "long")
 
-    token = payload.get("access_token")
+    token = _read_access_token(payload, "long")
     expires_in = payload.get("expires_in")
-    if not isinstance(token, str) or not token or not isinstance(expires_in, int):
-        raise ValueError("Meta returned an invalid Instagram access token")
+    if "expires_in" not in payload:
+        raise TokenExchangeError("long_token_missing_expires_in")
+    if isinstance(expires_in, bool) or not isinstance(expires_in, int):
+        raise TokenExchangeError("long_token_invalid_expires_in_type")
+    if expires_in <= 0:
+        raise TokenExchangeError("long_token_invalid_expires_in_value")
     return token, expires_in
+
+
+def _parse_token_response(response: httpx.Response, stage: str) -> dict:
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise TokenExchangeError(f"{stage}_token_invalid_json") from exc
+    if not isinstance(payload, dict):
+        raise TokenExchangeError(f"{stage}_token_invalid_response")
+    return payload
+
+
+def _read_access_token(payload: dict, stage: str) -> str:
+    if "access_token" not in payload:
+        raise TokenExchangeError(f"{stage}_token_missing_access_token")
+    token = payload["access_token"]
+    if not isinstance(token, str):
+        raise TokenExchangeError(f"{stage}_token_invalid_access_token_type")
+    if not token:
+        raise TokenExchangeError(f"{stage}_token_invalid_access_token_value")
+    return token
 
 
 async def get_granted_permissions(access_token: str) -> set[str]:

@@ -7,7 +7,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.features.instagram import provider, repository
-from app.features.instagram.provider import MetaAPIError
+from app.features.instagram.provider import MetaAPIError, TokenExchangeError
 from app.models import InstagramOAuthState
 from app.token_service import encrypt_token
 
@@ -132,6 +132,13 @@ async def complete_authorization(
         )
         _save_status(db, authorization.business_id, status=status)
         return status
+    except TokenExchangeError as exc:
+        logger.warning(
+            "Instagram token exchange failed (reason=%s)",
+            exc.reason_code,
+        )
+        _save_status(db, authorization.business_id, status="discovery_error")
+        return "discovery_error"
     except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
         _log_provider_failure("token exchange", exc)
         _save_status(db, authorization.business_id, status="discovery_error")

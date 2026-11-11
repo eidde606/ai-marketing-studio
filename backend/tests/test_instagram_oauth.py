@@ -669,6 +669,168 @@ def test_provider_preserves_meta_error_details_without_response_body(monkeypatch
     asyncio.run(lookup())
 
 
+@pytest.mark.parametrize(
+    ("short_payload", "expected_reason"),
+    [
+        (ValueError("private response"), "short_token_invalid_json"),
+        ([], "short_token_invalid_response"),
+        ({}, "short_token_missing_access_token"),
+        ({"access_token": 123}, "short_token_invalid_access_token_type"),
+        ({"access_token": ""}, "short_token_invalid_access_token_value"),
+    ],
+)
+def test_short_lived_token_response_validation(
+    monkeypatch, short_payload, expected_reason,
+):
+    from app.features.instagram.provider import TokenExchangeError
+
+    with pytest.raises(TokenExchangeError) as error:
+        asyncio.run(
+            _exchange_token_responses(monkeypatch, [short_payload, {}])
+        )
+    assert error.value.reason_code == expected_reason
+
+
+@pytest.mark.parametrize(
+    ("long_payload", "expected_reason"),
+    [
+        (ValueError("private response"), "long_token_invalid_json"),
+        ([], "long_token_invalid_response"),
+        ({}, "long_token_missing_access_token"),
+        (
+            {"access_token": 123, "expires_in": 3600},
+            "long_token_invalid_access_token_type",
+        ),
+        (
+            {"access_token": "", "expires_in": 3600},
+            "long_token_invalid_access_token_value",
+        ),
+        (
+            {"access_token": "long-token"},
+            "long_token_missing_expires_in",
+        ),
+        (
+            {"access_token": "long-token", "expires_in": "3600"},
+            "long_token_invalid_expires_in_type",
+        ),
+        (
+            {"access_token": "long-token", "expires_in": True},
+            "long_token_invalid_expires_in_type",
+        ),
+        (
+            {"access_token": "long-token", "expires_in": 0},
+            "long_token_invalid_expires_in_value",
+        ),
+        (
+            {"access_token": "long-token", "expires_in": -1},
+            "long_token_invalid_expires_in_value",
+        ),
+    ],
+)
+def test_long_lived_token_response_validation(
+    monkeypatch, long_payload, expected_reason,
+):
+    from app.features.instagram.provider import TokenExchangeError
+
+    with pytest.raises(TokenExchangeError) as error:
+        asyncio.run(
+            _exchange_token_responses(
+                monkeypatch,
+                [{"access_token": "short-token"}, long_payload],
+            )
+        )
+    assert error.value.reason_code == expected_reason
+
+
+def test_successful_facebook_token_exchange_preserves_parameters(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        is_error = False
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def json(self):
+            if isinstance(self.payload, ValueError):
+                raise self.payload
+            return self.payload
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.responses = [
+                FakeResponse({"access_token": "short-token", "expires_in": 3600}),
+                FakeResponse({
+                    "access_token": "long-token",
+                    "expires_in": 5_184_000,
+                    "token_type": "bearer",
+                }),
+            ]
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, *, params):
+            calls.append((url, params))
+            return self.responses.pop(0)
+
+    monkeypatch.setattr(
+        "app.features.instagram.provider.httpx.AsyncClient",
+        FakeClient,
+    )
+    monkeypatch.setenv("FACEBOOK_APP_ID", "test-app-id")
+    monkeypatch.setenv("FACEBOOK_APP_SECRET", "test-app-secret")
+    monkeypatch.setenv(
+        "INSTAGRAM_REDIRECT_URI",
+        "https://api.test.invalid/auth/instagram/callback",
+    )
+
+    from app.features.instagram.provider import exchange_code_for_long_lived_token
+
+    result = asyncio.run(
+        exchange_code_for_long_lived_token("private-code")
+    )
+    assert result == ("long-token", 5_184_000)
+    assert calls[0][0].endswith("/oauth/access_token")
+    assert calls[0][1]["code"] == "private-code"
+    assert calls[0][1]["redirect_uri"] == (
+        "https://api.test.invalid/auth/instagram/callback"
+    )
+    assert calls[1][1]["grant_type"] == "fb_exchange_token"
+    assert calls[1][1]["fb_exchange_token"] == "short-token"
+
+
+def test_token_exchange_logs_reason_without_sensitive_values(
+    isolated_client, monkeypatch, caplog,
+):
+    from app.features.instagram.provider import TokenExchangeError
+
+    client, engine = isolated_client
+    business_id, _ = create_business(engine)
+    callback_state(engine, business_id, "page-a", state="private-state")
+
+    async def fail_exchange(_code):
+        raise TokenExchangeError("long_token_missing_expires_in")
+
+    monkeypatch.setattr(
+        "app.features.instagram.provider.exchange_code_for_long_lived_token",
+        fail_exchange,
+    )
+    with caplog.at_level(logging.WARNING, logger="app.features.instagram.service"):
+        client.get(
+            "/auth/instagram/callback",
+            params={"state": "private-state", "code": "private-code"},
+            follow_redirects=False,
+        )
+    assert "reason=long_token_missing_expires_in" in caplog.text
+    assert "private-state" not in caplog.text
+    assert "private-code" not in caplog.text
+    assert "private response" not in caplog.text
+
+
 def test_saved_connection_is_not_ready_after_business_page_changes(isolated_client):
     client, engine = isolated_client
     business_id, _ = create_business(engine)
@@ -777,6 +939,47 @@ def _async_value(value):
         return value
 
     return resolve
+
+
+async def _exchange_token_responses(monkeypatch, payloads):
+    from app.features.instagram import provider
+
+    calls = []
+
+    class FakeResponse:
+        is_error = False
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def json(self):
+            if isinstance(self.payload, ValueError):
+                raise self.payload
+            return self.payload
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.responses = [FakeResponse(payload) for payload in payloads]
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, *, params):
+            calls.append((url, params))
+            return self.responses.pop(0)
+
+    monkeypatch.setattr(provider.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setenv("FACEBOOK_APP_ID", "test-app-id")
+    monkeypatch.setenv("FACEBOOK_APP_SECRET", "test-app-secret")
+    monkeypatch.setenv(
+        "INSTAGRAM_REDIRECT_URI",
+        "https://api.test.invalid/auth/instagram/callback",
+    )
+    result = await provider.exchange_code_for_long_lived_token("private-code")
+    return result
 
 
 def _mock_authorized_user(monkeypatch):
