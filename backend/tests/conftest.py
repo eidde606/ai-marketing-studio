@@ -17,6 +17,7 @@ os.environ.update({
     "ALLOWED_USER_ID": "test-authorized-user",
     "OPENAI_API_KEY": "test-only-openai-key",
     "HEYGEN_API_KEY": "test-only-heygen-key",
+    "FRONTEND_BASE_URL": "https://studio.test.invalid",
 })
 
 

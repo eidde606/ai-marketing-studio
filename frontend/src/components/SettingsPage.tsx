@@ -9,6 +9,7 @@ type Props = {
   userEmail: string;
   onSaveDisplayName: (displayName: string) => Promise<string>;
   facebookConnection: ReactNode;
+  instagramConnection?: ReactNode;
   tiktokConnection: ReactNode;
 };
 
@@ -18,6 +19,7 @@ export default function SettingsPage({
   userEmail,
   onSaveDisplayName,
   facebookConnection,
+  instagramConnection,
   tiktokConnection,
 }: Props) {
   const [activeTab, setActiveTab] = useState<SettingsTab>("account");
@@ -193,6 +195,7 @@ export default function SettingsPage({
             )}
             <div className="settings-integration-list">
               {facebookConnection}
+              {instagramConnection}
               {tiktokConnection}
             </div>
           </section>
