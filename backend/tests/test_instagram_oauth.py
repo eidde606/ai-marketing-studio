@@ -831,6 +831,52 @@ def test_token_exchange_logs_reason_without_sensitive_values(
     assert "private response" not in caplog.text
 
 
+def test_accounts_existing_business_preserves_unconnected_response(isolated_client):
+    client, engine = isolated_client
+    business_id, _ = create_business(engine)
+
+    response = client.get(
+        "/auth/instagram/accounts", params={"business_id": business_id},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "not_connected",
+        "username": None,
+        "facebook_page_id": None,
+        "facebook_page_name": None,
+        "granted_permissions": [],
+        "missing_permissions": [
+            "instagram_basic", "instagram_content_publish",
+            "pages_show_list", "pages_read_engagement",
+        ],
+        "message": None,
+    }
+
+
+def test_accounts_missing_business_preserves_not_found_response(isolated_client):
+    client, _ = isolated_client
+
+    response = client.get(
+        "/auth/instagram/accounts", params={"business_id": "missing-business"},
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Business not found"}
+
+
+def test_connection_service_raises_typed_error_for_missing_business(isolated_client):
+    from app.features.instagram.service import (
+        BusinessNotFoundError,
+        connection_response,
+    )
+
+    _, engine = isolated_client
+    with Session(engine) as db:
+        with pytest.raises(BusinessNotFoundError):
+            connection_response(db, "missing-business")
+
+
 def test_saved_connection_is_not_ready_after_business_page_changes(isolated_client):
     client, engine = isolated_client
     business_id, _ = create_business(engine)

@@ -23,6 +23,10 @@ STATUS_MESSAGES = {
 logger = logging.getLogger(__name__)
 
 
+class BusinessNotFoundError(Exception):
+    """The requested business does not exist."""
+
+
 def _log_provider_failure(stage: str, error: Exception) -> None:
     if isinstance(error, MetaAPIError):
         logger.warning(
@@ -308,6 +312,9 @@ async def complete_authorization(
 
 
 def connection_response(db: Session, business_id: str) -> dict:
+    if repository.get_business(db, business_id) is None:
+        raise BusinessNotFoundError(business_id)
+
     connection = repository.get_connection(db, business_id)
     if connection is None:
         return {

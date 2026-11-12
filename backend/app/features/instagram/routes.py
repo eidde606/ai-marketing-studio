@@ -87,9 +87,10 @@ def get_instagram_connection(
     user: dict = Depends(verify_token),
     db: Session = Depends(get_db),
 ):
-    if repository.get_business(db, business_id) is None:
-        raise HTTPException(status_code=404, detail="Business not found")
-    return service.connection_response(db, business_id)
+    try:
+        return service.connection_response(db, business_id)
+    except service.BusinessNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Business not found") from exc
 
 
 def _redirect(result: str) -> RedirectResponse:
