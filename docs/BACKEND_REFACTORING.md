@@ -47,3 +47,18 @@ than redesigning concurrency or fixing product semantics during extraction.
 
 - Planning: inspected current feature services, route imports, repository behavior,
   test isolation, provider patch locations, and the existing architecture guardrail.
+- Businesses: 32 focused tests passed; explicit transaction mechanics extracted.
+- Drafts: 28 focused tests passed; lock/claim SQL and operation order unchanged.
+- Campaigns: 23 focused tests passed, including commit-failure rollback; HTTP status
+  mapping now belongs to routes, with typed application errors in the service.
+- Instagram: 47 focused tests passed before and after extraction. Service owns
+  state-consumption commit and authorization-preservation decisions; repository
+  owns only persistence. The second connection read remains after encryption to
+  preserve the original ordering. No repository commits remain in these features.
+
+`test_closed_layers.py` additionally rejects direct session operations in feature
+routes/services, HTTPException construction in feature services, and commits or
+rollbacks in repositories. Its exact module/function/operation baseline currently
+contains only the pre-existing HeyGen generation service operations, scheduled
+for step 9; resolved exceptions fail until removed. The original import guard
+continues to prohibit every direct route-to-repository import.

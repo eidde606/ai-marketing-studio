@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -43,11 +43,9 @@ def create_oauth_state(
             expires_at=expires_at,
         )
     )
-    db.commit()
 
 
-def consume_oauth_state(db: Session, state_hash: str) -> InstagramOAuthState | None:
-    now = datetime.now(timezone.utc)
+def consume_oauth_state(db: Session, state_hash: str, now: datetime):
     result = db.execute(
         delete(InstagramOAuthState)
         .where(
@@ -61,16 +59,7 @@ def consume_oauth_state(db: Session, state_hash: str) -> InstagramOAuthState | N
         )
     )
     row = result.first()
-    db.commit()
-    if row is None:
-        return None
-    return InstagramOAuthState(
-        business_id=row.business_id,
-        user_id=row.user_id,
-        facebook_page_id=row.facebook_page_id,
-        expires_at=now,
-        state_hash=state_hash,
-    )
+    return row
 
 
 def get_connection(db: Session, business_id: str) -> InstagramConnection | None:
@@ -82,22 +71,12 @@ def save_connection(
     business_id: str,
     values: dict,
     *,
-    preserve_authorized: bool = True,
+    connection: InstagramConnection | None,
 ) -> InstagramConnection:
-    connection = db.get(InstagramConnection, business_id)
-    if (
-        preserve_authorized
-        and connection is not None
-        and connection.status == "connected_and_authorized"
-        and values["status"] != "connected_and_authorized"
-    ):
-        return connection
     if connection is None:
         connection = InstagramConnection(business_id=business_id, **values)
         db.add(connection)
     else:
         for name, value in values.items():
             setattr(connection, name, value)
-    db.commit()
-    db.refresh(connection)
     return connection

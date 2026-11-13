@@ -945,6 +945,31 @@ def test_accounts_existing_business_preserves_unconnected_response(isolated_clie
     }
 
 
+def test_failed_reauthorization_preserves_authorized_connection_without_commit(
+    isolated_client, monkeypatch,
+):
+    from app.features.instagram.service import _save_status
+
+    _, engine = isolated_client
+    business_id, _ = create_business(engine)
+    with Session(engine) as db:
+        db.add(InstagramConnection(
+            business_id=business_id,
+            status="connected_and_authorized",
+            encrypted_access_token="preserved-token",
+            username="preserved-user",
+        ))
+        db.commit()
+    with Session(engine) as db:
+        monkeypatch.setattr(db, "commit", lambda: pytest.fail("No downgrade commit"))
+        _save_status(db, business_id, status="discovery_error")
+    with Session(engine) as db:
+        connection = db.get(InstagramConnection, business_id)
+        assert connection.status == "connected_and_authorized"
+        assert connection.encrypted_access_token == "preserved-token"
+        assert connection.username == "preserved-user"
+
+
 def test_accounts_missing_business_preserves_not_found_response(isolated_client):
     client, _ = isolated_client
 
