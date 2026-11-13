@@ -6,7 +6,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.errors import ApplicationError, ErrorKind
-from app.facebook_service import (
+from .publishing_provider import (
     get_video_status,
     publish_image_post,
     publish_text_post,

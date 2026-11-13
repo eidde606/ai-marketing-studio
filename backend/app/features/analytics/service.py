@@ -5,7 +5,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.errors import ApplicationError, ErrorKind
-from app.facebook_service import get_post_insights, get_post_reach
+from app.features.facebook.publishing_provider import get_post_insights, get_post_reach
 from app.token_service import decrypt_token
 from . import repository
 

@@ -1,8 +1,6 @@
+"""Facebook publishing and analytics provider adapter."""
 import httpx
 import logging
-
-from app.features.facebook.provider import get_page_info
-
 
 logger = logging.getLogger(__name__)
 
