@@ -71,15 +71,14 @@ than redesigning concurrency or fixing product semantics during extraction.
 - TikTok OAuth/account listing: characterization tests passed before extraction.
   The feature now owns its routes, service workflow, SQL repository and provider
   adapter; state hashing/expiry and its consume-and-commit-before-provider-call
-  ordering remain unchanged. Legacy route/provider modules are compatibility
-  imports; token refresh and publishing were extracted in later slices below.
+  ordering remain unchanged; token refresh and publishing were extracted in
+  later slices below.
 - Facebook OAuth/Page selection: added offline characterization for state
   issuance/consumption, provider failure, temporary Page handoff, user checks,
   reconnect, token secrecy and business-scoped listing. The feature now owns
   routes, schemas, service, repository and provider adapter. Facebook login
   configuration, callback URI, provider calls, Page-selection lock, and commit
-  boundaries are unchanged; legacy root OAuth modules re-export feature entry
-  points.
+  boundaries are unchanged.
 - TikTok token refresh: the five-minute expiry window, encrypted credential
   handling, refresh-token rotation, persistence commit and existing reconnect
   errors now live in the TikTok service/repository. A temporary `main.py` helper
@@ -119,9 +118,15 @@ than redesigning concurrency or fixing product semantics during extraction.
   mapping in the feature layers. The obsolete draft guard wrappers are removed.
   `main.py` now contains application/middleware setup, router registration, and
   the public health endpoint, importing the campaigns router directly from its
-  feature. The root `campaign_routes.py` remains a compatibility shim;
-  `facebook_service.py` remains a shared Graph API adapter used by Facebook
-  publishing and analytics.
+  feature.
+- Provider organization: HeyGen and OpenAI image adapters now live under
+  `features/media`; Facebook publishing and analytics adapters live under
+  `features/facebook`; and content-generation and Sofía conversation adapters
+  live under `features/content`. Five unused Facebook/TikTok OAuth/router
+  compatibility shims were removed after repository-wide caller checks. Token
+  encryption and Supabase storage remain shared application infrastructure.
+  `campaign_routes.py` is retained as an unused internal compatibility shim;
+  no route imports a repository directly.
 
 `test_closed_layers.py` additionally rejects direct session operations in feature
 routes/services, HTTPException construction in feature services, and commits or
