@@ -1,10 +1,10 @@
 """SQLAlchemy operations for Facebook OAuth and connected Pages."""
 from datetime import datetime
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
-from app.models import Business, FacebookOAuthState, SocialAccount
+from app.models import Business, Draft, FacebookOAuthState, SocialAccount
 
 
 def get_business(db: Session, business_id: str) -> Business | None:
@@ -107,3 +107,57 @@ def list_page_accounts(db: Session, business_id: str) -> list[SocialAccount]:
             SocialAccount.platform == "facebook",
         )
     ).all()
+
+
+def get_draft(
+    db: Session,
+    draft_id: str,
+    *,
+    include_deleted: bool = False,
+) -> Draft | None:
+    statement = select(Draft).where(Draft.id == draft_id)
+    if not include_deleted:
+        statement = statement.where(Draft.deleted_at.is_(None))
+    return db.scalar(statement)
+
+
+def get_connected_page(db: Session, business_id: str) -> SocialAccount | None:
+    return db.scalar(
+        select(SocialAccount).where(
+            SocialAccount.business_id == business_id,
+            SocialAccount.platform == "facebook",
+            SocialAccount.connection_status == "connected",
+        )
+    )
+
+
+def claim_publication(db: Session, draft_id: str) -> bool:
+    result = db.execute(
+        update(Draft)
+        .where(
+            Draft.id == draft_id,
+            Draft.deleted_at.is_(None),
+            Draft.status == "approved",
+            Draft.facebook_publish_status == "not_published",
+            Draft.facebook_post_id.is_(None),
+        )
+        .values(facebook_publish_status="publishing")
+        .returning(Draft.id)
+    )
+    return result.scalar_one_or_none() is not None
+
+
+def reset_publication(db: Session, draft_id: str) -> bool:
+    result = db.execute(
+        update(Draft)
+        .where(
+            Draft.id == draft_id,
+            Draft.deleted_at.is_(None),
+            Draft.status == "approved",
+            Draft.facebook_publish_status == "needs_review",
+            Draft.facebook_post_id.is_(None),
+        )
+        .values(facebook_publish_status="not_published")
+        .returning(Draft.id)
+    )
+    return result.scalar_one_or_none() is not None

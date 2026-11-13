@@ -131,7 +131,14 @@ def test_deleted_publication_keeps_analytics(drafts_client, monkeypatch):
         "app.features.analytics.service.get_post_reach",
         reach,
     )
-    monkeypatch.setattr("app.main.publish_text_post", publish)
+    monkeypatch.setattr(
+        "app.features.facebook.publishing_service.decrypt_token",
+        lambda token: "fake",
+    )
+    monkeypatch.setattr(
+        "app.features.facebook.publishing_service.publish_text_post",
+        publish,
+    )
     before = client.get(f"/drafts/{ids[1]}/analytics/facebook")
     before_reach = client.get(f"/drafts/{ids[1]}/analytics/facebook/reach")
     assert client.delete(f"/drafts/{ids[1]}").status_code == 200

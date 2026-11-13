@@ -85,6 +85,13 @@ than redesigning concurrency or fixing product semantics during extraction.
   errors now live in the TikTok service/repository. The `main.py` helper only
   translates application errors for legacy publishing and verification routes;
   those publishing workflows remain the next slice.
+- Facebook publishing and video verification: the existing mock-based
+  characterization suite now exercises service-owned status transitions,
+  atomic publication claims, media validation, uncertain outcomes, retry
+  blocking, verification, manual reset and authentication. The endpoints,
+  service workflow and query/claim repository are feature-owned; provider and
+  storage adapters are reused. Existing transaction boundaries and response
+  messages are preserved.
 
 `test_closed_layers.py` additionally rejects direct session operations in feature
 routes/services, HTTPException construction in feature services, and commits or

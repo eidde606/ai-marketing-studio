@@ -9,3 +9,7 @@ class FacebookPageSelection(BaseModel):
 
 class FacebookHandoffRequest(BaseModel):
     handoff_token: str
+
+
+class FacebookRecoveryRequest(BaseModel):
+    confirmed_not_published: bool
