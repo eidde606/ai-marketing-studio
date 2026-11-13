@@ -72,19 +72,19 @@ than redesigning concurrency or fixing product semantics during extraction.
   The feature now owns its routes, service workflow, SQL repository and provider
   adapter; state hashing/expiry and its consume-and-commit-before-provider-call
   ordering remain unchanged. Legacy route/provider modules are compatibility
-  imports. Publishing and the `main.py` token-refresh orchestration remain
-  outside this slice.
+  imports; token refresh and publishing were extracted in later slices below.
 - Facebook OAuth/Page selection: added offline characterization for state
   issuance/consumption, provider failure, temporary Page handoff, user checks,
   reconnect, token secrecy and business-scoped listing. The feature now owns
   routes, schemas, service, repository and provider adapter. Facebook login
   configuration, callback URI, provider calls, Page-selection lock, and commit
-  boundaries are unchanged; legacy root modules re-export feature entry points.
+  boundaries are unchanged; legacy root OAuth modules re-export feature entry
+  points.
 - TikTok token refresh: the five-minute expiry window, encrypted credential
   handling, refresh-token rotation, persistence commit and existing reconnect
-  errors now live in the TikTok service/repository. The `main.py` helper only
-  translates application errors for legacy publishing and verification routes;
-  those publishing workflows remain the next slice.
+  errors now live in the TikTok service/repository. A temporary `main.py` helper
+  served legacy publishing handlers and was removed when publishing moved into
+  the TikTok feature.
 - Facebook publishing and video verification: the existing mock-based
   characterization suite now exercises service-owned status transitions,
   atomic publication claims, media validation, uncertain outcomes, retry
@@ -118,8 +118,10 @@ than redesigning concurrency or fixing product semantics during extraction.
   the Facebook feature, with its provider call, configuration checks, and error
   mapping in the feature layers. The obsolete draft guard wrappers are removed.
   `main.py` now contains application/middleware setup, router registration, and
-  the public health endpoint. The root `campaign_routes.py` and
-  `facebook_service.py` remain compatibility modules.
+  the public health endpoint, importing the campaigns router directly from its
+  feature. The root `campaign_routes.py` remains a compatibility shim;
+  `facebook_service.py` remains a shared Graph API adapter used by Facebook
+  publishing and analytics.
 
 `test_closed_layers.py` additionally rejects direct session operations in feature
 routes/services, HTTPException construction in feature services, and commits or

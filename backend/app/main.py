@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.campaign_routes import router as campaign_router
+from app.features.campaigns.routes import router as campaign_router
 from app.features.analytics.routes import router as analytics_router
 from app.features.businesses.routes import router as business_router
 from app.features.content.routes import router as content_router
