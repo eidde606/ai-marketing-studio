@@ -9,9 +9,10 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.auth import verify_token
+from app.auth import get_authenticated_principal, verify_token
 from app.main import app
-from app.models import FacebookOAuthState, SocialAccount
+from app.models import BusinessMembership, FacebookOAuthState, SocialAccount
+from tests.tenancy_fixtures import grant_test_owner
 
 
 def create_business(client) -> str:
@@ -23,11 +24,12 @@ def create_business(client) -> str:
 def create_oauth_state(engine, business_id: str, state: str = "facebook-state"):
     state_hash = hashlib.sha256(state.encode()).hexdigest()
     with Session(engine) as db:
+        principal = grant_test_owner(db, [business_id])
         db.add(
             FacebookOAuthState(
                 state_hash=state_hash,
                 business_id=business_id,
-                user_id="test-authorized-user",
+                user_id=principal.subject,
                 expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
             )
         )
@@ -42,10 +44,11 @@ def create_pending_selection(
     pages: list[dict] | None = None,
 ):
     with Session(engine) as db:
+        principal = grant_test_owner(db, [business_id])
         pending = FacebookOAuthState(
             state_hash=hashlib.sha256(b"pending-state").hexdigest(),
             business_id=business_id,
-            user_id="test-authorized-user",
+            user_id=principal.subject,
             expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
             encrypted_pages=f"encrypted:{json.dumps(pages or [])}",
             selection_token_hash=hashlib.sha256(token.encode()).hexdigest(),
@@ -106,6 +109,7 @@ def test_facebook_oauth_start_preserves_auth_and_missing_business_response(
     assert missing.json() == {"detail": "Business not found"}
 
     del app.dependency_overrides[verify_token]
+    del app.dependency_overrides[get_authenticated_principal]
     unauthorized = client.get(
         "/auth/facebook/start",
         params={"business_id": "missing"},
@@ -274,6 +278,93 @@ def test_facebook_callback_rejects_empty_page_list(
     assert response.json() == {
         "detail": "No Facebook Pages available for this account",
     }
+
+
+def test_facebook_member_cannot_list_or_connect_pages(isolated_client, monkeypatch):
+    client, engine = isolated_client
+    business_id = create_business(client)
+    handoff = create_pending_selection(engine, business_id)
+    login_url = monkeypatch.setattr(
+        "app.features.facebook.provider.get_facebook_login_url",
+        lambda state: "https://facebook.test/authorize",
+    )
+    with Session(engine) as db:
+        membership = db.query(BusinessMembership).filter_by(
+            business_id=business_id,
+        ).one()
+        membership.role = "member"
+        db.commit()
+
+    listing = client.get(
+        "/auth/facebook/accounts", params={"business_id": business_id},
+    )
+    start = client.get(
+        "/auth/facebook/start", params={"business_id": business_id},
+    )
+    handoff_response = client.post(
+        "/auth/facebook/handoff", json={"handoff_token": handoff},
+    )
+
+    assert [listing.status_code, start.status_code, handoff_response.status_code] == [
+        403, 403, 403,
+    ]
+    assert all(response.json() == {"detail": "Operation not permitted"} for response in (
+        listing, start, handoff_response,
+    ))
+    assert login_url is None
+    with Session(engine) as db:
+        assert db.query(FacebookOAuthState).count() == 1
+
+
+def test_facebook_callback_rechecks_membership_after_provider_exchange(
+    isolated_client, monkeypatch,
+):
+    from app.errors import ApplicationError, ErrorKind
+    from app.features.facebook import service
+
+    client, engine = isolated_client
+    business_id = create_business(client)
+    state = create_oauth_state(engine, business_id)
+    monkeypatch.setenv("FRONTEND_BASE_URL", "https://studio.test.invalid")
+    exchange = AsyncMock(return_value="short-token")
+    long_lived = AsyncMock(return_value="long-token")
+    pages = AsyncMock(return_value=[{
+        "id": "page-id", "name": "Page", "access_token": "page-token",
+    }])
+    monkeypatch.setattr("app.features.facebook.provider.exchange_code_for_token", exchange)
+    monkeypatch.setattr("app.features.facebook.provider.get_long_lived_user_token", long_lived)
+    monkeypatch.setattr("app.features.facebook.provider.get_managed_pages", pages)
+    monkeypatch.setattr(
+        "app.features.facebook.service.encrypt_token",
+        lambda value: f"encrypted:{value}",
+    )
+
+    original = service.access.require_permission
+    checks = 0
+
+    def revoke_after_provider(db, principal, requested_business, permission, **kwargs):
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            raise ApplicationError(ErrorKind.NOT_FOUND, "Business not found")
+        return original(db, principal, requested_business, permission, **kwargs)
+
+    monkeypatch.setattr(service.access, "require_permission", revoke_after_provider)
+    response = client.get(
+        "/auth/facebook/callback",
+        params={"state": state, "code": "authorization-code"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Business not found"}
+    exchange.assert_awaited_once()
+    long_lived.assert_awaited_once()
+    pages.assert_awaited_once()
+    with Session(engine) as db:
+        assert db.get(FacebookOAuthState, hashlib.sha256(state.encode()).hexdigest()) is None
+        assert db.query(FacebookOAuthState).count() == 0
+        assert db.query(SocialAccount).count() == 0
 
 
 def test_facebook_handoff_is_user_scoped_and_hides_page_tokens(

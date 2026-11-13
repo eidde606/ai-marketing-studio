@@ -7,6 +7,9 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.errors import ApplicationError, ErrorKind
+from app.features.access import service as access
+from app.features.access.permissions import Permission
+from app.features.access.principal import AuthenticatedPrincipal
 from app.storage_service import get_storage_client
 from app.transactions import Transactions
 from . import publishing_provider, repository, service as oauth_service
@@ -24,20 +27,28 @@ async def get_creator_settings(
     account_id: str,
     *,
     db: Session,
+    principal: AuthenticatedPrincipal,
 ) -> dict:
-    draft = repository.get_draft(db, draft_id)
+    context = access.require_draft_permission(
+        db, principal, draft_id, Permission.PUBLISH,
+    )
+    draft = repository.get_draft_scoped(db, context, draft_id)
     if draft is None:
         raise _failure(ErrorKind.NOT_FOUND, "Draft not found")
-    account = repository.get_connected_account(
-        db,
-        draft.business_id,
-        account_id,
-    )
+    account = repository.get_connected_account_scoped(db, context, account_id)
     if account is None:
         raise _failure(ErrorKind.CONFLICT, "Connect TikTok first")
-    access_token = await oauth_service.get_valid_access_token(account, db=db)
+    access_token = await oauth_service.get_valid_access_token(
+        account_id,
+        business_id=draft.business_id,
+        principal=principal,
+        db=db,
+    )
     try:
-        return await publishing_provider.get_creator_info(access_token)
+        access.require_draft_permission(db, principal, draft_id, Permission.PUBLISH)
+        result = await publishing_provider.get_creator_info(access_token)
+        access.require_draft_permission(db, principal, draft_id, Permission.PUBLISH)
+        return result
     except (httpx.HTTPError, ValueError):
         raise _failure(
             ErrorKind.UPSTREAM_FAILURE,
@@ -50,8 +61,12 @@ async def publish_video(
     request: TikTokPublishRequest,
     *,
     db: Session,
+    principal: AuthenticatedPrincipal,
 ) -> dict[str, str]:
-    draft = repository.get_draft(db, draft_id)
+    context = access.require_draft_permission(
+        db, principal, draft_id, Permission.PUBLISH,
+    )
+    draft = repository.get_draft_scoped(db, context, draft_id)
     if draft is None:
         raise _failure(ErrorKind.NOT_FOUND, "Draft not found")
     if "tiktok" not in (draft.publish_destinations or []):
@@ -60,10 +75,8 @@ async def publish_video(
             "TikTok is not selected for this draft",
         )
 
-    account = repository.get_connected_account(
-        db,
-        draft.business_id,
-        request.account_id,
+    account = repository.get_connected_account_scoped(
+        db, context, request.account_id,
     )
     if account is None:
         raise _failure(ErrorKind.CONFLICT, "Connect TikTok first")
@@ -83,7 +96,9 @@ async def publish_video(
             "TikTok photo publishing requires a verified media URL; not configured yet",
         )
 
-    if not storage_path.startswith(f"businesses/{draft.business_id}/"):
+    try:
+        repository.validate_storage_path_scoped(db, context, storage_path)
+    except ValueError:
         raise _failure(ErrorKind.INVALID_INPUT, "Invalid media storage path")
 
     try:
@@ -107,8 +122,14 @@ async def publish_video(
             "Video must be 5–64 MiB for current TikTok uploader",
         )
 
-    access_token = await oauth_service.get_valid_access_token(account, db=db)
+    access_token = await oauth_service.get_valid_access_token(
+        account.id,
+        business_id=draft.business_id,
+        principal=principal,
+        db=db,
+    )
     try:
+        access.require_draft_permission(db, principal, draft_id, Permission.PUBLISH)
         creator = await publishing_provider.get_creator_info(access_token)
     except (httpx.HTTPError, ValueError, KeyError) as exc:
         raise _failure(
@@ -122,13 +143,24 @@ async def publish_video(
         )
 
     transactions = Transactions(db)
-    if not repository.claim_publication(db, draft_id, account.id):
+    context = access.require_permission(
+        db, principal, draft.business_id, Permission.PUBLISH, lock=True,
+    )
+    if not repository.claim_publication_scoped(db, context, draft_id, account.id):
         transactions.rollback()
         raise _failure(
             ErrorKind.CONFLICT,
             "Draft is not eligible for TikTok publishing",
         )
     transactions.commit()
+
+    try:
+        access.require_draft_permission(db, principal, draft_id, Permission.PUBLISH)
+    except ApplicationError:
+        transactions.rollback()
+        repository.release_publication_claim_scoped(db, context, draft_id)
+        transactions.commit()
+        raise
 
     try:
         result = await publishing_provider.publish_tiktok_video_file(
@@ -143,20 +175,13 @@ async def publish_video(
         publish_id = result.get("publish_id")
         if not publish_id:
             raise ValueError("TikTok returned no publish ID")
-
-        draft.tiktok_publish_id = publish_id
-        draft.tiktok_publish_status = "needs_review"
-        transactions.commit()
-        return {
-            "status": "processing",
-            "tiktok_publish_id": publish_id,
-        }
     except Exception as exc:
         transactions.rollback()
-        draft = repository.get_draft(db, draft_id)
-        if draft is None:
-            raise _failure(ErrorKind.NOT_FOUND, "Draft not found") from exc
-        draft.tiktok_publish_status = "needs_review"
+        repository.save_claimed_publication_scoped(
+            db, context, draft_id,
+            expected_status="publishing",
+            values={"tiktok_publish_status": "needs_review"},
+        )
         transactions.commit()
         logger.exception(
             "TikTok publishing requires review for draft %s",
@@ -166,10 +191,33 @@ async def publish_video(
             ErrorKind.UPSTREAM_FAILURE,
             "TikTok publishing outcome requires review",
         ) from exc
+    if not repository.save_claimed_publication_scoped(
+        db, context, draft_id,
+        expected_status="publishing",
+        values={
+            "tiktok_publish_id": publish_id,
+            "tiktok_publish_status": "needs_review",
+        },
+    ):
+        transactions.rollback()
+        raise _failure(ErrorKind.CONFLICT, "TikTok publication claim is no longer active")
+    transactions.commit()
+    access.require_draft_permission(db, principal, draft_id, Permission.PUBLISH)
+    return {"status": "processing", "tiktok_publish_id": publish_id}
 
 
-async def verify_publication(draft_id: str, *, db: Session) -> dict[str, str | None]:
-    draft = repository.get_draft(db, draft_id, include_deleted=True)
+async def verify_publication(
+    draft_id: str,
+    *,
+    db: Session,
+    principal: AuthenticatedPrincipal,
+) -> dict[str, str | None]:
+    context = access.require_draft_permission(
+        db, principal, draft_id, Permission.PUBLISH,
+    )
+    draft = repository.get_draft_scoped(
+        db, context, draft_id, include_deleted=True,
+    )
     if draft is None:
         raise _failure(ErrorKind.NOT_FOUND, "Draft not found")
     if not draft.tiktok_publish_id:
@@ -178,16 +226,20 @@ async def verify_publication(draft_id: str, *, db: Session) -> dict[str, str | N
             "No TikTok publication to verify",
         )
 
-    account = repository.get_connected_account(
-        db,
-        draft.business_id,
-        draft.tiktok_account_id,
+    account = repository.get_connected_account_scoped(
+        db, context, draft.tiktok_account_id,
     )
     if account is None:
         raise _failure(ErrorKind.CONFLICT, "TikTok is not connected")
-    access_token = await oauth_service.get_valid_access_token(account, db=db)
+    access_token = await oauth_service.get_valid_access_token(
+        account.id,
+        business_id=draft.business_id,
+        principal=principal,
+        db=db,
+    )
 
     try:
+        access.require_draft_permission(db, principal, draft_id, Permission.PUBLISH)
         result = await publishing_provider.get_tiktok_publish_status(
             access_token=access_token,
             publish_id=draft.tiktok_publish_id,
@@ -200,14 +252,22 @@ async def verify_publication(draft_id: str, *, db: Session) -> dict[str, str | N
 
     status = result.get("status")
     if status == "PUBLISH_COMPLETE":
-        draft.tiktok_publish_status = "published"
-        draft.published_at = datetime.now(timezone.utc)
+        if not repository.save_claimed_publication_scoped(
+            db, context, draft_id,
+            expected_status="needs_review",
+            values={
+                "tiktok_publish_status": "published",
+                "published_at": datetime.now(timezone.utc),
+            },
+        ):
+            raise _failure(ErrorKind.CONFLICT, "TikTok publication is no longer awaiting verification")
         Transactions(db).commit()
+        access.require_draft_permission(db, principal, draft_id, Permission.PUBLISH)
         return {"status": "published"}
     if status == "FAILED":
-        draft.tiktok_publish_status = "needs_review"
-        Transactions(db).commit()
+        access.require_draft_permission(db, principal, draft_id, Permission.PUBLISH)
         return {"status": "failed"}
+    access.require_draft_permission(db, principal, draft_id, Permission.PUBLISH)
     return {
         "status": "processing",
         "tiktok_status": status,

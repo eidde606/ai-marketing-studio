@@ -20,6 +20,17 @@ def add_oauth_state(db: Session, state: FacebookOAuthState) -> None:
     db.add(state)
 
 
+def oauth_state_identity(db: Session, state_hash: str, now: datetime):
+    row = db.execute(select(
+        FacebookOAuthState.business_id, FacebookOAuthState.user_id,
+    ).where(
+        FacebookOAuthState.state_hash == state_hash,
+        FacebookOAuthState.expires_at > now,
+        FacebookOAuthState.selection_token_hash.is_(None),
+    )).one_or_none()
+    return row
+
+
 def consume_oauth_state(
     db: Session,
     state_hash: str,
@@ -52,6 +63,19 @@ def get_pending_handoff(
             FacebookOAuthState.expires_at > now,
         )
     )
+
+
+def pending_selection_business(
+    db: Session,
+    token_hash: str,
+    user_id: str,
+    now: datetime,
+) -> str | None:
+    return db.scalar(select(FacebookOAuthState.business_id).where(
+        FacebookOAuthState.selection_token_hash == token_hash,
+        FacebookOAuthState.user_id == user_id,
+        FacebookOAuthState.expires_at > now,
+    ))
 
 
 def lock_pending_selection(
@@ -193,6 +217,20 @@ def get_account_scoped(db: Session, context: TenantAccess, account_id: str):
         SocialAccount.id == account_id, SocialAccount.platform == "facebook"))
 
 
+def get_connected_page_scoped(db: Session, context: TenantAccess):
+    return db.scalar(tenant.selection(SocialAccount, context).where(
+        SocialAccount.platform == "facebook",
+        SocialAccount.connection_status == "connected",
+    ))
+
+
+def get_page_account_scoped(db: Session, context: TenantAccess, page_id: str):
+    return db.scalar(tenant.selection(SocialAccount, context).where(
+        SocialAccount.platform == "facebook",
+        SocialAccount.platform_account_id == page_id,
+    ))
+
+
 def list_accounts_scoped(db: Session, context: TenantAccess, *, limit=100, offset=0):
     return db.scalars(tenant.page(tenant.selection(SocialAccount, context)
         .where(SocialAccount.platform == "facebook").order_by(SocialAccount.id), limit=limit, offset=offset)).all()
@@ -266,5 +304,24 @@ def save_publication_scoped(db: Session, context: TenantAccess, draft_id: str, *
         raise ValueError("Unsupported Facebook publication fields")
     return db.execute(update(Draft).where(
         tenant.predicate(Draft, context), Draft.id == draft_id,
+        Draft.facebook_publish_status == expected_status,
+    ).values(**values).returning(Draft.id)).scalar_one_or_none() is not None
+
+
+def save_claimed_publication_scoped(
+    db: Session,
+    context: TenantAccess,
+    draft_id: str,
+    *,
+    expected_status: str = "publishing",
+    values: dict,
+) -> bool:
+    """Persist only the outcome of an already claimed provider operation."""
+    allowed = {"facebook_post_id", "facebook_publish_status", "published_at"}
+    if not values or not set(values) <= allowed:
+        raise ValueError("Unsupported Facebook publication fields")
+    return db.execute(update(Draft).where(
+        tenant.predicate(Draft, context),
+        Draft.id == draft_id,
         Draft.facebook_publish_status == expected_status,
     ).values(**values).returning(Draft.id)).scalar_one_or_none() is not None

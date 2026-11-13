@@ -7,7 +7,8 @@ from sqlalchemy.orm import Session
 
 from app.auth import verify_token
 from app.main import app
-from app.models import Business, Draft, SocialAccount
+from app.models import Business, BusinessMembership, Draft, SocialAccount
+from tests.tenancy_fixtures import grant_test_owner
 
 MIN_VIDEO_SIZE = 5 * 1024 * 1024
 VIDEO_BYTES = b"\x00\x00\x00\x18ftyp" + b"x" * (MIN_VIDEO_SIZE - 8)
@@ -20,6 +21,7 @@ def tiktok_case(isolated_client, monkeypatch):
         business = Business(name="TikTok publishing business")
         db.add(business)
         db.flush()
+        grant_test_owner(db, [business.id])
         draft = Draft(
             business_id=business.id,
             title="TikTok video",
@@ -449,3 +451,58 @@ def test_tiktok_publishing_and_verification_require_authentication(tiktok_case):
 
     assert publish_response.status_code == 401
     assert verify_response.status_code == 401
+
+
+def test_tiktok_member_cannot_publish_or_refresh_credentials(tiktok_case, monkeypatch):
+    case = tiktok_case
+    with Session(case.engine) as db:
+        membership = db.query(BusinessMembership).filter_by(
+            business_id=case.business_id,
+        ).one()
+        membership.role = "member"
+        db.commit()
+
+    response = publish(case)
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Operation not permitted"}
+    case.publisher.assert_not_awaited()
+    case.storage.storage.from_.assert_not_called()
+    assert read_draft(case).tiktok_publish_status == "not_published"
+
+
+def test_tiktok_publication_hides_drafts_from_other_tenants(tiktok_case):
+    case = tiktok_case
+    with Session(case.engine) as db:
+        other_business = Business(name="Other TikTok business")
+        db.add(other_business)
+        db.flush()
+        draft = Draft(
+            business_id=other_business.id,
+            title="Other tenant",
+            caption="Must not publish",
+            platform="tiktok",
+            status="approved",
+            publish_destinations=["tiktok"],
+            media_type="video",
+            video_url=f"businesses/{other_business.id}/video.mp4",
+            video_status="completed",
+        )
+        db.add(draft)
+        db.commit()
+        draft_id = draft.id
+
+    response = case.client.post(
+        f"/drafts/{draft_id}/publish-tiktok",
+        json={
+            "account_id": case.account_id,
+            "privacy_level": "PUBLIC_TO_EVERYONE",
+            "disable_comment": False,
+            "disable_duet": False,
+            "disable_stitch": False,
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Draft not found"}
+    case.publisher.assert_not_awaited()

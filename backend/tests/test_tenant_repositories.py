@@ -190,7 +190,8 @@ def test_publication_claims_reject_foreign_drafts_and_accounts(tenant_db):
     assert db.get(Draft, "b-approved").facebook_publish_status == "not_published"
     assert db.get(Draft, "b-approved").tiktok_account_id is None
     assert not tiktok.save_refreshed_credentials_scoped(db, scope, "b-tiktok",
-        encrypted_access_token="changed", encrypted_refresh_token="changed", token_expires_at=NOW)
+        encrypted_access_token="changed", encrypted_refresh_token="changed",
+        token_expires_at=NOW, expected_refresh_token="private")
     assert not instagram.update_connection_scoped(db, scope, {"facebook_page_id": "b-provider-facebook"})
     assert instagram.update_connection_scoped(db, scope, {"status": "permission_error"})
     db.commit()

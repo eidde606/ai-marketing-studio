@@ -6,8 +6,11 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from app.auth import verify_token
+from app.auth import get_authenticated_principal, verify_token
 from app.database import get_db
+from app.errors import ApplicationError
+from app.features.access.principal import AuthenticatedPrincipal
+from app.http_errors import http_error
 from app.features.instagram import service
 from app.features.instagram.schemas import InstagramConnectionResponse
 
@@ -50,15 +53,17 @@ class InstagramCallbackAccessLogRedactionMiddleware:
 @router.get("/start")
 def start_instagram_connection(
     business_id: str,
-    user: dict = Depends(verify_token),
     db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
 ):
     try:
         return {
             "authorization_url": service.start_connection(
-                db, business_id, user["sub"],
+                db, business_id, principal,
             )
         }
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
     except service.BusinessNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except service.ConnectionStartConflictError as exc:
@@ -72,26 +77,35 @@ async def instagram_callback(
     error: str | None = None,
     db: Session = Depends(get_db),
 ):
-    authorization = service.consume_callback_state(db, state)
-    if authorization is None:
+    try:
+        callback = service.consume_callback_state(db, state)
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
+    if callback is None:
         return _redirect("invalid_state")
+    authorization, principal = callback
     if error or not code:
         return _redirect("authorization_declined")
 
-    status = await service.complete_authorization(db, authorization, code)
+    try:
+        status = await service.complete_authorization(
+            db, authorization, code, principal=principal,
+        )
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
     return _redirect(status)
 
 
 @router.get("/accounts", response_model=InstagramConnectionResponse)
 def get_instagram_connection(
     business_id: str,
-    user: dict = Depends(verify_token),
     db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
 ):
     try:
-        return service.connection_response(db, business_id)
-    except service.BusinessNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Business not found") from exc
+        return service.connection_response(db, business_id, principal)
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
 
 
 def _redirect(result: str) -> RedirectResponse:

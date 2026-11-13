@@ -9,6 +9,9 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.errors import ApplicationError, ErrorKind
+from app.features.access import service as access
+from app.features.access.permissions import Permission
+from app.features.access.principal import AuthenticatedPrincipal
 from app.models import FacebookOAuthState, SocialAccount
 from app.token_service import decrypt_token, encrypt_token
 from app.transactions import Transactions
@@ -40,23 +43,24 @@ async def page_info() -> dict:
 
 def start_connection(
     business_id: str,
-    user_id: str,
+    principal: AuthenticatedPrincipal,
     *,
     db: Session,
 ) -> str:
-    business = repository.get_business(db, business_id)
-    if business is None:
-        raise ApplicationError(ErrorKind.NOT_FOUND, "Business not found")
+    context = access.require_permission(
+        db, principal, business_id, Permission.MANAGE_CONNECTIONS, lock=True,
+    )
 
     state = secrets.token_urlsafe(32)
     state_hash = hashlib.sha256(state.encode("utf-8")).hexdigest()
     login_url = provider.get_facebook_login_url(state)
-    repository.add_oauth_state(
+    repository.add_oauth_state_scoped(
         db,
+        context,
         FacebookOAuthState(
             state_hash=state_hash,
-            business_id=business.id,
-            user_id=user_id,
+            business_id=business_id,
+            user_id=principal.subject,
             expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
         ),
     )
@@ -72,10 +76,20 @@ async def complete_callback(
     db: Session,
 ) -> str:
     state_hash = hashlib.sha256(state.encode("utf-8")).hexdigest()
-    authorization = repository.consume_oauth_state(
-        db,
-        state_hash,
-        datetime.now(timezone.utc),
+    now = datetime.now(timezone.utc)
+    identity = repository.oauth_state_identity(db, state_hash, now)
+    if identity is None:
+        raise ApplicationError(
+            ErrorKind.INVALID_INPUT,
+            "Invalid, expired, or previously used authorization",
+        )
+    business_id, initiator_id = identity
+    principal = access.resolve_oauth_initiator(db, initiator_id)
+    context = access.require_permission(
+        db, principal, business_id, Permission.MANAGE_CONNECTIONS,
+    )
+    authorization = repository.consume_oauth_state_scoped(
+        db, context, state_hash, initiator_id, now,
     )
     Transactions(db).commit()
 
@@ -117,12 +131,16 @@ async def complete_callback(
     selection_hash = hashlib.sha256(
         selection_token.encode("utf-8"),
     ).hexdigest()
-    repository.add_pending_selection(
+    context = access.require_permission(
+        db, principal, business_id, Permission.MANAGE_CONNECTIONS, lock=True,
+    )
+    repository.add_oauth_state_scoped(
         db,
+        context,
         FacebookOAuthState(
             state_hash=hashlib.sha256(secrets.token_bytes(32)).hexdigest(),
-            business_id=authorization[0],
-            user_id=authorization[1],
+            business_id=business_id,
+            user_id=initiator_id,
             expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
             encrypted_pages=encrypted_pages,
             selection_token_hash=selection_hash,
@@ -134,16 +152,25 @@ async def complete_callback(
 
 def handoff_pages(
     token: str,
-    user_id: str,
+    principal: AuthenticatedPrincipal,
     *,
     db: Session,
 ) -> dict:
     token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    pending = repository.get_pending_handoff(
-        db,
-        token_hash,
-        user_id,
-        datetime.now(timezone.utc),
+    now = datetime.now(timezone.utc)
+    business_id = repository.pending_selection_business(
+        db, token_hash, principal.subject, now,
+    )
+    if business_id is None:
+        raise ApplicationError(
+            ErrorKind.INVALID_INPUT,
+            "Invalid or expired Facebook handoff",
+        )
+    context = access.require_permission(
+        db, principal, business_id, Permission.MANAGE_CONNECTIONS,
+    )
+    pending = repository.get_pending_selection_scoped(
+        db, context, token_hash, principal.subject, now,
     )
     if pending is None or not pending.encrypted_pages:
         raise ApplicationError(
@@ -164,7 +191,7 @@ def handoff_pages(
 def select_page(
     selection_token: str,
     page_id: str,
-    user_id: str,
+    principal: AuthenticatedPrincipal,
     *,
     db: Session,
 ) -> dict[str, str]:
@@ -172,11 +199,19 @@ def select_page(
     selection_hash = hashlib.sha256(
         selection_token.encode("utf-8"),
     ).hexdigest()
-    pending = repository.lock_pending_selection(
-        db,
-        selection_hash,
-        user_id,
-        now,
+    business_id = repository.pending_selection_business(
+        db, selection_hash, principal.subject, now,
+    )
+    if business_id is None:
+        raise ApplicationError(
+            ErrorKind.INVALID_INPUT,
+            "Invalid or expired Page selection",
+        )
+    context = access.require_permission(
+        db, principal, business_id, Permission.MANAGE_CONNECTIONS, lock=True,
+    )
+    pending = repository.get_pending_selection_scoped(
+        db, context, selection_hash, principal.subject, now, lock=True,
     )
     if pending is None or not pending.encrypted_pages:
         raise ApplicationError(
@@ -202,42 +237,53 @@ def select_page(
             "Facebook did not provide a Page access token",
         )
 
-    account = repository.get_page_account(
-        db,
-        pending.business_id,
-        selected_page["id"],
-    )
+    account = repository.get_page_account_scoped(db, context, selected_page["id"])
     if account is None:
-        account = SocialAccount(
-            business_id=pending.business_id,
+        repository.add_account_scoped(db, context, SocialAccount(
+            business_id=business_id,
             platform="facebook",
             platform_account_id=selected_page["id"],
             account_name=selected_page["name"],
             encrypted_access_token=encrypt_token(page_token),
             connection_status="connected",
-        )
-        repository.add_social_account(db, account)
+        ))
     else:
-        account.account_name = selected_page["name"]
-        account.encrypted_access_token = encrypt_token(page_token)
-        account.connection_status = "connected"
+        repository.update_account_scoped(db, context, account.id, {
+            "account_name": selected_page["name"],
+            "encrypted_access_token": encrypt_token(page_token),
+            "connection_status": "connected",
+        })
 
     result = {
         "status": "connected",
-        "business_id": pending.business_id,
+        "business_id": business_id,
         "page_id": selected_page["id"],
         "page_name": selected_page["name"],
     }
-    repository.delete_pending_selection(db, pending)
+    repository.delete_pending_selection_scoped(
+        db, context, selection_hash, principal.subject,
+    )
     Transactions(db).commit()
     return result
 
 
-def list_accounts(business_id: str, *, db: Session) -> dict:
-    if repository.get_business(db, business_id) is None:
-        raise ApplicationError(ErrorKind.NOT_FOUND, "Business not found")
-
-    accounts = repository.list_page_accounts(db, business_id)
+def list_accounts(
+    business_id: str,
+    *,
+    db: Session,
+    principal: AuthenticatedPrincipal,
+) -> dict:
+    context = access.require_permission(
+        db, principal, business_id, Permission.MANAGE_CONNECTIONS,
+    )
+    accounts = []
+    while True:
+        page = repository.list_accounts_scoped(
+            db, context, limit=100, offset=len(accounts),
+        )
+        accounts.extend(page)
+        if len(page) < 100:
+            break
     return {
         "accounts": [
             {

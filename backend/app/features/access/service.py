@@ -1,4 +1,5 @@
 from sqlalchemy.orm import Session
+import os
 
 from app.errors import ApplicationError, ErrorKind
 from . import repository
@@ -13,6 +14,17 @@ def resolve_principal(db: Session, identity: Principal) -> AuthenticatedPrincipa
         # Do not distinguish an unregistered identity from a disabled account.
         raise ApplicationError(ErrorKind.FORBIDDEN, "Application access denied")
     return AuthenticatedPrincipal(identity.issuer, identity.subject, user_id)
+
+
+def resolve_oauth_initiator(db: Session, user_id: str) -> AuthenticatedPrincipal:
+    """Re-resolve the identity bound to a server-created, one-time OAuth state."""
+    supabase_url = os.getenv("SUPABASE_URL", "").rstrip("/")
+    allowed_user_id = os.getenv("ALLOWED_USER_ID", "").strip()
+    if not supabase_url or not allowed_user_id or user_id != allowed_user_id:
+        raise ApplicationError(ErrorKind.FORBIDDEN, "Application access denied")
+    return resolve_principal(
+        db, Principal(f"{supabase_url}/auth/v1", user_id),
+    )
 
 
 def require_permission(

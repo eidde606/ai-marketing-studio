@@ -29,6 +29,14 @@ direct SQL/ORM operations, trace dependencies through re-exports or services, or
 resolve dynamic imports (`importlib`/`__import__`). A green result does not certify
 the entire closed layered architecture.
 
+The legacy service/repository inventory also permits five exact OAuth bootstrap
+lookups. A callback has only an opaque state token, so it must read the stored
+business and initiating identity before resolving current membership. These
+lookups return metadata only; callbacks then re-resolve the active initiator,
+require `MANAGE_CONNECTIONS`, and consume state through tenant-scoped repository
+operations. Do not add OAuth credentials, account, draft, or publication reads to
+this bootstrap exception.
+
 Run it from `backend` using the existing environment:
 
 ```sh

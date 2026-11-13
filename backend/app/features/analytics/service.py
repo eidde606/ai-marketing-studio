@@ -5,6 +5,9 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.errors import ApplicationError, ErrorKind
+from app.features.access import service as access
+from app.features.access.permissions import Permission
+from app.features.access.principal import AuthenticatedPrincipal
 from app.features.facebook.publishing_provider import get_post_insights, get_post_reach
 from app.token_service import decrypt_token
 from . import repository
@@ -12,8 +15,19 @@ from . import repository
 logger = logging.getLogger(__name__)
 
 
-def _published_facebook_post(db: Session, draft_id: str, *, reach: bool):
-    draft = repository.get_draft(db, draft_id)
+def _published_facebook_post(
+    db: Session,
+    draft_id: str,
+    principal: AuthenticatedPrincipal,
+    *,
+    reach: bool,
+):
+    context = access.require_draft_permission(
+        db, principal, draft_id, Permission.READ,
+    )
+    draft = repository.get_draft_scoped(
+        db, context, draft_id, include_deleted=True,
+    )
     if draft is None:
         raise ApplicationError(ErrorKind.NOT_FOUND, "Draft not found")
 
@@ -23,7 +37,7 @@ def _published_facebook_post(db: Session, draft_id: str, *, reach: bool):
         )
         raise ApplicationError(ErrorKind.CONFLICT, detail)
 
-    account = repository.get_connected_facebook_account(db, draft.business_id)
+    account = repository.get_connected_facebook_account_scoped(db, context)
     if account is None:
         detail = "Facebook not connected" if reach else (
             "Connect a Facebook Page to this business first"
@@ -37,10 +51,12 @@ async def facebook_post_analytics(
     draft_id: str,
     *,
     db: Session,
+    principal: AuthenticatedPrincipal,
 ) -> dict[str, object]:
     draft, access_token = _published_facebook_post(
         db,
         draft_id,
+        principal,
         reach=False,
     )
 
@@ -78,6 +94,8 @@ async def facebook_post_analytics(
             "Facebook analytics service is unavailable",
         ) from exc
 
+    access.require_draft_permission(db, principal, draft_id, Permission.READ)
+
     def metric_count(name: str):
         metric = data.get(name)
         if not isinstance(metric, dict):
@@ -105,15 +123,18 @@ async def facebook_post_reach(
     draft_id: str,
     *,
     db: Session,
+    principal: AuthenticatedPrincipal,
 ) -> dict[str, object]:
     draft, access_token = _published_facebook_post(
         db,
         draft_id,
+        principal,
         reach=True,
     )
 
     try:
         data = await get_post_reach(draft.facebook_post_id, access_token)
+        access.require_draft_permission(db, principal, draft_id, Permission.READ)
 
         unique_media_viewers = next(
             (
@@ -137,4 +158,9 @@ async def facebook_post_reach(
         raise ApplicationError(
             ErrorKind.UPSTREAM_FAILURE,
             "Facebook did not return reach data",
+        ) from exc
+    except httpx.RequestError as exc:
+        raise ApplicationError(
+            ErrorKind.UPSTREAM_FAILURE,
+            "Facebook analytics service is unavailable",
         ) from exc

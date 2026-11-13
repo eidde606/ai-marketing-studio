@@ -6,9 +6,13 @@ from datetime import datetime, timedelta, timezone
 import httpx
 from sqlalchemy.orm import Session
 
+from app.errors import ApplicationError, ErrorKind
+from app.features.access import service as access
+from app.features.access.permissions import Permission
+from app.features.access.principal import AuthenticatedPrincipal
 from app.features.instagram import provider, repository
 from app.features.instagram.provider import MetaAPIError, TokenExchangeError
-from app.models import InstagramOAuthState
+from app.models import InstagramConnection, InstagramOAuthState
 from app.token_service import encrypt_token
 from app.transactions import Transactions
 
@@ -48,21 +52,42 @@ def _log_provider_failure(stage: str, error: Exception) -> None:
         )
 
 
-def start_connection(db: Session, business_id: str, user_id: str) -> str:
+def start_connection(
+    db: Session,
+    business_id: str,
+    principal: AuthenticatedPrincipal,
+) -> str:
     try:
-        return _start_connection(db, business_id, user_id)
+        return _start_connection(db, business_id, principal)
+    except ApplicationError as exc:
+        if exc.kind is ErrorKind.NOT_FOUND:
+            raise BusinessNotFoundError(
+                "No se encontró el negocio seleccionado.",
+            ) from exc
+        raise
     except ValueError as exc:
-        # Preserve the existing failure-time business lookup and error detail.
-        if repository.get_business(db, business_id) is None:
-            raise BusinessNotFoundError(str(exc)) from exc
+        try:
+            access.require_permission(
+                db, principal, business_id, Permission.MANAGE_CONNECTIONS,
+            )
+        except ApplicationError as authorization_error:
+            if authorization_error.kind is ErrorKind.NOT_FOUND:
+                raise BusinessNotFoundError(
+                    "No se encontró el negocio seleccionado.",
+                ) from authorization_error
+            raise
         raise ConnectionStartConflictError(str(exc)) from exc
 
 
-def _start_connection(db: Session, business_id: str, user_id: str) -> str:
-    business = repository.get_business(db, business_id)
-    if business is None:
-        raise ValueError("No se encontró el negocio seleccionado.")
-    page = repository.get_facebook_page(db, business_id)
+def _start_connection(
+    db: Session,
+    business_id: str,
+    principal: AuthenticatedPrincipal,
+) -> str:
+    context = access.require_permission(
+        db, principal, business_id, Permission.MANAGE_CONNECTIONS, lock=True,
+    )
+    page = repository.get_facebook_page_scoped(db, context)
     if page is None:
         raise ValueError("Conecta primero una página de Facebook para este negocio.")
 
@@ -74,37 +99,60 @@ def _start_connection(db: Session, business_id: str, user_id: str) -> str:
             "La conexión de Instagram no está configurada en el servidor."
         ) from exc
 
-    repository.create_oauth_state(
+    context = access.require_permission(
+        db, principal, business_id, Permission.MANAGE_CONNECTIONS, lock=True,
+    )
+    repository.add_oauth_state_scoped(
         db,
-        state_hash=hashlib.sha256(state.encode()).hexdigest(),
-        business_id=business_id,
-        user_id=user_id,
-        facebook_page_id=page.platform_account_id,
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+        context,
+        InstagramOAuthState(
+            state_hash=hashlib.sha256(state.encode()).hexdigest(),
+            business_id=business_id,
+            user_id=principal.subject,
+            facebook_page_id=page.platform_account_id,
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+        ),
     )
     Transactions(db).commit()
     return authorization_url
 
 
-def consume_callback_state(db: Session, state: str) -> InstagramOAuthState | None:
+def consume_callback_state(
+    db: Session,
+    state: str,
+) -> tuple[InstagramOAuthState, AuthenticatedPrincipal] | None:
     now = datetime.now(timezone.utc)
     state_hash = hashlib.sha256(state.encode()).hexdigest()
-    row = repository.consume_oauth_state(db, state_hash, now)
+    identity = repository.oauth_state_identity(db, state_hash, now)
+    if identity is None:
+        return None
+    business_id, initiator_id, facebook_page_id = identity
+    principal = access.resolve_oauth_initiator(db, initiator_id)
+    context = access.require_permission(
+        db, principal, business_id, Permission.MANAGE_CONNECTIONS,
+    )
+    row = repository.consume_oauth_state_scoped(
+        db, context, state_hash, initiator_id, now,
+    )
     Transactions(db).commit()
     if row is None:
         return None
-    return InstagramOAuthState(
-        business_id=row.business_id,
-        user_id=row.user_id,
-        facebook_page_id=row.facebook_page_id,
-        expires_at=now,
-        state_hash=state_hash,
+    return (
+        InstagramOAuthState(
+            business_id=row.business_id,
+            user_id=row.user_id,
+            facebook_page_id=row.facebook_page_id,
+            expires_at=now,
+            state_hash=state_hash,
+        ),
+        principal,
     )
 
 
 def _save_status(
     db: Session,
     business_id: str,
+    principal: AuthenticatedPrincipal,
     *,
     status: str,
     permissions: set[str] | None = None,
@@ -114,7 +162,10 @@ def _save_status(
     token: str | None = None,
     expires_in: int | None = None,
 ) -> None:
-    existing = repository.get_connection(db, business_id)
+    context = access.require_permission(
+        db, principal, business_id, Permission.MANAGE_CONNECTIONS, lock=True,
+    )
+    existing = repository.get_connection_scoped(db, context)
     if (
         existing is not None
         and existing.status == "connected_and_authorized"
@@ -137,22 +188,28 @@ def _save_status(
         "last_error": STATUS_MESSAGES[status],
     }
     # Keep the second lookup at its existing point, after token preparation.
-    existing = repository.get_connection(db, business_id)
+    existing = repository.get_connection_scoped(db, context)
     if (
         existing is not None
         and existing.status == "connected_and_authorized"
         and status != "connected_and_authorized"
     ):
         return
-    connection = repository.save_connection(db, business_id, values, connection=existing)
+    if existing is None:
+        repository.add_connection_scoped(
+            db, context, InstagramConnection(business_id=business_id, **values),
+        )
+    else:
+        repository.update_connection_scoped(db, context, values)
     Transactions(db).commit()
-    Transactions(db).refresh(connection)
 
 
 async def complete_authorization(
     db: Session,
     authorization: InstagramOAuthState,
     code: str,
+    *,
+    principal: AuthenticatedPrincipal,
 ) -> str:
     try:
         access_token, expires_in = await provider.exchange_code_for_long_lived_token(
@@ -167,18 +224,18 @@ async def complete_authorization(
             if exc.error_code in (10, 200)
             else "discovery_error"
         )
-        _save_status(db, authorization.business_id, status=status)
+        _save_status(db, authorization.business_id, principal, status=status)
         return status
     except TokenExchangeError as exc:
         logger.warning(
             "Instagram token exchange failed (reason=%s)",
             exc.reason_code,
         )
-        _save_status(db, authorization.business_id, status="discovery_error")
+        _save_status(db, authorization.business_id, principal, status="discovery_error")
         return "discovery_error"
     except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
         _log_provider_failure("token exchange", exc)
-        _save_status(db, authorization.business_id, status="discovery_error")
+        _save_status(db, authorization.business_id, principal, status="discovery_error")
         return "discovery_error"
 
     try:
@@ -192,25 +249,25 @@ async def complete_authorization(
             if exc.error_code in (10, 200)
             else "discovery_error"
         )
-        _save_status(db, authorization.business_id, status=status)
+        _save_status(db, authorization.business_id, principal, status=status)
         return status
     except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
         _log_provider_failure("permission lookup", exc)
-        _save_status(db, authorization.business_id, status="discovery_error")
+        _save_status(db, authorization.business_id, principal, status="discovery_error")
         return "discovery_error"
 
     required_page_permissions = {"pages_show_list", "pages_read_engagement"}
     if not required_page_permissions.issubset(permissions):
         logger.warning("Instagram permission lookup omitted required Page grants")
         _save_status(
-            db, authorization.business_id, status="permission_error",
+            db, authorization.business_id, principal, status="permission_error",
             permissions=permissions,
         )
         return "permission_error"
     if "instagram_basic" not in permissions:
         logger.warning("Instagram permission lookup omitted instagram_basic")
         _save_status(
-            db, authorization.business_id, status="permission_error",
+            db, authorization.business_id, principal, status="permission_error",
             permissions=permissions,
         )
         return "permission_error"
@@ -227,14 +284,14 @@ async def complete_authorization(
             else "discovery_error"
         )
         _save_status(
-            db, authorization.business_id, status=status,
+            db, authorization.business_id, principal, status=status,
             permissions=permissions, page_id=authorization.facebook_page_id,
         )
         return status
     except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
         _log_provider_failure("Page listing", exc)
         _save_status(
-            db, authorization.business_id, status="discovery_error",
+            db, authorization.business_id, principal, status="discovery_error",
             permissions=permissions, page_id=authorization.facebook_page_id,
         )
         return "discovery_error"
@@ -251,7 +308,7 @@ async def complete_authorization(
             "Instagram Page listing did not include the authorized business Page"
         )
         _save_status(
-            db, authorization.business_id, status="discovery_error",
+            db, authorization.business_id, principal, status="discovery_error",
             permissions=permissions, page_id=authorization.facebook_page_id,
         )
         return "discovery_error"
@@ -271,14 +328,14 @@ async def complete_authorization(
             else "discovery_error"
         )
         _save_status(
-            db, authorization.business_id, status=status,
+            db, authorization.business_id, principal, status=status,
             permissions=permissions, page_id=authorization.facebook_page_id,
         )
         return status
     except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
         _log_provider_failure("account lookup", exc)
         _save_status(
-            db, authorization.business_id, status="discovery_error",
+            db, authorization.business_id, principal, status="discovery_error",
             permissions=permissions, page_id=authorization.facebook_page_id,
         )
         return "discovery_error"
@@ -289,7 +346,7 @@ async def complete_authorization(
             "Instagram account lookup returned a different Page than authorized"
         )
         _save_status(
-            db, authorization.business_id, status="discovery_error",
+            db, authorization.business_id, principal, status="discovery_error",
             permissions=permissions, page_id=authorization.facebook_page_id,
         )
         return "discovery_error"
@@ -301,12 +358,12 @@ async def complete_authorization(
                 "Instagram account lookup returned an invalid account structure"
             )
             _save_status(
-                db, authorization.business_id, status="discovery_error",
+                db, authorization.business_id, principal, status="discovery_error",
                 permissions=permissions, page_id=authorization.facebook_page_id,
             )
             return "discovery_error"
         _save_status(
-            db, authorization.business_id, status="not_connected",
+            db, authorization.business_id, principal, status="not_connected",
             permissions=permissions, page_id=authorization.facebook_page_id,
         )
         return "not_connected"
@@ -318,7 +375,7 @@ async def complete_authorization(
             "Instagram account lookup returned an invalid account ID"
         )
         _save_status(
-            db, authorization.business_id, status="discovery_error",
+            db, authorization.business_id, principal, status="discovery_error",
             permissions=permissions, page_id=authorization.facebook_page_id,
         )
         return "discovery_error"
@@ -333,6 +390,7 @@ async def complete_authorization(
     _save_status(
         db,
         authorization.business_id,
+        principal,
         status=status,
         permissions=permissions,
         page_id=authorization.facebook_page_id,
@@ -344,11 +402,15 @@ async def complete_authorization(
     return status
 
 
-def connection_response(db: Session, business_id: str) -> dict:
-    if repository.get_business(db, business_id) is None:
-        raise BusinessNotFoundError(business_id)
-
-    connection = repository.get_connection(db, business_id)
+def connection_response(
+    db: Session,
+    business_id: str,
+    principal: AuthenticatedPrincipal,
+) -> dict:
+    context = access.require_permission(
+        db, principal, business_id, Permission.MANAGE_CONNECTIONS,
+    )
+    connection = repository.get_connection_scoped(db, context)
     if connection is None:
         return {
             "status": "not_connected",
@@ -371,7 +433,7 @@ def connection_response(db: Session, business_id: str) -> dict:
     ):
         status = "reauthorization_required"
 
-    page = repository.get_facebook_page(db, business_id)
+    page = repository.get_facebook_page_scoped(db, context)
     if (
         connection.facebook_page_id is not None
         and (

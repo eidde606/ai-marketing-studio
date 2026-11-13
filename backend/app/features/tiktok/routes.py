@@ -5,9 +5,10 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
-from app.auth import verify_token
+from app.auth import get_authenticated_principal
 from app.database import get_db
 from app.errors import ApplicationError
+from app.features.access.principal import AuthenticatedPrincipal
 from app.http_errors import http_error
 from . import service
 
@@ -20,13 +21,13 @@ router = APIRouter(
 @router.get("/start")
 def start_tiktok_connection(
     business_id: str,
-    user: dict = Depends(verify_token),
     db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
 ):
     try:
         authorization_url = service.start_connection(
             business_id,
-            user["sub"],
+            principal,
             db=db,
         )
     except ApplicationError as exc:
@@ -64,10 +65,10 @@ async def tiktok_callback(
 @router.get("/accounts")
 def get_tiktok_accounts(
     business_id: str,
-    user: dict = Depends(verify_token),
     db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
 ):
     try:
-        return service.list_accounts(business_id, db=db)
+        return service.list_accounts(business_id, db=db, principal=principal)
     except ApplicationError as exc:
         raise http_error(exc) from exc

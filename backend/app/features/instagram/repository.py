@@ -30,6 +30,13 @@ def get_facebook_page(db: Session, business_id: str) -> SocialAccount | None:
     )
 
 
+def get_facebook_page_scoped(db: Session, context: TenantAccess) -> SocialAccount | None:
+    return db.scalar(tenant.selection(SocialAccount, context).where(
+        SocialAccount.platform == "facebook",
+        SocialAccount.connection_status == "connected",
+    ))
+
+
 def create_oauth_state(
     db: Session,
     *,
@@ -48,6 +55,16 @@ def create_oauth_state(
             expires_at=expires_at,
         )
     )
+
+
+def oauth_state_identity(db: Session, state_hash: str, now: datetime):
+    return db.execute(select(
+        InstagramOAuthState.business_id, InstagramOAuthState.user_id,
+        InstagramOAuthState.facebook_page_id,
+    ).where(
+        InstagramOAuthState.state_hash == state_hash,
+        InstagramOAuthState.expires_at > now,
+    )).one_or_none()
 
 
 def consume_oauth_state(db: Session, state_hash: str, now: datetime):

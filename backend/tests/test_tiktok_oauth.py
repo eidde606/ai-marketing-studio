@@ -1,27 +1,29 @@
 import hashlib
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlparse
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.auth import verify_token
+from app.auth import get_authenticated_principal, verify_token
 from app.database import get_db
 from app.main import app
-from app.models import Business, SocialAccount, TikTokOAuthState
+from app.models import Business, BusinessMembership, SocialAccount, TikTokOAuthState
+from tests.tenancy_fixtures import grant_test_owner
 
 
 def create_oauth_state(engine, business_id: str, state: str = "oauth-state"):
     state_hash = hashlib.sha256(state.encode()).hexdigest()
     with Session(engine) as db:
+        principal = grant_test_owner(db, [business_id])
         db.add(
             TikTokOAuthState(
                 state_hash=state_hash,
                 business_id=business_id,
-                user_id="test-authorized-user",
+                user_id=principal.subject,
                 expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
             )
         )
@@ -72,6 +74,7 @@ def test_tiktok_oauth_start_requires_business_and_authentication(isolated_client
     assert missing.json() == {"detail": "Business not found"}
 
     del app.dependency_overrides[verify_token]
+    del app.dependency_overrides[get_authenticated_principal]
     unauthorized = client.get(
         "/api/integrations/tiktok/start",
         params={"business_id": "missing"},
@@ -213,6 +216,80 @@ def test_tiktok_callback_maps_provider_failure_and_consumes_state(
         assert db.scalars(select(SocialAccount)).all() == []
 
 
+def test_tiktok_member_cannot_list_or_start_connection(isolated_client, monkeypatch):
+    client, engine = isolated_client
+    business_id = create_business(client)
+    login_url = Mock(return_value="https://tiktok.test/authorize")
+    monkeypatch.setattr(
+        "app.features.tiktok.provider.get_tiktok_login_url",
+        login_url,
+    )
+    with Session(engine) as db:
+        membership = db.query(BusinessMembership).filter_by(
+            business_id=business_id,
+        ).one()
+        membership.role = "member"
+        db.commit()
+
+    start = client.get(
+        "/api/integrations/tiktok/start", params={"business_id": business_id},
+    )
+    listing = client.get(
+        "/api/integrations/tiktok/accounts", params={"business_id": business_id},
+    )
+
+    assert start.status_code == listing.status_code == 403
+    assert start.json() == listing.json() == {"detail": "Operation not permitted"}
+    login_url.assert_not_called()
+    with Session(engine) as db:
+        assert db.query(TikTokOAuthState).count() == 0
+
+
+def test_tiktok_callback_rechecks_membership_after_provider_exchange(
+    isolated_client, monkeypatch,
+):
+    from app.errors import ApplicationError, ErrorKind
+    from app.features.tiktok import service
+
+    client, engine = isolated_client
+    business_id = create_business(client)
+    state = create_oauth_state(engine, business_id)
+    exchange = AsyncMock(return_value={
+        "access_token": "new-access",
+        "refresh_token": "new-refresh",
+        "expires_in": 3600,
+    })
+    profile = AsyncMock(return_value={
+        "open_id": "account-id", "display_name": "Account",
+    })
+    monkeypatch.setattr("app.features.tiktok.provider.exchange_code_for_token", exchange)
+    monkeypatch.setattr("app.features.tiktok.provider.get_tiktok_user", profile)
+
+    original = service.access.require_permission
+    checks = 0
+
+    def revoke_after_provider(db, principal, requested_business, permission, **kwargs):
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            raise ApplicationError(ErrorKind.NOT_FOUND, "Business not found")
+        return original(db, principal, requested_business, permission, **kwargs)
+
+    monkeypatch.setattr(service.access, "require_permission", revoke_after_provider)
+    response = client.get(
+        "/api/integrations/tiktok/callback",
+        params={"state": state, "code": "authorization-code"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 404
+    exchange.assert_awaited_once()
+    profile.assert_awaited_once()
+    with Session(engine) as db:
+        assert db.get(TikTokOAuthState, hashlib.sha256(state.encode()).hexdigest()) is None
+        assert db.scalars(select(SocialAccount)).all() == []
+
+
 def test_tiktok_account_listing_is_business_scoped_and_hides_tokens(
     isolated_client,
 ):
@@ -267,6 +344,7 @@ def test_tiktok_account_listing_is_business_scoped_and_hides_tokens(
 def test_tiktok_account_listing_requires_authentication(isolated_client):
     client, _ = isolated_client
     del app.dependency_overrides[verify_token]
+    del app.dependency_overrides[get_authenticated_principal]
 
     response = client.get(
         "/api/integrations/tiktok/accounts",

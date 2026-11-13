@@ -3,7 +3,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
-from app.auth import verify_token
+from app.auth import get_authenticated_principal, verify_token
 from app.database import get_db
 from app.main import app
 from app.models import Base, Business, Draft, SocialAccount
@@ -11,6 +11,7 @@ from app.models import Base, Business, Draft, SocialAccount
 from unittest.mock import AsyncMock
 
 from app.models import SocialAccount
+from tests.tenancy_fixtures import grant_test_owner
 
 import httpx
 
@@ -29,6 +30,7 @@ def test_unpublished_draft_has_no_analytics():
             business = Business(name="Test Business")
             db.add(business)
             db.flush()
+            principal = grant_test_owner(db, [business.id])
 
             draft = Draft(
                 business_id=business.id,
@@ -47,7 +49,7 @@ def test_unpublished_draft_has_no_analytics():
                 yield db
 
         app.dependency_overrides[get_db] = override_get_db
-        app.dependency_overrides[verify_token] = lambda: {"sub": "test-user"}
+        app.dependency_overrides[get_authenticated_principal] = lambda: principal
 
         with TestClient(app) as client:
             response = client.get(f"/drafts/{draft_id}/analytics/facebook")
@@ -73,6 +75,7 @@ def test_published_draft_returns_facebook_analytics(monkeypatch):
             business = Business(name="Test Business")
             db.add(business)
             db.flush()
+            principal = grant_test_owner(db, [business.id])
 
             draft = Draft(
                 business_id=business.id,
@@ -102,7 +105,7 @@ def test_published_draft_returns_facebook_analytics(monkeypatch):
                 yield db
 
         app.dependency_overrides[get_db] = override_get_db
-        app.dependency_overrides[verify_token] = lambda: {"sub": "test-user"}
+        app.dependency_overrides[get_authenticated_principal] = lambda: principal
 
         monkeypatch.setattr(
             "app.features.analytics.service.decrypt_token",
@@ -161,6 +164,7 @@ def test_facebook_analytics_api_failure(monkeypatch):
             business = Business(name="Test Business")
             db.add(business)
             db.flush()
+            principal = grant_test_owner(db, [business.id])
 
             draft = Draft(
                 business_id=business.id,
@@ -190,7 +194,7 @@ def test_facebook_analytics_api_failure(monkeypatch):
                 yield db
 
         app.dependency_overrides[get_db] = override_get_db
-        app.dependency_overrides[verify_token] = lambda: {"sub": "test-user"}
+        app.dependency_overrides[get_authenticated_principal] = lambda: principal
 
         monkeypatch.setattr(
             "app.features.analytics.service.decrypt_token",
@@ -231,6 +235,7 @@ def test_facebook_analytics_does_not_use_another_business_account(
         other_business = Business(name="Other business")
         db.add_all([business, other_business])
         db.flush()
+        grant_test_owner(db, [business.id])
         draft = Draft(
             business_id=business.id,
             title="Published Post",
@@ -260,9 +265,7 @@ def test_facebook_analytics_does_not_use_another_business_account(
     response = client.get(f"/drafts/{draft_id}/analytics/facebook")
 
     assert response.status_code == 409
-    assert response.json() == {
-        "detail": "Connect a Facebook Page to this business first",
-    }
+    assert response.json() == {"detail": "Connect a Facebook Page to this business first"}
     insights.assert_not_awaited()
 
 
@@ -275,6 +278,7 @@ def test_facebook_reach_returns_lifetime_unique_media_viewers(
         business = Business(name="Test Business")
         db.add(business)
         db.flush()
+        grant_test_owner(db, [business.id])
         draft = Draft(
             business_id=business.id,
             title="Published Post",

@@ -6,7 +6,8 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
-from app.auth import verify_token
+from app.auth import get_authenticated_principal, verify_token
+from app.features.access.principal import AuthenticatedPrincipal
 from app.database import get_db
 from app.errors import ApplicationError
 from app.http_errors import http_error
@@ -28,11 +29,11 @@ async def get_facebook_page():
 @router.get("/accounts")
 def get_connected_facebook_accounts(
     business_id: str,
-    user: dict = Depends(verify_token),
     db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
 ):
     try:
-        return service.list_accounts(business_id, db=db)
+        return service.list_accounts(business_id, db=db, principal=principal)
     except ApplicationError as exc:
         raise http_error(exc) from exc
 
@@ -40,13 +41,13 @@ def get_connected_facebook_accounts(
 @router.get("/start")
 def start_facebook_connection(
     business_id: str,
-    user: dict = Depends(verify_token),
     db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
 ):
     try:
         authorization_url = service.start_connection(
             business_id,
-            user["sub"],
+            principal,
             db=db,
         )
     except ApplicationError as exc:
@@ -76,14 +77,14 @@ async def facebook_callback(
 @router.post("/select-page")
 def select_facebook_page(
     request: FacebookPageSelection,
-    user: dict = Depends(verify_token),
     db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
 ):
     try:
         return service.select_page(
             request.selection_token,
             request.page_id,
-            user["sub"],
+            principal,
             db=db,
         )
     except ApplicationError as exc:
@@ -93,13 +94,13 @@ def select_facebook_page(
 @router.post("/handoff")
 def exchange_facebook_handoff(
     request: FacebookHandoffRequest,
-    user: dict = Depends(verify_token),
     db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
 ):
     try:
         return service.handoff_pages(
             request.handoff_token,
-            user["sub"],
+            principal,
             db=db,
         )
     except ApplicationError as exc:
