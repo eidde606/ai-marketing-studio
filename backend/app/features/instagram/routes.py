@@ -8,7 +8,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.auth import verify_token
 from app.database import get_db
-from app.features.instagram import repository, service
+from app.features.instagram import service
 from app.features.instagram.schemas import InstagramConnectionResponse
 
 router = APIRouter(prefix="/auth/instagram", tags=["Instagram OAuth"])
@@ -59,9 +59,10 @@ def start_instagram_connection(
                 db, business_id, user["sub"],
             )
         }
-    except ValueError as exc:
-        status_code = 404 if repository.get_business(db, business_id) is None else 409
-        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    except service.BusinessNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except service.ConnectionStartConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/callback")

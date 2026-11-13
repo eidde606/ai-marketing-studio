@@ -27,6 +27,10 @@ class BusinessNotFoundError(Exception):
     """The requested business does not exist."""
 
 
+class ConnectionStartConflictError(Exception):
+    """The business exists, but its Instagram connection cannot be started."""
+
+
 def _log_provider_failure(stage: str, error: Exception) -> None:
     if isinstance(error, MetaAPIError):
         logger.warning(
@@ -44,6 +48,16 @@ def _log_provider_failure(stage: str, error: Exception) -> None:
 
 
 def start_connection(db: Session, business_id: str, user_id: str) -> str:
+    try:
+        return _start_connection(db, business_id, user_id)
+    except ValueError as exc:
+        # Preserve the existing failure-time business lookup and error detail.
+        if repository.get_business(db, business_id) is None:
+            raise BusinessNotFoundError(str(exc)) from exc
+        raise ConnectionStartConflictError(str(exc)) from exc
+
+
+def _start_connection(db: Session, business_id: str, user_id: str) -> str:
     business = repository.get_business(db, business_id)
     if business is None:
         raise ValueError("No se encontró el negocio seleccionado.")
