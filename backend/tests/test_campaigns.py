@@ -11,7 +11,7 @@ from app import auth
 from app.auth import verify_token
 from app.database import get_db
 from app.main import app
-from app.models import Base, Business, Campaign, Draft
+from app.models import Base, Business, Campaign, Draft, User
 
 
 @pytest.fixture
@@ -263,7 +263,7 @@ def test_soft_delete_updates_progress_without_losing_publications(campaign_clien
 
 
 def test_all_campaign_endpoints_require_auth(campaign_client, monkeypatch):
-    client, _, businesses, drafts = campaign_client
+    client, engine, businesses, drafts = campaign_client
     campaign = create(client, businesses[0])
     root = f'/businesses/{businesses[0]}/campaigns'
     detail = f'{root}/{campaign["id"]}'
@@ -280,7 +280,13 @@ def test_all_campaign_endpoints_require_auth(campaign_client, monkeypatch):
     for method, url, body in operations:
         assert client.request(method, url, json=body).status_code == 401
         assert client.request(method, url, json=body, headers={"Authorization": "Bearer fake"}).status_code == 403
-    monkeypatch.setattr(auth.jwt, "decode", lambda *args, **kwargs: {"sub": auth.ALLOWED_USER_ID})
+    monkeypatch.setattr(auth.jwt, "decode", lambda *args, **kwargs: {
+        "sub": auth.ALLOWED_USER_ID, "iss": auth.SUPABASE_ISSUER,
+    })
+    assert client.get(root, headers={"Authorization": "Bearer fake"}).status_code == 403
+    with Session(engine) as db:
+        db.add(User(auth_issuer=auth.SUPABASE_ISSUER, auth_subject=auth.ALLOWED_USER_ID))
+        db.commit()
     assert client.get(root, headers={"Authorization": "Bearer fake"}).status_code == 200
 
 

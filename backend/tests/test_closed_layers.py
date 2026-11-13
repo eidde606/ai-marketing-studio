@@ -16,7 +16,7 @@ def violations(source: str, module: str) -> set[tuple[str, str, str]]:
     result = set()
     is_repository = module.endswith(".repository")
     is_service = module.endswith("service")
-    is_route = module.endswith("routes") or module == "app.main"
+    is_route = module.endswith("routes") or module in {"app.main", "app.auth"}
     for function in (n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))):
         for node in ast.walk(function):
             if not isinstance(node, ast.Call):
@@ -36,7 +36,7 @@ EXCEPTIONS = set()
 
 def test_feature_layers():
     actual = set()
-    for path in (APP_ROOT / "features").rglob("*.py"):
+    for path in [*(APP_ROOT / "features").rglob("*.py"), APP_ROOT / "auth.py"]:
         module = ".".join(path.relative_to(APP_ROOT.parent).with_suffix("").parts)
         actual.update(violations(path.read_text(), module))
     assert actual == EXCEPTIONS, (
@@ -50,6 +50,7 @@ def test_feature_layers():
     ("app.features.demo.routes", "def run(db):\n    db.commit()", "db.commit"),
     ("app.features.demo.service", "def run():\n    raise HTTPException(404)", "HTTPException"),
     ("app.features.demo.repository", "def save(db):\n    db.commit()", "db.commit"),
+    ("app.auth", "def resolve(db):\n    return db.get(User, key)", "db.get"),
 ])
 def test_detects_closed_layer_violation(module, source, expected):
     assert {edge[2] for edge in violations(source, module)} == {expected}

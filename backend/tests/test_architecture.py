@@ -14,7 +14,7 @@ ROUTE_REPOSITORY_EXCEPTIONS: dict[tuple[str, str], str] = {}
 
 
 def _is_route(module: str) -> bool:
-    return module == "app.main" or any(
+    return module in {"app.main", "app.auth"} or any(
         part == "routes" or part.endswith("_routes")
         for part in module.split(".")[1:]
     )
@@ -122,6 +122,8 @@ def test_route_service_import_is_allowed(tmp_path, source):
      "app.facebook_auth_routes", "app.features.new.repository"),
     ("main.py", "from app.features.new.account_repository import get_account",
      "app.main", "app.features.new.account_repository"),
+    ("auth.py", "from app.features.access import repository",
+     "app.auth", "app.features.access.repository"),
 ])
 def test_route_and_repository_module_conventions(
     tmp_path, relative_path, source, expected_source, expected_target,

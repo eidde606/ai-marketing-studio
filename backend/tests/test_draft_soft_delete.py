@@ -12,7 +12,7 @@ from app import auth
 from app.auth import verify_token
 from app.database import get_db
 from app.main import app
-from app.models import Base, Business, Draft, SocialAccount
+from app.models import Base, Business, Draft, SocialAccount, User
 
 
 @pytest.fixture
@@ -109,7 +109,14 @@ def test_delete_enforces_real_authorization(drafts_client, monkeypatch):
     assert client.delete(f"/drafts/{ids[0]}", headers={"Authorization": "Bearer fake"}).status_code == 403
     with Session(engine) as db:
         assert db.get(Draft, ids[0]).deleted_at is None
-    monkeypatch.setattr(auth.jwt, "decode", lambda *args, **kwargs: {"sub": auth.ALLOWED_USER_ID})
+    monkeypatch.setattr(auth.jwt, "decode", lambda *args, **kwargs: {
+        "sub": auth.ALLOWED_USER_ID, "iss": auth.SUPABASE_ISSUER,
+    })
+    assert client.delete(f"/drafts/{ids[0]}", headers={"Authorization": "Bearer fake"}).status_code == 403
+    with Session(engine) as db:
+        assert db.get(Draft, ids[0]).deleted_at is None
+        db.add(User(auth_issuer=auth.SUPABASE_ISSUER, auth_subject=auth.ALLOWED_USER_ID))
+        db.commit()
     assert client.delete(f"/drafts/{ids[0]}", headers={"Authorization": "Bearer fake"}).status_code == 200
 
 

@@ -155,3 +155,30 @@ def test_actor_revoked_while_waiting_for_business_lock(postgres_database, monkey
         assert future.result(timeout=10) == ErrorKind.NOT_FOUND
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT status FROM business_memberships WHERE id='member'")) == "active"
+
+
+def test_resolved_principal_rechecks_committed_revocation(postgres_database):
+    from app.features.access.permissions import Permission
+    from app.features.access.service import require_permission, resolve_principal
+
+    engine, migrate = postgres_database
+    migrate("head")
+    seed(engine)
+    with Session(engine) as request_session:
+        principal = resolve_principal(request_session, Principal(ISSUER, "member"))
+        assert require_permission(request_session, principal, "a", Permission.READ)
+        with engine.begin() as connection:
+            connection.execute(text("UPDATE business_memberships SET status='revoked' WHERE id='member'"))
+        with pytest.raises(ApplicationError) as error:
+            require_permission(request_session, principal, "a", Permission.READ)
+        assert error.value.kind == ErrorKind.NOT_FOUND
+        # Other-business membership remains usable until the account is disabled.
+        assert require_permission(request_session, principal, "b", Permission.READ)
+        with engine.begin() as connection:
+            connection.execute(text("UPDATE app_users SET status='disabled' WHERE id='member'"))
+        with pytest.raises(ApplicationError) as error:
+            require_permission(request_session, principal, "b", Permission.READ)
+        assert error.value.kind == ErrorKind.NOT_FOUND
+        with pytest.raises(ApplicationError) as error:
+            resolve_principal(request_session, Principal(ISSUER, "member"))
+        assert error.value.kind == ErrorKind.FORBIDDEN

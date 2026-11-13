@@ -6,6 +6,13 @@ from dotenv import load_dotenv
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import PyJWKClient
+from sqlalchemy.orm import Session
+
+from app.database import get_db
+from app.errors import ApplicationError
+from app.features.access.principal import AuthenticatedPrincipal, Principal
+from app.features.access import service as access_service
+from app.http_errors import http_error
 
 # Load environment variables
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
@@ -26,7 +33,7 @@ security = HTTPBearer(auto_error=False)
 jwks_client = PyJWKClient(SUPABASE_JWKS_URL)
 
 
-def verify_token(
+def _verify_supabase_token(
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
 ) -> dict:
     if credentials is None:
@@ -77,3 +84,34 @@ def verify_token(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Unable to verify authentication",
         )
+
+
+def get_authenticated_principal(
+    payload: dict = Depends(_verify_supabase_token),
+    db: Session = Depends(get_db),
+) -> AuthenticatedPrincipal:
+    """HTTP boundary: verified, allowlisted JWT -> active application identity.
+
+    No request-selected user IDs and no implicit user or membership creation.
+    FastAPI caches this dependency only for the current request.
+    """
+    try:
+        return access_service.resolve_principal(
+            db, Principal(issuer=payload["iss"], subject=payload["sub"]),
+        )
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
+
+
+def verify_token(
+    payload: dict = Depends(_verify_supabase_token),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+) -> dict:
+    """Compatibility dependency for existing routes; preserves JWT claim shape.
+
+    Both dependencies share the same cached JWT verification. The principal
+    dependency gates every legacy protected route on an active application user.
+    New integrations should receive get_authenticated_principal and authorize the
+    business in their application service. The single-user allowlist stays on.
+    """
+    return payload
