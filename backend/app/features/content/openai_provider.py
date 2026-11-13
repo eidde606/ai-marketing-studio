@@ -1,10 +1,9 @@
+"""OpenAI provider adapter for Sofía's strategy and Leo's content."""
 import json
 import os
 
 from dotenv import load_dotenv
 from openai import OpenAI
-
-from app.models import Business
 
 load_dotenv()
 
@@ -225,20 +224,3 @@ def write_content(
         "image_prompt": result["image_prompt"].strip(),
         "video_script": result["video_script"].strip(),
     }
-
-
-def generate_marketing_content(
-    business: Business,
-    recent_posts: list[dict[str, str]] | None = None,
-    campaign_instructions: str | None = None,
-) -> dict[str, str]:
-    """Compatibility entry point; application orchestration lives in its feature."""
-    from app.features.content.generation_service import (
-        generate_marketing_content as generate,
-    )
-
-    return generate(
-        business,
-        recent_posts,
-        campaign_instructions,
-    )

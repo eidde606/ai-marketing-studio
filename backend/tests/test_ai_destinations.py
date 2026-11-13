@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app import ai_service
+from app.features.content import openai_provider
 from app.models import Business, Conversation, ConversationMessage, Draft
 
 
@@ -54,7 +54,7 @@ def test_ai_platform_is_preserved_but_destination_defaults_to_facebook(
         SimpleNamespace(output_text="Estrategia de prueba"),
         SimpleNamespace(output_text=json.dumps(generated_content(platform))),
     ])
-    monkeypatch.setattr(ai_service.client.responses, "create", responses)
+    monkeypatch.setattr(openai_provider.client.responses, "create", responses)
     url = (
         f"/businesses/{business_id}/generate-content" if workflow == "automatic" else
         f"/businesses/{business_id}/sofia/conversations/{conversation_id}/generate-draft"
