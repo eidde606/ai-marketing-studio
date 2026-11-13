@@ -20,6 +20,67 @@ class Base(DeclarativeBase):
     pass
 
 
+class User(Base):
+    """Local identity; creating a user grants no business access."""
+
+    __tablename__ = "app_users"
+    __table_args__ = (
+        UniqueConstraint("auth_issuer", "auth_subject", name="uq_app_users_identity"),
+        CheckConstraint("status IN ('active', 'disabled')", name="ck_app_users_status"),
+        CheckConstraint(
+            "length(trim(auth_issuer)) > 0 AND length(trim(auth_subject)) > 0",
+            name="ck_app_users_identity_not_empty",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    auth_issuer: Mapped[str] = mapped_column(String(512), nullable=False)
+    auth_subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active", server_default="active")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
+class BusinessMembership(Base):
+    __tablename__ = "business_memberships"
+    __table_args__ = (
+        UniqueConstraint("business_id", "user_id", name="uq_business_memberships_business_user"),
+        CheckConstraint("role IN ('owner', 'admin', 'member')", name="ck_business_memberships_role"),
+        CheckConstraint("status IN ('active', 'suspended', 'revoked')", name="ck_business_memberships_status"),
+        Index("ix_business_memberships_user_status", "user_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    business_id: Mapped[str] = mapped_column(String(36), ForeignKey("businesses.id"), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("app_users.id"), nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active", server_default="active")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
 class Business(Base):
     __tablename__ = "businesses"
 
