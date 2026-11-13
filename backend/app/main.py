@@ -24,9 +24,6 @@ from app.features.drafts.routes import router as draft_router
 from app.features.drafts.routes import draft_http_exception
 from app.features.drafts import service as draft_service
 from app.features.analytics.routes import router as analytics_router
-from app.features.tiktok import service as tiktok_oauth_service
-from app.errors import ApplicationError
-from app.http_errors import http_error
 from app.features.instagram.routes import (
     InstagramCallbackAccessLogRedactionMiddleware,
     router as instagram_auth_router,
@@ -50,14 +47,10 @@ from app.storage_service import (
     get_storage_client,
     upload_marketing_video,
 )
-from app.tiktok_service import (
-    get_creator_info,
-    get_tiktok_publish_status,
-    publish_tiktok_photo,
-    publish_tiktok_video,
-    publish_tiktok_video_file,
-)
 from app.features.tiktok.routes import router as tiktok_auth_router
+from app.features.tiktok.publishing_routes import (
+    router as tiktok_publishing_router,
+)
 from app.token_service import decrypt_token, encrypt_token
 
 app = FastAPI()
@@ -84,14 +77,6 @@ app.add_middleware(
 logger = logging.getLogger(__name__)
 
 
-class TikTokPublishRequest(BaseModel):
-    account_id: str = Field(min_length=1)
-    privacy_level: str = Field(min_length=1)
-    disable_comment: bool = False
-    disable_duet: bool = False
-    disable_stitch: bool = False
-
-
 class ImageRevisionRequest(BaseModel):
     instructions: str = Field(
         min_length=1,
@@ -102,19 +87,6 @@ class ImageRevisionRequest(BaseModel):
 # --------------------------------------------------
 # Helpers
 # --------------------------------------------------
-
-
-async def get_valid_tiktok_token(
-        account: SocialAccount,
-        db: Session,
-) -> str:
-    try:
-        return await tiktok_oauth_service.get_valid_access_token(
-            account,
-            db=db,
-        )
-    except ApplicationError as exc:
-        raise http_error(exc) from exc
 
 
 # Compatibility wrapper for legacy handlers; remove when those handlers are extracted.
@@ -210,252 +182,6 @@ async def get_facebook_page():
         raise HTTPException(status_code=502, detail="Unable to retrieve Facebook Page")
     except httpx.RequestError:
         raise HTTPException(status_code=502, detail="Facebook connection failed")
-
-
-@protected.get("/drafts/{draft_id}/tiktok-creator-info")
-async def get_draft_tiktok_creator_info(
-        draft_id: str,
-        account_id: str,
-        db: Session = Depends(get_db),
-):
-    draft = require_draft(db, draft_id)
-
-    account = db.scalar(
-        select(SocialAccount).where(
-            SocialAccount.business_id == draft.business_id,
-            SocialAccount.id == account_id,
-            SocialAccount.platform == "tiktok",
-            SocialAccount.connection_status == "connected",
-        )
-    )
-
-    if account is None:
-        raise HTTPException(
-            status_code=409,
-            detail="Connect TikTok first",
-        )
-
-    access_token = await get_valid_tiktok_token(account, db)
-
-    try:
-        return await get_creator_info(access_token)
-    except (httpx.HTTPError, ValueError):
-        raise HTTPException(
-            status_code=502,
-            detail="Unable to retrieve TikTok publishing settings",
-        ) from None
-
-
-@protected.post("/drafts/{draft_id}/publish-tiktok")
-async def publish_draft_to_tiktok(
-        draft_id: str,
-        request: TikTokPublishRequest,
-        db: Session = Depends(get_db),
-):
-    draft = require_draft(db, draft_id)
-
-    if "tiktok" not in (draft.publish_destinations or []):
-        raise HTTPException(
-            status_code=409,
-            detail="TikTok is not selected for this draft",
-        )
-
-    account = db.scalar(
-        select(SocialAccount).where(
-            SocialAccount.id == request.account_id,
-            SocialAccount.business_id == draft.business_id,
-            SocialAccount.platform == "tiktok",
-            SocialAccount.connection_status == "connected",
-        )
-    )
-
-    if account is None:
-        raise HTTPException(
-            status_code=409,
-            detail="Connect TikTok first",
-        )
-
-    # Validate media before claiming the draft.
-    if draft.media_type == "video":
-        if draft.video_status != "completed" or not draft.video_url:
-            raise HTTPException(
-                status_code=409,
-                detail="A completed video is required",
-            )
-        storage_path = draft.video_url
-
-    elif draft.image_url:
-        storage_path = draft.image_url
-
-    else:
-        raise HTTPException(
-            status_code=409,
-            detail="TikTok requires an image or video",
-        )
-
-    # Photo posting still requires a TikTok-verified public media URL.
-    # Reject before claiming the draft so the user can retry after setup.
-    if draft.media_type != "video":
-        raise HTTPException(
-            status_code=409,
-            detail="TikTok photo publishing requires a verified media URL; not configured yet",
-        )
-
-    expected_prefix = f"businesses/{draft.business_id}/"
-
-    if not storage_path.startswith(expected_prefix):
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid media storage path",
-        )
-
-    # Download and validate before claiming the draft.
-    try:
-        bucket = os.environ["SUPABASE_STORAGE_BUCKET"]
-        video_bytes = get_storage_client().storage.from_(bucket).download(storage_path)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail="Unable to download TikTok video") from exc
-
-    if not isinstance(video_bytes, bytes) or video_bytes[4:8] != b"ftyp":
-        raise HTTPException(status_code=400, detail="Invalid MP4 video")
-    if not 5 * 1024 * 1024 <= len(video_bytes) <= 64 * 1024 * 1024:
-        raise HTTPException(status_code=409, detail="Video must be 5–64 MiB for current TikTok uploader")
-
-    # Check creator's allowed privacy settings before claiming publication.
-    access_token = await get_valid_tiktok_token(account, db)
-    try:
-        creator = await get_creator_info(access_token)
-    except (httpx.HTTPError, ValueError, KeyError) as exc:
-        raise HTTPException(status_code=502, detail="Unable to validate TikTok settings") from exc
-    if request.privacy_level not in creator.get("privacy_level_options", []):
-        raise HTTPException(status_code=422, detail="Privacy option not permitted by TikTok")
-
-    # Only one request can claim this draft.
-    claimed = db.execute(
-        update(Draft)
-        .where(
-            Draft.id == draft_id,
-            Draft.deleted_at.is_(None),
-            Draft.status == "approved",
-            Draft.tiktok_publish_status == "not_published",
-            Draft.tiktok_publish_id.is_(None),
-        )
-        .values(
-            tiktok_publish_status="publishing",
-            tiktok_account_id=account.id,
-        )
-        .returning(Draft.id)
-    )
-
-    if claimed.scalar_one_or_none() is None:
-        db.rollback()
-        raise HTTPException(
-            status_code=409,
-            detail="Draft is not eligible for TikTok publishing",
-        )
-
-    db.commit()
-
-    try:
-        result = await publish_tiktok_video_file(
-            access_token=access_token,
-            video_bytes=video_bytes,
-            caption=draft.caption,
-            privacy_level=request.privacy_level,
-            disable_comment=request.disable_comment,
-            disable_duet=request.disable_duet,
-            disable_stitch=request.disable_stitch,
-        )
-
-        publish_id = result.get("publish_id")
-
-        if not publish_id:
-            raise ValueError("TikTok returned no publish ID")
-
-        draft.tiktok_publish_id = publish_id
-        draft.tiktok_publish_status = "needs_review"
-        db.commit()
-
-        return {
-            "status": "processing",
-            "tiktok_publish_id": publish_id,
-        }
-
-    except Exception as exc:
-        db.rollback()
-        draft = require_draft(db, draft_id)
-        draft.tiktok_publish_status = "needs_review"
-        db.commit()
-
-        logger.exception(
-            "TikTok publishing requires review for draft %s",
-            draft_id,
-        )
-
-        raise HTTPException(
-            status_code=502,
-            detail="TikTok publishing outcome requires review",
-        ) from exc
-
-
-@protected.post("/drafts/{draft_id}/verify-tiktok")
-async def verify_tiktok_publication(
-        draft_id: str,
-        db: Session = Depends(get_db),
-):
-    draft = require_draft(db, draft_id, include_deleted=True)
-
-    if not draft.tiktok_publish_id:
-        raise HTTPException(
-            status_code=409,
-            detail="No TikTok publication to verify",
-        )
-
-    account = db.scalar(
-        select(SocialAccount).where(
-            SocialAccount.business_id == draft.business_id,
-            SocialAccount.id == draft.tiktok_account_id,
-            SocialAccount.platform == "tiktok",
-            SocialAccount.connection_status == "connected",
-        )
-    )
-
-    if account is None:
-        raise HTTPException(
-            status_code=409,
-            detail="TikTok is not connected",
-        )
-
-    access_token = await get_valid_tiktok_token(account, db)
-
-    try:
-        result = await get_tiktok_publish_status(
-            access_token=access_token,
-            publish_id=draft.tiktok_publish_id,
-        )
-    except (httpx.HTTPError, ValueError):
-        raise HTTPException(
-            status_code=502,
-            detail="Unable to verify TikTok publication",
-        ) from None
-
-    status = result.get("status")
-
-    if status == "PUBLISH_COMPLETE":
-        draft.tiktok_publish_status = "published"
-        draft.published_at = datetime.now(timezone.utc)
-        db.commit()
-        return {"status": "published"}
-
-    if status == "FAILED":
-        draft.tiktok_publish_status = "needs_review"
-        db.commit()
-        return {"status": "failed"}
-
-    return {
-        "status": "processing",
-        "tiktok_status": status,
-    }
 
 
 @protected.post("/drafts/{draft_id}/upload-video")
@@ -1076,5 +802,6 @@ app.include_router(instagram_auth_router)
 app.include_router(analytics_router)
 
 app.include_router(tiktok_auth_router)
+app.include_router(tiktok_publishing_router)
 
 app.include_router(content_router)

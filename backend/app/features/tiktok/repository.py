@@ -1,10 +1,10 @@
 """SQLAlchemy operations for TikTok OAuth state and accounts."""
 from datetime import datetime
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
-from app.models import Business, SocialAccount, TikTokOAuthState
+from app.models import Business, Draft, SocialAccount, TikTokOAuthState
 
 
 def get_business(db: Session, business_id: str) -> Business | None:
@@ -68,3 +68,53 @@ def list_accounts(db: Session, business_id: str) -> list[SocialAccount]:
             SocialAccount.platform == "tiktok",
         )
     ).all()
+
+
+def get_draft(
+    db: Session,
+    draft_id: str,
+    *,
+    include_deleted: bool = False,
+) -> Draft | None:
+    statement = select(Draft).where(Draft.id == draft_id)
+    if not include_deleted:
+        statement = statement.where(Draft.deleted_at.is_(None))
+    return db.scalar(statement)
+
+
+def get_connected_account(
+    db: Session,
+    business_id: str,
+    account_id: str | None,
+) -> SocialAccount | None:
+    return db.scalar(
+        select(SocialAccount).where(
+            SocialAccount.id == account_id,
+            SocialAccount.business_id == business_id,
+            SocialAccount.platform == "tiktok",
+            SocialAccount.connection_status == "connected",
+        )
+    )
+
+
+def claim_publication(
+    db: Session,
+    draft_id: str,
+    account_id: str,
+) -> bool:
+    result = db.execute(
+        update(Draft)
+        .where(
+            Draft.id == draft_id,
+            Draft.deleted_at.is_(None),
+            Draft.status == "approved",
+            Draft.tiktok_publish_status == "not_published",
+            Draft.tiktok_publish_id.is_(None),
+        )
+        .values(
+            tiktok_publish_status="publishing",
+            tiktok_account_id=account_id,
+        )
+        .returning(Draft.id)
+    )
+    return result.scalar_one_or_none() is not None

@@ -92,6 +92,13 @@ than redesigning concurrency or fixing product semantics during extraction.
   service workflow and query/claim repository are feature-owned; provider and
   storage adapters are reused. Existing transaction boundaries and response
   messages are preserved.
+- TikTok publishing and verification: added offline characterization for
+  business-scoped accounts, creator settings, MP4/storage validation, privacy
+  filtering, atomic claim, ambiguous submission outcomes, duplicate blocking,
+  status recovery and authentication. The video-only publishing workflow,
+  verification endpoints, repository claims and provider adapter now belong to
+  the TikTok feature. The existing unsupported-photo response and all
+  transaction boundaries are retained.
 
 `test_closed_layers.py` additionally rejects direct session operations in feature
 routes/services, HTTPException construction in feature services, and commits or

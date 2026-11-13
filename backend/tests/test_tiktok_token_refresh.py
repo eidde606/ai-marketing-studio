@@ -4,11 +4,11 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
-from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.main import get_valid_tiktok_token
+from app.errors import ApplicationError, ErrorKind
+from app.features.tiktok.service import get_valid_access_token
 from app.models import Business, SocialAccount
 
 
@@ -68,7 +68,7 @@ def test_tiktok_valid_access_token_is_decrypted_without_refresh(
             refresh,
         )
 
-        token = asyncio.run(get_valid_tiktok_token(account, db))
+        token = asyncio.run(get_valid_access_token(account, db=db))
 
     assert token == "valid"
     refresh.assert_not_awaited()
@@ -109,7 +109,7 @@ def test_tiktok_expiring_token_refreshes_and_persists_rotated_credentials(
             refresh,
         )
 
-        token = asyncio.run(get_valid_tiktok_token(account, db))
+        token = asyncio.run(get_valid_access_token(account, db=db))
 
     assert token == "new-access"
     refresh.assert_awaited_once_with("old-refresh")
@@ -146,10 +146,10 @@ def test_tiktok_expired_token_without_refresh_requires_reconnection(
             refresh,
         )
 
-        with pytest.raises(HTTPException) as raised:
-            asyncio.run(get_valid_tiktok_token(account, db))
+        with pytest.raises(ApplicationError) as raised:
+            asyncio.run(get_valid_access_token(account, db=db))
 
-    assert raised.value.status_code == 409
+    assert raised.value.kind is ErrorKind.CONFLICT
     assert raised.value.detail == "Reconnect your TikTok account"
     refresh.assert_not_awaited()
 
@@ -193,14 +193,14 @@ def test_tiktok_refresh_failures_require_reconnection_without_saving_tokens(
             refresh,
         )
 
-        with pytest.raises(HTTPException) as raised:
-            asyncio.run(get_valid_tiktok_token(account, db))
+        with pytest.raises(ApplicationError) as raised:
+            asyncio.run(get_valid_access_token(account, db=db))
 
         db.refresh(account)
         assert account.encrypted_access_token == "encrypted:expired"
         assert account.encrypted_refresh_token == "encrypted:refresh"
 
-    assert raised.value.status_code == 409
+    assert raised.value.kind is ErrorKind.CONFLICT
     assert raised.value.detail == (
         "TikTok authorization expired. Reconnect TikTok."
     )

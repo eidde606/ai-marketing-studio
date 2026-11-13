@@ -6,6 +6,7 @@ from app.errors import ApplicationError, ErrorKind
 
 _STATUS = {
     ErrorKind.INVALID_INPUT: 400,
+    ErrorKind.UNPROCESSABLE_ENTITY: 422,
     ErrorKind.NOT_FOUND: 404,
     ErrorKind.CONFLICT: 409,
     ErrorKind.UPSTREAM_FAILURE: 502,

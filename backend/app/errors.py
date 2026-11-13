@@ -4,6 +4,7 @@ from enum import Enum
 
 class ErrorKind(Enum):
     INVALID_INPUT = "invalid_input"
+    UNPROCESSABLE_ENTITY = "unprocessable_entity"
     NOT_FOUND = "not_found"
     CONFLICT = "conflict"
     UPSTREAM_FAILURE = "upstream_failure"
