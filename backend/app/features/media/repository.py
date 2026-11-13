@@ -48,6 +48,33 @@ def lock_draft_for_attempt(db: Session, attempt_id: str) -> Draft | None:
     )
 
 
+def lock_attempt_for_update(
+    db: Session,
+    attempt_id: str,
+    *,
+    lock_draft: bool = False,
+) -> tuple[Draft | None, HeyGenGenerationAttempt | None]:
+    draft = lock_draft_for_attempt(db, attempt_id) if lock_draft else None
+    attempt = db.scalar(
+        select(HeyGenGenerationAttempt)
+        .where(HeyGenGenerationAttempt.id == attempt_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    return draft, attempt
+
+
+def refreshed_attempt(
+    db: Session,
+    attempt_id: str,
+) -> HeyGenGenerationAttempt | None:
+    return db.scalar(
+        select(HeyGenGenerationAttempt)
+        .where(HeyGenGenerationAttempt.id == attempt_id)
+        .execution_options(populate_existing=True)
+    )
+
+
 def active_attempt_for_draft(
     db: Session,
     draft_id: str,
@@ -118,11 +145,22 @@ def attempt_by_id(
     return db.get(HeyGenGenerationAttempt, attempt_id)
 
 
+def add_attempt(db: Session, attempt: HeyGenGenerationAttempt) -> None:
+    db.add(attempt)
+
+
 def webhook_delivery(
     db: Session,
     delivery_id: str,
 ) -> HeyGenWebhookDelivery | None:
     return db.get(HeyGenWebhookDelivery, delivery_id)
+
+
+def add_webhook_delivery(
+    db: Session,
+    delivery: HeyGenWebhookDelivery,
+) -> None:
+    db.add(delivery)
 
 
 def webhook_delivery_by_key(

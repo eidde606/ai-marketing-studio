@@ -260,13 +260,16 @@ def submit_video_generation(
     user: dict = Depends(verify_token),
     db: Session = Depends(get_db),
 ):
-    return generation_service.submit_generation(
-        db,
-        user_id=user["sub"],
-        business_id=business_id,
-        draft_id=draft_id,
-        request=request,
-    )
+    try:
+        return generation_service.submit_generation(
+            db,
+            user_id=user["sub"],
+            business_id=business_id,
+            draft_id=draft_id,
+            request=request,
+        )
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
 
 
 @router.get(
@@ -279,12 +282,15 @@ def get_video_generation_status(
     user: dict = Depends(verify_token),
     db: Session = Depends(get_db),
 ):
-    return generation_service.get_latest_generation(
-        db,
-        user_id=user["sub"],
-        business_id=business_id,
-        draft_id=draft_id,
-    )
+    try:
+        return generation_service.get_latest_generation(
+            db,
+            user_id=user["sub"],
+            business_id=business_id,
+            draft_id=draft_id,
+        )
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
 
 
 @router.post(
@@ -297,12 +303,15 @@ def reconcile_video_generation(
     user: dict = Depends(verify_token),
     db: Session = Depends(get_db),
 ):
-    return generation_service.get_latest_generation(
-        db,
-        user_id=user["sub"],
-        business_id=business_id,
-        draft_id=draft_id,
-    )
+    try:
+        return generation_service.get_latest_generation(
+            db,
+            user_id=user["sub"],
+            business_id=business_id,
+            draft_id=draft_id,
+        )
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
 
 
 @webhook_router.post("/webhooks/heygen", status_code=202)

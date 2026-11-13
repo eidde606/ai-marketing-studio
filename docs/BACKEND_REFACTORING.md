@@ -108,10 +108,15 @@ than redesigning concurrency or fixing product semantics during extraction.
   workflows; focused media, HeyGen, and architecture tests pass (104 tests).
   SQLite fixtures simulate PostgreSQL lock scheduling and do not verify actual
   PostgreSQL locking behavior.
+- HeyGen generation lifecycle: attempt, webhook-delivery, and completion-storage
+  queries now live in the media repository; generation services use explicit
+  transaction mechanics and return domain application errors for route-owned
+  HTTP translation. Existing lock order, idempotency, leases, status transitions,
+  webhook deduplication, and private-storage reconciliation are retained. The
+  closed-layer guard now has no known exceptions.
 
 `test_closed_layers.py` additionally rejects direct session operations in feature
 routes/services, HTTPException construction in feature services, and commits or
-rollbacks in repositories. Its exact module/function/operation baseline currently
-contains only the pre-existing HeyGen generation service operations, scheduled
-for step 9; resolved exceptions fail until removed. The original import guard
-continues to prohibit every direct route-to-repository import.
+rollbacks in repositories. No exact module/function/operation exceptions remain.
+The original import guard continues to prohibit every direct route-to-repository
+import.

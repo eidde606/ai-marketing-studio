@@ -30,32 +30,8 @@ def violations(source: str, module: str) -> set[tuple[str, str, str]]:
     return result
 
 
-# Existing feature violations only. Each operation is removed as its workflow
-# moves to a repository or its HTTP error mapping moves to a route.
-EXCEPTIONS = {
-    ('app.features.media.generation_service', '_claim_storage', 'db.commit'),
-    ('app.features.media.generation_service', '_claim_storage', 'db.refresh'),
-    ('app.features.media.generation_service', '_claim_storage', 'db.scalar'),
-    ('app.features.media.generation_service', '_reconcile_webhook_delivery', 'db.commit'),
-    ('app.features.media.generation_service', '_set_storage_retry', 'db.commit'),
-    ('app.features.media.generation_service', '_set_storage_retry', 'db.scalar'),
-    ('app.features.media.generation_service', '_store_completed_video', 'db.commit'),
-    ('app.features.media.generation_service', '_store_completed_video', 'db.refresh'),
-    ('app.features.media.generation_service', '_store_completed_video', 'db.scalar'),
-    ('app.features.media.generation_service', '_update_attempt', 'db.commit'),
-    ('app.features.media.generation_service', '_update_attempt', 'db.refresh'),
-    ('app.features.media.generation_service', '_update_attempt', 'db.scalar'),
-    ('app.features.media.generation_service', 'get_latest_generation', 'HTTPException'),
-    ('app.features.media.generation_service', 'record_webhook_delivery', 'db.add'),
-    ('app.features.media.generation_service', 'record_webhook_delivery', 'db.commit'),
-    ('app.features.media.generation_service', 'record_webhook_delivery', 'db.refresh'),
-    ('app.features.media.generation_service', 'record_webhook_delivery', 'db.rollback'),
-    ('app.features.media.generation_service', 'submit_generation', 'HTTPException'),
-    ('app.features.media.generation_service', 'submit_generation', 'db.add'),
-    ('app.features.media.generation_service', 'submit_generation', 'db.commit'),
-    ('app.features.media.generation_service', 'submit_generation', 'db.refresh'),
-    ('app.features.media.generation_service', 'submit_generation', 'db.rollback'),
-}
+# No known feature-layer violations remain.
+EXCEPTIONS = set()
 
 
 def test_feature_layers():
