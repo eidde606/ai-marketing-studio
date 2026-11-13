@@ -5,6 +5,7 @@ from enum import Enum
 from sqlalchemy.orm import Session
 
 from app.models import Draft
+from app.transactions import Transactions
 from . import repository
 from .schemas import DraftCreate, DraftDestinationsUpdate, DraftUpdate
 
@@ -58,8 +59,8 @@ def create_draft(request: DraftCreate, db: Session) -> Draft:
         ),
     )
     repository.add_draft(db, draft)
-    db.commit()
-    db.refresh(draft)
+    Transactions(db).commit()
+    Transactions(db).refresh(draft)
     return draft
 
 
@@ -88,10 +89,10 @@ def delete_draft(draft_id: str, db: Session) -> Draft:
         datetime.now(timezone.utc),
     )
     if deleted is None:
-        db.rollback()
+        Transactions(db).rollback()
         raise DraftError(DraftErrorKind.DELETE_IN_PROGRESS)
-    db.commit()
-    db.refresh(draft)
+    Transactions(db).commit()
+    Transactions(db).refresh(draft)
     return draft
 
 
@@ -120,8 +121,8 @@ def update_draft_destinations(
         raise DraftError(DraftErrorKind.SOCIAL_ACCOUNTS_NOT_CONNECTED)
 
     draft.publish_destinations = destinations
-    db.commit()
-    db.refresh(draft)
+    Transactions(db).commit()
+    Transactions(db).refresh(draft)
     return draft
 
 
@@ -131,8 +132,8 @@ def approve_draft(draft_id: str, db: Session) -> Draft:
         if draft.video_status != "completed" or not draft.video_url:
             raise DraftError(DraftErrorKind.VIDEO_NOT_READY)
     draft.status = "approved"
-    db.commit()
-    db.refresh(draft)
+    Transactions(db).commit()
+    Transactions(db).refresh(draft)
     return draft
 
 
@@ -140,14 +141,14 @@ def update_draft(draft_id: str, request: DraftUpdate, db: Session) -> Draft:
     draft = require_pending_draft(db, draft_id)
     draft.title = request.title
     draft.caption = request.caption
-    db.commit()
-    db.refresh(draft)
+    Transactions(db).commit()
+    Transactions(db).refresh(draft)
     return draft
 
 
 def reject_draft(draft_id: str, db: Session) -> Draft:
     draft = require_pending_draft(db, draft_id)
     draft.status = "rejected"
-    db.commit()
-    db.refresh(draft)
+    Transactions(db).commit()
+    Transactions(db).refresh(draft)
     return draft
