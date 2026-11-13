@@ -14,6 +14,15 @@ from . import service
 from .schemas import FacebookHandoffRequest, FacebookPageSelection
 
 router = APIRouter(prefix="/auth/facebook", tags=["Facebook OAuth"])
+page_router = APIRouter()
+
+
+@page_router.get("/facebook/page", dependencies=[Depends(verify_token)])
+async def get_facebook_page():
+    try:
+        return await service.page_info()
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
 
 
 @router.get("/accounts")

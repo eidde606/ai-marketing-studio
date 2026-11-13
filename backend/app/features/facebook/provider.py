@@ -18,6 +18,20 @@ FACEBOOK_SCOPES = [
 ]
 
 
+async def get_page_info(page_id: str, access_token: str) -> dict:
+    """Get basic information about a Facebook Page."""
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.get(
+            f"{GRAPH_API_URL}/{page_id}",
+            params={
+                "fields": "id,name",
+                "access_token": access_token,
+            },
+        )
+        response.raise_for_status()
+        return response.json()
+
+
 def get_facebook_login_url(state: str) -> str:
     """Build the Facebook authorization URL."""
     app_id = os.getenv("FACEBOOK_APP_ID")

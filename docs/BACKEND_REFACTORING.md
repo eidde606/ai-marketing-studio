@@ -114,6 +114,12 @@ than redesigning concurrency or fixing product semantics during extraction.
   HTTP translation. Existing lock order, idempotency, leases, status transitions,
   webhook deduplication, and private-storage reconciliation are retained. The
   closed-layer guard now has no known exceptions.
+- Composition root: the authenticated `/facebook/page` endpoint now belongs to
+  the Facebook feature, with its provider call, configuration checks, and error
+  mapping in the feature layers. The obsolete draft guard wrappers are removed.
+  `main.py` now contains application/middleware setup, router registration, and
+  the public health endpoint. The root `campaign_routes.py` and
+  `facebook_service.py` remain compatibility modules.
 
 `test_closed_layers.py` additionally rejects direct session operations in feature
 routes/services, HTTPException construction in feature services, and commits or

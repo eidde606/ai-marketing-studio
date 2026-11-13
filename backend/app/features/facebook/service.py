@@ -1,6 +1,7 @@
 """Facebook OAuth and connected-Page application workflows."""
 import hashlib
 import json
+import os
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -12,6 +13,29 @@ from app.models import FacebookOAuthState, SocialAccount
 from app.token_service import decrypt_token, encrypt_token
 from app.transactions import Transactions
 from . import provider, repository
+
+
+async def page_info() -> dict:
+    page_id = os.getenv("FACEBOOK_PAGE_ID")
+    access_token = os.getenv("FACEBOOK_PAGE_ACCESS_TOKEN")
+    if not page_id or not access_token:
+        raise ApplicationError(
+            ErrorKind.UNAVAILABLE,
+            "Facebook is not configured",
+        )
+
+    try:
+        return await provider.get_page_info(page_id, access_token)
+    except httpx.HTTPStatusError as exc:
+        raise ApplicationError(
+            ErrorKind.UPSTREAM_FAILURE,
+            "Unable to retrieve Facebook Page",
+        ) from exc
+    except httpx.RequestError as exc:
+        raise ApplicationError(
+            ErrorKind.UPSTREAM_FAILURE,
+            "Facebook connection failed",
+        ) from exc
 
 
 def start_connection(
