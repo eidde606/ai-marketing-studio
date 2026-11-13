@@ -48,23 +48,29 @@ The disconnected frontend editor has not been re-enabled.
 - Clearly rejected requests and missing backend configuration are marked
   `FAILED`; a later explicit request may start a new attempt.
 - Provider completion is stored as `COMPLETED`, but the draft remains
-  `needs_review` until Phase 4.5C stores the MP4 privately. Manual MP4 upload
-  remains available and is rejected while any generation attempt is active.
-- Generation and status lookups verify the business/draft pair and scope
-  attempts to the authenticated JWT subject.
+  `uploading` until the MP4 is stored privately. Manual MP4 upload remains
+  available and is rejected while any generation attempt is active.
+- Generation and status lookups resolve the authenticated application principal,
+  require fresh business membership, and use business-scoped draft and attempt
+  persistence. User-initiated writes recheck permission after provider calls.
+- Avatar and voice IDs are accepted only when present in the explicit access
+  registry: platform-stock assets are globally shareable only after trusted
+  designation; private assets require a business assignment by an Owner/Admin.
+  Existing provider assets are not automatically registered.
+- Signed webhooks resolve their attempt through the persisted callback/provider
+  identifiers. The worker uses a trusted tenant context derived from that
+  persisted attempt rather than a business ID in the payload.
 
 ## Verified application limitations
 
-Authentication currently authorizes one configured Supabase account. The
-`Business` model has no user or membership relationship, so the application
-cannot enforce per-business membership for a future multi-user deployment.
-This implementation stores the JWT subject and validates each attempt against
-its business and draft, while relying on the existing single-account
-authentication gate for business authorization.
+The authentication gate still enforces the configured `ALLOWED_USER_ID`; this
+slice does not enable multi-user admission. The application also requires an
+active local user and business membership. Initial ownership provisioning is a
+separate reviewed operation, and no existing business is assigned automatically.
 
 The frontend asset browser from Phase 4.5A is preserved, but its selections
-are not connected to generation. No webhook reconciliation, private video
-storage, or automatic reprocessing is included.
+are not connected to generation. The frontend does not expose a generation or
+automatic reprocessing control.
 
 ## Regression coverage
 

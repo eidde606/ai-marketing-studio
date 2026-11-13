@@ -1,10 +1,11 @@
 """Persistence helpers for draft-scoped HeyGen generation attempts."""
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.models import (
     Business,
     Draft,
+    HeyGenAssetAccess,
     HeyGenGenerationAttempt,
     HeyGenWebhookDelivery,
     ImageRevision,
@@ -13,7 +14,7 @@ from app.models import (
 ACTIVE_STATUSES = ("SUBMITTING", "UNKNOWN", "PROCESSING")
 
 
-from app.features.access.principal import TenantAccess
+from app.features.access.principal import TenantAccess, TrustedTenantContext
 from app.persistence import tenant
 
 
@@ -178,6 +179,35 @@ def webhook_delivery_by_key(
     )
 
 
+def trusted_webhook_context_for_delivery(
+    db: Session,
+    delivery: HeyGenWebhookDelivery,
+    attempt: HeyGenGenerationAttempt,
+) -> TrustedTenantContext | None:
+    persisted_delivery = db.get(HeyGenWebhookDelivery, delivery.id)
+    persisted_attempt = db.get(HeyGenGenerationAttempt, attempt.id)
+    if persisted_delivery is None or persisted_attempt is None:
+        return None
+    callback_matches = persisted_delivery.callback_id == persisted_attempt.id
+    video_matches = (
+        persisted_attempt.provider_video_id is not None
+        and persisted_delivery.provider_video_id == persisted_attempt.provider_video_id
+    )
+    if not callback_matches and not video_matches:
+        return None
+    draft_matches = db.scalar(select(Draft.id).where(
+        Draft.id == persisted_attempt.draft_id,
+        Draft.business_id == persisted_attempt.business_id,
+    ))
+    if draft_matches is None:
+        return None
+    return TrustedTenantContext(
+        business_id=persisted_attempt.business_id,
+        attempt_id=persisted_attempt.id,
+        delivery_id=persisted_delivery.id,
+    )
+
+
 def pending_webhook_delivery_for_attempt(
     db: Session,
     attempt_id: str,
@@ -199,6 +229,10 @@ def has_active_attempt(db: Session, draft_id: str) -> bool:
 
 def lock_draft_revisions(db: Session, draft_id: str) -> None:
     db.execute(select(func.pg_advisory_xact_lock(func.hashtext(draft_id))))
+
+
+def lock_draft_scoped(db: Session, context: TenantAccess, draft_id: str):
+    return tenant.get(db, context, Draft, draft_id, lock=True)
 
 
 def active_revision(db: Session, draft_id: str) -> ImageRevision | None:
@@ -423,6 +457,13 @@ def get_revision_scoped(db: Session, context: TenantAccess, draft_id: str, revis
         ImageRevision.id == revision_id, ImageRevision.draft_id == draft_id))
 
 
+def active_revision_scoped(db: Session, context: TenantAccess, draft_id: str):
+    return db.scalar(tenant.selection(ImageRevision, context).where(
+        ImageRevision.draft_id == draft_id,
+        ImageRevision.status.in_(["generating", "ready"]),
+    ).limit(1))
+
+
 def list_revisions_scoped(db: Session, context: TenantAccess, draft_id: str, *, limit=100, offset=0):
     return db.scalars(tenant.page(tenant.selection(ImageRevision, context)
         .where(ImageRevision.draft_id == draft_id).order_by(ImageRevision.created_at.desc(), ImageRevision.id),
@@ -430,10 +471,7 @@ def list_revisions_scoped(db: Session, context: TenantAccess, draft_id: str, *, 
 
 
 def lock_draft_revisions_scoped(db: Session, context: TenantAccess, draft_id: str) -> bool:
-    # Preserve the same advisory-lock key as legacy workflows. No foreign key lock
-    # is taken for a resource outside the scope. IDs are immutable in the new APIs.
-    return db.execute(select(func.pg_advisory_xact_lock(func.hashtext(Draft.id)))
-        .where(Draft.id == draft_id, tenant.predicate(Draft, context))).first() is not None
+    return tenant.get(db, context, Draft, draft_id, lock=True) is not None
 
 
 def get_attempt_scoped(db: Session, context: TenantAccess, attempt_id: str):
@@ -447,6 +485,22 @@ def latest_attempt_scoped(db: Session, context: TenantAccess, draft_id: str, *, 
         statement = statement.where(HeyGenGenerationAttempt.status.in_(ACTIVE_STATUSES))
     return db.scalar(statement.order_by(HeyGenGenerationAttempt.created_at.desc(),
                                        HeyGenGenerationAttempt.id.desc()).limit(1))
+
+
+def active_attempt_for_draft_scoped(
+    db: Session,
+    context: TenantAccess,
+    draft_id: str,
+    *,
+    lock: bool = False,
+):
+    statement = tenant.selection(HeyGenGenerationAttempt, context).where(
+        HeyGenGenerationAttempt.draft_id == draft_id,
+        HeyGenGenerationAttempt.status.in_(ACTIVE_STATUSES),
+    )
+    if lock:
+        statement = statement.with_for_update()
+    return db.scalar(statement.limit(1))
 
 
 def lock_attempt_scoped(db: Session, context: TenantAccess, attempt_id: str):
@@ -514,6 +568,141 @@ def save_generated_image_scoped(db: Session, context: TenantAccess, draft_id, ge
 def reset_image_generation_scoped(db: Session, context: TenantAccess, draft_id, cutoff) -> bool:
     statement = _reset_image_generation_statement(draft_id, cutoff).where(tenant.predicate(Draft, context))
     return db.execute(statement).scalar_one_or_none() is not None
+
+
+def has_active_attempt_scoped(db: Session, context: TenantAccess, draft_id: str) -> bool:
+    return db.scalar(tenant.selection(HeyGenGenerationAttempt, context).where(
+        HeyGenGenerationAttempt.draft_id == draft_id,
+        HeyGenGenerationAttempt.status.in_(ACTIVE_STATUSES),
+    ).limit(1)) is not None
+
+
+def has_unstored_attempt_scoped(db: Session, context: TenantAccess, draft_id: str) -> bool:
+    return db.scalar(tenant.selection(HeyGenGenerationAttempt, context).where(
+        HeyGenGenerationAttempt.draft_id == draft_id,
+        HeyGenGenerationAttempt.status == "COMPLETED",
+        HeyGenGenerationAttempt.storage_status != "STORED",
+    ).limit(1)) is not None
+
+
+def accept_image_revision_scoped(
+    db: Session,
+    context: TenantAccess,
+    draft_id: str,
+    revision_id: str,
+    *,
+    expected_image_path: str,
+    revised_image_path: str,
+) -> bool:
+    tenant.validate_storage_path(context, revised_image_path)
+    draft_id_statement = select(Draft.id).where(
+        tenant.predicate(Draft, context),
+        Draft.id == draft_id,
+        Draft.deleted_at.is_(None),
+        Draft.status == "pending",
+        Draft.image_url == expected_image_path,
+    )
+    updated = db.execute(update(ImageRevision).where(
+        tenant.predicate(ImageRevision, context),
+        ImageRevision.id == revision_id,
+        ImageRevision.draft_id == draft_id,
+        ImageRevision.status == "ready",
+        ImageRevision.original_image_path == expected_image_path,
+        ImageRevision.revised_image_path == revised_image_path,
+        draft_id_statement.exists(),
+    ).values(status="accepted").returning(ImageRevision.id)).scalar_one_or_none()
+    if updated is None:
+        return False
+    return db.execute(update(Draft).where(
+        tenant.predicate(Draft, context),
+        Draft.id == draft_id,
+        Draft.deleted_at.is_(None),
+        Draft.status == "pending",
+        Draft.image_url == expected_image_path,
+    ).values(image_url=revised_image_path, media_type="image")
+      .returning(Draft.id)).scalar_one_or_none() is not None
+
+
+def heygen_asset_accessible_scoped(
+    db: Session,
+    context: TenantAccess,
+    asset_type: str,
+    provider_asset_id: str,
+) -> HeyGenAssetAccess | None:
+    return db.scalar(
+        select(HeyGenAssetAccess).where(
+            HeyGenAssetAccess.asset_type == asset_type,
+            HeyGenAssetAccess.provider_asset_id == provider_asset_id,
+            (
+                (HeyGenAssetAccess.access_scope == "platform_stock")
+                | (
+                    (HeyGenAssetAccess.access_scope == "business_private")
+                    & (HeyGenAssetAccess.business_id == context.business_id)
+                )
+            ),
+        )
+    )
+
+
+def list_business_private_heygen_asset_ids_scoped(
+    db: Session, context: TenantAccess, asset_type: str,
+) -> set[str]:
+    statement = select(HeyGenAssetAccess.provider_asset_id).where(
+        HeyGenAssetAccess.asset_type == asset_type,
+        HeyGenAssetAccess.access_scope == "business_private",
+        HeyGenAssetAccess.business_id == context.business_id,
+    )
+    return set(db.scalars(statement))
+
+
+def list_platform_stock_heygen_asset_ids(
+    db: Session, asset_type: str,
+) -> set[str]:
+    return set(db.scalars(select(HeyGenAssetAccess.provider_asset_id).where(
+        HeyGenAssetAccess.asset_type == asset_type,
+        HeyGenAssetAccess.access_scope == "platform_stock",
+        HeyGenAssetAccess.business_id.is_(None),
+    )))
+
+
+def assign_private_heygen_asset_scoped(
+    db: Session,
+    context: TenantAccess,
+    user_id: str,
+    asset_type: str,
+    provider_asset_id: str,
+) -> None:
+    if asset_type not in {"avatar", "voice"}:
+        raise ValueError("Unsupported HeyGen asset type")
+    if (
+        not provider_asset_id
+        or len(provider_asset_id) > 255
+        or provider_asset_id != provider_asset_id.strip()
+    ):
+        raise ValueError("Invalid HeyGen provider asset ID")
+    db.add(HeyGenAssetAccess(
+        asset_type=asset_type,
+        provider_asset_id=provider_asset_id,
+        access_scope="business_private",
+        business_id=context.business_id,
+        assigned_by_user_id=user_id,
+    ))
+
+
+def remove_private_heygen_asset_scoped(
+    db: Session,
+    context: TenantAccess,
+    asset_type: str,
+    provider_asset_id: str,
+) -> bool:
+    return db.execute(
+        delete(HeyGenAssetAccess).where(
+            HeyGenAssetAccess.asset_type == asset_type,
+            HeyGenAssetAccess.provider_asset_id == provider_asset_id,
+            HeyGenAssetAccess.access_scope == "business_private",
+            HeyGenAssetAccess.business_id == context.business_id,
+        ).returning(HeyGenAssetAccess.id)
+    ).scalar_one_or_none() is not None
 
 
 def add_revision_scoped(db: Session, context: TenantAccess, record: ImageRevision):

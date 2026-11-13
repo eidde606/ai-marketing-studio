@@ -4,6 +4,8 @@ from uuid import UUID, uuid4
 from dotenv import load_dotenv
 from supabase import create_client
 
+from app.features.access.principal import TenantAccess
+
 load_dotenv(".env")
 
 MAX_IMAGE_SIZE = 20 * 1024 * 1024  # 20 MB
@@ -160,11 +162,24 @@ def download_marketing_image(
 def get_marketing_image_url(
         storage_path: str,
         expires_in: int = 3600,
+        *,
+        context: TenantAccess,
 ) -> str:
-    """Create a temporary URL for viewing a private image."""
+    """Create a temporary URL only for a validated object in the tenant."""
 
-    if not storage_path or not storage_path.strip():
-        raise ValueError("Image storage path cannot be empty.")
+    if not isinstance(context, TenantAccess):
+        raise TypeError("An authorized tenant context is required.")
+    if not isinstance(storage_path, str) or not storage_path:
+        raise ValueError("Storage path cannot be empty.")
+    prefix = f"businesses/{context.business_id}/"
+    suffix = storage_path[len(prefix):] if storage_path.startswith(prefix) else ""
+    if (
+        not suffix
+        or "\\" in suffix
+        or any(part in {"", ".", ".."} for part in suffix.split("/"))
+        or not suffix.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".mp4"))
+    ):
+        raise ValueError("Storage path must belong to the authorized business.")
 
     if expires_in < 1 or expires_in > 3600:
         raise ValueError(
@@ -215,6 +230,7 @@ def upload_marketing_video(
             not suffix
             or any(part in {"", ".", ".."} for part in suffix.split("/"))
             or "\\" in suffix
+            or "%" in suffix
             or not suffix.lower().endswith(".mp4")
         ):
             raise ValueError("Invalid video storage path.")

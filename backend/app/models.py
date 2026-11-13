@@ -387,6 +387,50 @@ class HeyGenWebhookDelivery(Base):
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class HeyGenAssetAccess(Base):
+    """Explicitly shared stock assets or assets assigned to one business."""
+
+    __tablename__ = "heygen_asset_access"
+    __table_args__ = (
+        CheckConstraint(
+            "asset_type IN ('avatar', 'voice')",
+            name="ck_heygen_asset_access_type",
+        ),
+        CheckConstraint(
+            "access_scope IN ('platform_stock', 'business_private')",
+            name="ck_heygen_asset_access_scope",
+        ),
+        CheckConstraint(
+            "(access_scope = 'platform_stock' AND business_id IS NULL "
+            "AND assigned_by_user_id IS NULL) OR "
+            "(access_scope = 'business_private' AND business_id IS NOT NULL "
+            "AND assigned_by_user_id IS NOT NULL)",
+            name="ck_heygen_asset_access_business_scope",
+        ),
+        UniqueConstraint(
+            "asset_type",
+            "provider_asset_id",
+            name="uq_heygen_asset_access_provider_asset",
+        ),
+        Index("ix_heygen_asset_access_business", "business_id", "asset_type"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    asset_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    provider_asset_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    access_scope: Mapped[str] = mapped_column(String(30), nullable=False)
+    business_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("businesses.id"), nullable=True,
+    )
+    assigned_by_user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("app_users.id"), nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        default=lambda: datetime.now(timezone.utc), server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
 class ImageRevision(Base):
     """
     A proposed AI edit of an existing draft image.

@@ -38,7 +38,10 @@ def tenant_engine(isolated_client):
 def test_permission_matrix(role, permission):
     member = {"read", "edit_content", "manage_campaigns", "use_sofia", "use_leo",
               "generate_media", "upload_media", "submit_for_approval"}
-    admin = member | {"approve_content", "publish", "manage_connections", "edit_business", "manage_members"}
+    admin = member | {
+        "approve_content", "publish", "manage_connections", "manage_heygen_assets",
+        "edit_business", "manage_members",
+    }
     owner = admin | {"manage_admins", "manage_owners", "archive_business"}
     assert allows(role, permission) == (permission.value in {"owner": owner, "admin": admin, "member": member}.get(role, set()))
 

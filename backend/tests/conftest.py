@@ -43,12 +43,11 @@ def block_external_requests(monkeypatch):
 
 
 @pytest.fixture
-def isolated_client():
+def isolated_client(tmp_path):
     """A fresh database and in-process HTTP client for each new baseline test."""
     from fastapi.testclient import TestClient
     from sqlalchemy import create_engine, event
     from sqlalchemy.orm import Session
-    from sqlalchemy.pool import StaticPool
 
     from app.auth import verify_token, get_authenticated_principal
     from app.database import get_db
@@ -56,7 +55,8 @@ def isolated_client():
     from app.models import Base
 
     engine = create_engine(
-        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool,
+        f"sqlite:///{tmp_path / 'isolated.sqlite'}",
+        connect_args={"check_same_thread": False},
     )
 
     @event.listens_for(engine, "connect")

@@ -12,6 +12,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.errors import ApplicationError, ErrorKind
+from app.features.access import service as access
+from app.features.access.permissions import Permission
+from app.features.access.principal import (
+    AuthenticatedPrincipal,
+    TenantAccess,
+    TrustedTenantContext,
+)
+from app.features.drafts import repository as drafts
 from .heygen_provider import (
     HeyGenConfigurationError,
     HeyGenProviderError,
@@ -25,6 +33,7 @@ from app.storage_service import upload_marketing_video
 from app.transactions import Transactions
 
 from . import repository
+from .asset_access_service import require_generation_assets
 from .schemas import HeyGenGenerationRequest
 
 logger = logging.getLogger(__name__)
@@ -92,9 +101,16 @@ def _response(attempt: HeyGenGenerationAttempt) -> dict:
 
 
 def _can_attach_video(
-    db: Session, draft: Draft | None, attempt: HeyGenGenerationAttempt,
+    db: Session,
+    draft: Draft | None,
+    attempt: HeyGenGenerationAttempt,
+    context: TenantAccess | TrustedTenantContext | None = None,
 ) -> bool:
-    latest = repository.latest_attempt(db, attempt.draft_id)
+    latest = (
+        repository.latest_attempt_scoped(db, context, attempt.draft_id)
+        if context is not None
+        else repository.latest_attempt(db, attempt.draft_id)
+    )
     return bool(
         draft is not None
         and draft.business_id == attempt.business_id
@@ -125,12 +141,26 @@ def _update_attempt(
     expected_status: str | None = None,
     expected_updated_at: datetime | None = None,
     expected_lease_until: datetime | None = None,
+    principal: AuthenticatedPrincipal | None = None,
+    context: TenantAccess | TrustedTenantContext | None = None,
 ) -> HeyGenGenerationAttempt:
-    draft, attempt = repository.lock_attempt_for_update(
-        db,
-        attempt_id,
-        lock_draft=True,
-    )
+    if principal is not None:
+        if context is None:
+            raise TypeError("Authorized HeyGen updates require tenant context")
+        context = access.require_permission(
+            db, principal, context.business_id, Permission.GENERATE_MEDIA, lock=True,
+        )
+        draft, attempt = repository.lock_attempt_scoped(db, context, attempt_id)
+    elif isinstance(context, TrustedTenantContext):
+        if context.attempt_id != attempt_id:
+            raise TypeError("Trusted HeyGen context does not match the attempt")
+        draft, attempt = repository.lock_attempt_scoped(db, context, attempt_id)
+    else:
+        draft, attempt = repository.lock_attempt_for_update(
+            db,
+            attempt_id,
+            lock_draft=True,
+        )
     if attempt is None:
         raise RuntimeError("Persisted HeyGen generation attempt disappeared.")
 
@@ -152,12 +182,74 @@ def _update_attempt(
     if status not in ALLOWED_STATUS_TRANSITIONS[attempt.status]:
         return attempt
 
-    can_attach = _can_attach_video(db, draft, attempt)
+    can_attach = _can_attach_video(db, draft, attempt, context)
+    previous_status = attempt.status
+    previous_updated_at = attempt.updated_at
+    now = _now()
+    next_provider_id = provider_video_id or attempt.provider_video_id
+
+    if context is not None:
+        attempt_values = {
+            "status": status,
+            "submission_lease_until": lease_until,
+            "updated_at": now,
+        }
+        if provider_video_id is not None:
+            attempt_values["provider_video_id"] = provider_video_id
+        if status == "FAILED" and can_attach:
+            attempt_values["storage_status"] = "FAILED"
+        if not repository.update_attempt_scoped(
+            db,
+            context,
+            attempt_id,
+            expected_status=previous_status,
+            expected_updated_at=previous_updated_at,
+            values=attempt_values,
+        ):
+            Transactions(db).rollback()
+            return repository.get_attempt_scoped(db, context, attempt_id) or attempt
+
+        if can_attach:
+            draft_values = {}
+            if status in ("SUBMITTING", "PROCESSING"):
+                draft_values = {"media_type": "video", "video_status": "generating"}
+                if next_provider_id:
+                    draft_values["video_generation_id"] = next_provider_id
+            elif status == "UNKNOWN":
+                draft_values = {"media_type": "video", "video_status": "needs_review"}
+                if next_provider_id:
+                    draft_values["video_generation_id"] = next_provider_id
+            elif status == "COMPLETED":
+                draft_values = {
+                    "media_type": "video",
+                    "video_status": (
+                        "completed" if attempt.storage_status == "STORED" else "uploading"
+                    ),
+                    "video_generation_id": next_provider_id,
+                }
+            elif status == "FAILED":
+                draft_values = {
+                    "video_status": "failed",
+                    "video_generation_id": None,
+                }
+            if draft_values and not repository.update_draft_media_scoped(
+                db,
+                context,
+                attempt.draft_id,
+                expected_video_status=draft.video_status,
+                values=draft_values,
+            ):
+                Transactions(db).rollback()
+                fresh = repository.get_attempt_scoped(db, context, attempt_id)
+                return fresh or attempt
+        Transactions(db).commit()
+        return repository.get_attempt_scoped(db, context, attempt_id) or attempt
+
     attempt.status = status
     if provider_video_id is not None:
         attempt.provider_video_id = provider_video_id
     attempt.submission_lease_until = lease_until
-    attempt.updated_at = _now()
+    attempt.updated_at = now
 
     # Tracking may finish after a draft becomes ineligible; never restore
     # that draft's generation association or media state.
@@ -199,6 +291,8 @@ def _mark_unknown(
     *,
     lease_until: datetime | None,
     expected_lease_until: datetime,
+    principal: AuthenticatedPrincipal | None = None,
+    context: TenantAccess | TrustedTenantContext | None = None,
 ) -> dict:
     attempt = _update_attempt(
         db,
@@ -207,6 +301,8 @@ def _mark_unknown(
         lease_until=lease_until,
         expected_status="SUBMITTING",
         expected_lease_until=expected_lease_until,
+        principal=principal,
+        context=context,
     )
     return _response(attempt)
 
@@ -216,6 +312,8 @@ def _submit_provider_request(
     attempt: HeyGenGenerationAttempt,
     *,
     expected_lease_until: datetime,
+    principal: AuthenticatedPrincipal,
+    context: TenantAccess,
 ) -> dict:
     try:
         result = generate_video(
@@ -236,6 +334,8 @@ def _submit_provider_request(
             attempt.id,
             lease_until=_now() + SUBMISSION_LEASE,
             expected_lease_until=expected_lease_until,
+            principal=principal,
+            context=context,
         )
     except httpx.RequestError:
         return _mark_unknown(
@@ -243,6 +343,8 @@ def _submit_provider_request(
             attempt.id,
             lease_until=_now() + SUBMISSION_LEASE,
             expected_lease_until=expected_lease_until,
+            principal=principal,
+            context=context,
         )
     except HeyGenProviderError as exc:
         if exc.status_code not in DEFINITIVE_REJECTION_STATUSES:
@@ -251,6 +353,8 @@ def _submit_provider_request(
                 attempt.id,
                 lease_until=_now() + SUBMISSION_LEASE,
                 expected_lease_until=expected_lease_until,
+                principal=principal,
+                context=context,
             )
         attempt = _update_attempt(
             db,
@@ -258,6 +362,8 @@ def _submit_provider_request(
             status="FAILED",
             expected_status="SUBMITTING",
             expected_lease_until=expected_lease_until,
+            principal=principal,
+            context=context,
         )
         return _response(attempt)
     except HeyGenConfigurationError:
@@ -267,6 +373,8 @@ def _submit_provider_request(
             status="FAILED",
             expected_status="SUBMITTING",
             expected_lease_until=expected_lease_until,
+            principal=principal,
+            context=context,
         )
         return _response(attempt)
     except ValueError:
@@ -275,6 +383,8 @@ def _submit_provider_request(
             attempt.id,
             lease_until=_now() + SUBMISSION_LEASE,
             expected_lease_until=expected_lease_until,
+            principal=principal,
+            context=context,
         )
     except Exception:
         logger.exception("Unexpected HeyGen submission error for attempt %s", attempt.id)
@@ -283,6 +393,8 @@ def _submit_provider_request(
             attempt.id,
             lease_until=_now() + SUBMISSION_LEASE,
             expected_lease_until=expected_lease_until,
+            principal=principal,
+            context=context,
         )
 
     attempt = _update_attempt(
@@ -292,6 +404,8 @@ def _submit_provider_request(
         provider_video_id=video_id,
         expected_status="SUBMITTING",
         expected_lease_until=expected_lease_until,
+        principal=principal,
+        context=context,
     )
     return _response(attempt)
 
@@ -299,18 +413,23 @@ def _submit_provider_request(
 def submit_generation(
     db: Session,
     *,
-    user_id: str,
+    principal: AuthenticatedPrincipal,
     business_id: str,
     draft_id: str,
     request: HeyGenGenerationRequest,
 ) -> dict:
+    context = access.require_draft_permission(
+        db, principal, draft_id, Permission.GENERATE_MEDIA,
+    )
+    if context.business_id != business_id:
+        raise _failure(ErrorKind.NOT_FOUND, "Draft not found")
+    context = require_generation_assets(
+        db, principal, business_id, request.avatar_id, request.voice_id,
+        lock=True,
+    )
     now = _now()
     fingerprint = _fingerprint(request)
-    draft = repository.lock_draft_for_generation(
-        db,
-        business_id=business_id,
-        draft_id=draft_id,
-    )
+    draft = drafts.lock_draft_scoped(db, context, draft_id)
     if draft is None:
         raise _failure(ErrorKind.NOT_FOUND, "Draft not found")
     if draft.status != "pending":
@@ -321,10 +440,10 @@ def submit_generation(
     if draft.image_status == "generating":
         raise _failure(ErrorKind.CONFLICT, "Image generation is already active")
 
-    active = repository.active_attempt_for_draft(db, draft_id, lock=True)
+    active = repository.active_attempt_for_draft_scoped(
+        db, context, draft_id, lock=True,
+    )
     if active is not None:
-        if active.user_id != user_id or active.business_id != business_id:
-            raise _failure(ErrorKind.NOT_FOUND, "Draft not found")
         if active.request_fingerprint != fingerprint:
             raise _failure(
                 ErrorKind.CONFLICT,
@@ -347,6 +466,8 @@ def submit_generation(
                     active.id,
                     status="UNKNOWN",
                     lease_until=None,
+                    principal=principal,
+                    context=context,
                 )
             )
 
@@ -360,14 +481,11 @@ def submit_generation(
             db,
             active,
             expected_lease_until=active.submission_lease_until,
+            principal=principal,
+            context=context,
         )
 
-    latest = repository.latest_attempt_for_draft(
-        db,
-        user_id=user_id,
-        business_id=business_id,
-        draft_id=draft_id,
-    )
+    latest = repository.latest_attempt_scoped(db, context, draft_id)
     if latest is not None and latest.status == "COMPLETED":
         raise _failure(ErrorKind.CONFLICT, "This draft already has a generated video")
     if draft.video_url or draft.video_status in (
@@ -384,7 +502,7 @@ def submit_generation(
 
     attempt = HeyGenGenerationAttempt(
         id=str(uuid4()),
-        user_id=user_id,
+        user_id=principal.user_id,
         business_id=business_id,
         draft_id=draft_id,
         request_fingerprint=fingerprint,
@@ -402,51 +520,52 @@ def submit_generation(
     )
     draft.media_type = "video"
     draft.video_status = "generating"
-    repository.add_attempt(db, attempt)
+    attempt_id = repository.add_attempt_scoped(db, context, attempt)
+    if attempt_id is None:
+        Transactions(db).rollback()
+        raise _failure(ErrorKind.NOT_FOUND, "Draft not found")
     try:
         Transactions(db).commit()
     except IntegrityError:
         Transactions(db).rollback()
-        concurrent = repository.active_attempt_for_draft(db, draft_id)
+        concurrent = repository.active_attempt_for_draft_scoped(db, context, draft_id)
         if concurrent is None:
             raise
-        if concurrent.user_id != user_id or concurrent.business_id != business_id:
-            raise _failure(ErrorKind.NOT_FOUND, "Draft not found")
         if concurrent.request_fingerprint == fingerprint:
             return _response(concurrent)
         raise _failure(
             ErrorKind.CONFLICT,
             "A different HeyGen generation attempt is already active",
         )
-    Transactions(db).refresh(attempt)
+    attempt = repository.get_attempt_scoped(db, context, attempt_id)
+    if attempt is None:
+        raise RuntimeError("Persisted HeyGen generation attempt disappeared.")
     return _submit_provider_request(
         db,
         attempt,
         expected_lease_until=attempt.submission_lease_until,
+        principal=principal,
+        context=context,
     )
 
 
 def get_latest_generation(
     db: Session,
     *,
-    user_id: str,
+    principal: AuthenticatedPrincipal,
     business_id: str,
     draft_id: str,
 ) -> dict:
-    draft = repository.lock_draft_for_generation(
-        db,
-        business_id=business_id,
-        draft_id=draft_id,
+    context = access.require_draft_permission(
+        db, principal, draft_id, Permission.READ,
     )
+    if context.business_id != business_id:
+        raise _failure(ErrorKind.NOT_FOUND, "Draft not found")
+    draft = drafts.get_draft_scoped(db, context, draft_id)
     if draft is None:
         raise _failure(ErrorKind.NOT_FOUND, "Draft not found")
 
-    attempt = repository.latest_attempt_for_draft(
-        db,
-        user_id=user_id,
-        business_id=business_id,
-        draft_id=draft_id,
-    )
+    attempt = repository.latest_attempt_scoped(db, context, draft_id)
     if attempt is None:
         raise _failure(
             ErrorKind.NOT_FOUND,
@@ -464,7 +583,9 @@ def get_latest_generation(
                 attempt = _reconcile_webhook_delivery(db, delivery) or attempt
                 return _response(attempt)
             return _response(attempt)
-        attempt = refresh_attempt_status(db, attempt)
+        attempt = refresh_attempt_status(
+            db, attempt, principal=principal, context=context,
+        )
     except CompletionProcessingError as exc:
         raise _failure(
             ErrorKind.UPSTREAM_FAILURE,
@@ -499,14 +620,46 @@ def _set_storage_retry(
     db: Session,
     attempt_id: str,
     lease_until: datetime,
+    *,
+    principal: AuthenticatedPrincipal | None = None,
+    context: TenantAccess | TrustedTenantContext | None = None,
 ) -> None:
-    _, attempt = repository.lock_attempt_for_update(db, attempt_id)
+    if principal is not None:
+        if context is None:
+            raise TypeError("Authorized HeyGen updates require tenant context")
+        context = access.require_permission(
+            db, principal, context.business_id, Permission.GENERATE_MEDIA, lock=True,
+        )
+        _, attempt = repository.lock_attempt_scoped(db, context, attempt_id)
+    elif context is not None:
+        if context.attempt_id != attempt_id:
+            raise TypeError("Trusted HeyGen context does not match the attempt")
+        _, attempt = repository.lock_attempt_scoped(db, context, attempt_id)
+    else:
+        _, attempt = repository.lock_attempt_for_update(db, attempt_id)
     if (
         attempt is not None
         and attempt.storage_status == "PROCESSING"
         and attempt.completion_lease_until is not None
         and _utc(attempt.completion_lease_until) == _utc(lease_until)
     ):
+        if context is not None:
+            if not repository.update_attempt_scoped(
+                db,
+                context,
+                attempt_id,
+                expected_status="COMPLETED",
+                expected_updated_at=attempt.updated_at,
+                values={
+                    "storage_status": "RETRY",
+                    "completion_lease_until": None,
+                    "updated_at": _now(),
+                },
+            ):
+                Transactions(db).rollback()
+                return
+            Transactions(db).commit()
+            return
         attempt.storage_status = "RETRY"
         attempt.completion_lease_until = None
         attempt.updated_at = _now()
@@ -516,17 +669,47 @@ def _set_storage_retry(
 def _claim_storage(
     db: Session,
     attempt_id: str,
+    *,
+    principal: AuthenticatedPrincipal | None = None,
+    context: TenantAccess | TrustedTenantContext | None = None,
 ) -> tuple[HeyGenGenerationAttempt, datetime] | None:
-    draft, attempt = repository.lock_attempt_for_update(
-        db,
-        attempt_id,
-        lock_draft=True,
-    )
+    if principal is not None:
+        if context is None:
+            raise TypeError("Authorized HeyGen updates require tenant context")
+        context = access.require_permission(
+            db, principal, context.business_id, Permission.GENERATE_MEDIA, lock=True,
+        )
+        draft, attempt = repository.lock_attempt_scoped(db, context, attempt_id)
+    elif context is not None:
+        if context.attempt_id != attempt_id:
+            raise TypeError("Trusted HeyGen context does not match the attempt")
+        draft, attempt = repository.lock_attempt_scoped(db, context, attempt_id)
+    else:
+        draft, attempt = repository.lock_attempt_for_update(
+            db,
+            attempt_id,
+            lock_draft=True,
+        )
     if attempt is None or attempt.status != "COMPLETED":
         return None
     if attempt.storage_status in ("STORED", "FAILED"):
         return None
-    if not _can_attach_video(db, draft, attempt):
+    if not _can_attach_video(db, draft, attempt, context):
+        if context is not None:
+            repository.update_attempt_scoped(
+                db,
+                context,
+                attempt_id,
+                expected_status="COMPLETED",
+                expected_updated_at=attempt.updated_at,
+                values={
+                    "storage_status": "FAILED",
+                    "completion_lease_until": None,
+                    "updated_at": _now(),
+                },
+            )
+            Transactions(db).commit()
+            return None
         attempt.storage_status = "FAILED"
         attempt.completion_lease_until = None
         attempt.updated_at = _now()
@@ -542,6 +725,26 @@ def _claim_storage(
         return None
 
     lease_until = now + COMPLETION_LEASE
+    if context is not None:
+        if not repository.update_attempt_scoped(
+            db,
+            context,
+            attempt_id,
+            expected_status="COMPLETED",
+            expected_updated_at=attempt.updated_at,
+            values={
+                "storage_status": "PROCESSING",
+                "completion_lease_until": lease_until,
+                "updated_at": now,
+            },
+        ):
+            Transactions(db).rollback()
+            return None
+        Transactions(db).commit()
+        current = repository.get_attempt_scoped(db, context, attempt_id)
+        if current is None:
+            return None
+        return current, lease_until
     attempt.storage_status = "PROCESSING"
     attempt.completion_lease_until = lease_until
     attempt.updated_at = now
@@ -555,10 +758,19 @@ def _store_completed_video(
     db: Session,
     attempt: HeyGenGenerationAttempt,
     provider_resource: dict,
+    *,
+    principal: AuthenticatedPrincipal | None = None,
+    context: TenantAccess | TrustedTenantContext | None = None,
 ) -> HeyGenGenerationAttempt:
-    claim = _claim_storage(db, attempt.id)
+    claim = _claim_storage(
+        db, attempt.id, principal=principal, context=context,
+    )
     if claim is None:
-        fresh = repository.refreshed_attempt(db, attempt.id)
+        fresh = (
+            repository.get_attempt_scoped(db, context, attempt.id)
+            if context is not None
+            else repository.refreshed_attempt(db, attempt.id)
+        )
         return fresh or attempt
     claimed, lease_until = claim
     # Expired workers may still upload; isolate each claim's object so they
@@ -587,16 +799,30 @@ def _store_completed_video(
         if upload_path != claim_path:
             raise ValueError("Storage returned an unexpected video path.")
     except Exception as exc:
-        _set_storage_retry(db, claimed.id, lease_until)
+        _set_storage_retry(
+            db, claimed.id, lease_until, principal=principal, context=context,
+        )
         raise CompletionProcessingError(
             "Unable to download or store the completed HeyGen video."
         ) from exc
 
-    draft, current = repository.lock_attempt_for_update(
-        db,
-        claimed.id,
-        lock_draft=True,
-    )
+    if principal is not None:
+        if context is None:
+            raise TypeError("Authorized HeyGen updates require tenant context")
+        context = access.require_permission(
+            db, principal, context.business_id, Permission.GENERATE_MEDIA, lock=True,
+        )
+        draft, current = repository.lock_attempt_scoped(db, context, claimed.id)
+    elif context is not None:
+        if context.attempt_id != claimed.id:
+            raise TypeError("Trusted HeyGen context does not match the attempt")
+        draft, current = repository.lock_attempt_scoped(db, context, claimed.id)
+    else:
+        draft, current = repository.lock_attempt_for_update(
+            db,
+            claimed.id,
+            lock_draft=True,
+        )
     if (
         current is None
         or current.status != "COMPLETED"
@@ -607,9 +833,26 @@ def _store_completed_video(
         return current or claimed
 
     if _utc(lease_until) <= _now():
-        _set_storage_retry(db, current.id, lease_until)
+        _set_storage_retry(
+            db, current.id, lease_until, principal=principal, context=context,
+        )
         return current
-    if not _can_attach_video(db, draft, current):
+    if not _can_attach_video(db, draft, current, context):
+        if context is not None:
+            repository.update_attempt_scoped(
+                db,
+                context,
+                current.id,
+                expected_status="COMPLETED",
+                expected_updated_at=current.updated_at,
+                values={
+                    "storage_status": "FAILED",
+                    "completion_lease_until": None,
+                    "updated_at": _now(),
+                },
+            )
+            Transactions(db).commit()
+            return repository.get_attempt_scoped(db, context, current.id) or current
         current.storage_status = "FAILED"
         current.completion_lease_until = None
         current.updated_at = _now()
@@ -617,10 +860,44 @@ def _store_completed_video(
         transactions.commit()
         transactions.refresh(current)
         return current
+    now = _now()
+    if context is not None:
+        if not repository.update_attempt_scoped(
+            db,
+            context,
+            current.id,
+            expected_status="COMPLETED",
+            expected_updated_at=current.updated_at,
+            values={
+                "storage_status": "STORED",
+                "storage_path": claim_path,
+                "completion_lease_until": None,
+                "updated_at": now,
+            },
+        ):
+            Transactions(db).rollback()
+            return repository.get_attempt_scoped(db, context, current.id) or current
+        if not repository.update_draft_media_scoped(
+            db,
+            context,
+            draft.id,
+            expected_video_status=draft.video_status,
+            values={
+                "media_type": "video",
+                "video_url": claim_path,
+                "video_status": "completed",
+                "video_generation_id": current.provider_video_id,
+            },
+        ):
+            Transactions(db).rollback()
+            return repository.get_attempt_scoped(db, context, current.id) or current
+        Transactions(db).commit()
+        return repository.get_attempt_scoped(db, context, current.id) or current
+
     current.storage_status = "STORED"
     current.storage_path = claim_path
     current.completion_lease_until = None
-    current.updated_at = _now()
+    current.updated_at = now
     draft.media_type = "video"
     draft.video_url = claim_path
     draft.video_status = "completed"
@@ -636,6 +913,8 @@ def refresh_attempt_status(
     attempt: HeyGenGenerationAttempt,
     *,
     provider_video_id: str | None = None,
+    principal: AuthenticatedPrincipal | None = None,
+    context: TenantAccess | TrustedTenantContext | None = None,
 ) -> HeyGenGenerationAttempt:
     requested_video_id = attempt.provider_video_id or provider_video_id
     if not requested_video_id:
@@ -670,9 +949,13 @@ def refresh_attempt_status(
             expected_updated_at=attempt.updated_at,
             expected_lease_until=attempt.submission_lease_until,
             provider_video_id=requested_video_id,
+            principal=principal,
+            context=context,
         )
     if mapped_status == "COMPLETED":
-        attempt = _store_completed_video(db, attempt, resource)
+        attempt = _store_completed_video(
+            db, attempt, resource, principal=principal, context=context,
+        )
     return attempt
 
 
@@ -713,10 +996,14 @@ def _reconcile_webhook_delivery(
     if attempt is None:
         return None
 
+    context = repository.trusted_webhook_context_for_delivery(db, delivery, attempt)
+    if context is None:
+        return None
     attempt = refresh_attempt_status(
         db,
         attempt,
         provider_video_id=delivery.provider_video_id,
+        context=context,
     )
     if attempt.status in ("COMPLETED", "FAILED"):
         delivery.processed_at = _now()

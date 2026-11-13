@@ -1,4 +1,27 @@
 import httpx
+from sqlalchemy.orm import Session
+
+
+def register_asset(engine, asset_type, provider_asset_id, access_scope, business_id=None):
+    from app.models import Business, HeyGenAssetAccess
+
+    with Session(engine) as db:
+        assigned_by_user_id = None
+        if business_id is not None:
+            from tests.tenancy_fixtures import grant_test_owner
+
+            if db.get(Business, business_id) is None:
+                db.add(Business(id=business_id, name="Test business"))
+                db.flush()
+            assigned_by_user_id = grant_test_owner(db, [business_id]).user_id
+        db.add(HeyGenAssetAccess(
+            asset_type=asset_type,
+            provider_asset_id=provider_asset_id,
+            access_scope=access_scope,
+            business_id=business_id,
+            assigned_by_user_id=assigned_by_user_id,
+        ))
+        db.commit()
 
 
 def test_asset_endpoints_require_existing_authentication(isolated_client):
@@ -20,7 +43,8 @@ def test_paginated_avatar_looks_include_filters_and_metadata(
 ):
     from app.features.media import service
 
-    client, _ = isolated_client
+    client, engine = isolated_client
+    register_asset(engine, "avatar", "look-1", "business_private", "business-1")
     expected = {
         "data": [{
             "id": "look-1",
@@ -50,6 +74,7 @@ def test_paginated_avatar_looks_include_filters_and_metadata(
         params={
             "avatar_type": "photo_avatar",
             "ownership": "private",
+            "business_id": "business-1",
             "limit": 1,
             "token": "prior-page",
         },
@@ -70,7 +95,8 @@ def test_paginated_voice_listing_preserves_metadata_and_cursor(
 ):
     from app.features.media import service
 
-    client, _ = isolated_client
+    client, engine = isolated_client
+    register_asset(engine, "voice", "voice-1", "platform_stock")
     expected = {
         "data": [{
             "voice_id": "voice-1",
@@ -132,7 +158,9 @@ def test_legacy_avatar_and_voice_routes_keep_list_responses(
 ):
     from app.features.media import service
 
-    client, _ = isolated_client
+    client, engine = isolated_client
+    register_asset(engine, "avatar", "look-1", "platform_stock")
+    register_asset(engine, "voice", "voice-1", "platform_stock")
     monkeypatch.setattr(
         service,
         "legacy_avatar_looks",
@@ -270,8 +298,8 @@ def test_provider_errors_return_gateway_response(isolated_client, monkeypatch):
         ),
     )
 
-    assert client.get("/heygen/assets/avatars").status_code == 502
-    assert client.get("/heygen/assets/voices").status_code == 502
+    assert client.get("/heygen/assets/avatars?ownership=public").status_code == 502
+    assert client.get("/heygen/assets/voices?type=public").status_code == 502
 
 
 def test_legacy_voice_service_collects_all_v3_pages(monkeypatch):

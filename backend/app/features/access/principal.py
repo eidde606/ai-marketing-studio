@@ -37,3 +37,12 @@ class TenantAccess:
     business_id: str
     membership_id: str
     role: str
+
+
+@dataclass(frozen=True)
+class TrustedTenantContext:
+    """Tenant scope resolved from a persisted, authenticated system job."""
+
+    business_id: str
+    attempt_id: str
+    delivery_id: str

@@ -131,6 +131,7 @@ async def publish_draft(
             signed_url = get_marketing_image_url(
                 draft.video_url,
                 expires_in=3600,
+                context=context,
             )
         except Exception as exc:
             Transactions(db).rollback()

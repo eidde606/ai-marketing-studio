@@ -7,7 +7,7 @@ No implicit tenant, Session.info fallback, ORM event, or allowlist-derived scope
 from sqlalchemy import select
 from sqlalchemy.orm import Session, raiseload
 
-from app.features.access.principal import TenantAccess
+from app.features.access.principal import TenantAccess, TrustedTenantContext
 from app.models import (
     Business, Campaign, Conversation, ConversationMessage, Draft,
     FacebookOAuthState, HeyGenGenerationAttempt, ImageRevision,
@@ -19,10 +19,10 @@ _DIRECT = frozenset({Campaign, Conversation, Draft, FacebookOAuthState,
                      TikTokOAuthState})
 
 
-def business_id(context: TenantAccess) -> str:
-    if (not isinstance(context, TenantAccess)
+def business_id(context: TenantAccess | TrustedTenantContext) -> str:
+    if (not isinstance(context, (TenantAccess, TrustedTenantContext))
             or not isinstance(context.business_id, str) or not context.business_id.strip()):
-        raise TypeError("An explicit TenantAccess from the application service is required")
+        raise TypeError("An explicit user or trusted-job tenant context is required")
     return context.business_id
 
 

@@ -20,6 +20,13 @@ OAUTH_BOOTSTRAP_LOOKUPS = {
     "app.features.tiktok.service:complete_authorization -> app.features.tiktok.repository.oauth_state_identity": 1,
 }
 
+TRUSTED_MEDIA_LOOKUPS = {
+    # These are exact, metadata-only bootstrap operations: platform stock is
+    # explicitly shared, and webhook scope is derived from persisted records.
+    "app.features.media.asset_access_service:list_accessible_asset_ids -> app.features.media.repository.list_platform_stock_heygen_asset_ids": 1,
+    "app.features.media.generation_service:_reconcile_webhook_delivery -> app.features.media.repository.trusted_webhook_context_for_delivery": 1,
+}
+
 
 def legacy_calls():
     calls = Counter()
@@ -50,7 +57,7 @@ def test_legacy_repository_call_inventory_does_not_grow():
     # Exact function/callee/count, not a blanket exemption for an entire module.
     # Remove entries as callers migrate. New edges require a deliberate review.
     actual = legacy_calls()
-    for call, count in OAUTH_BOOTSTRAP_LOOKUPS.items():
+    for call, count in (OAUTH_BOOTSTRAP_LOOKUPS | TRUSTED_MEDIA_LOOKUPS).items():
         assert actual.pop(call, None) == count
     assert actual == json.loads(MANIFEST.read_text())
 
@@ -77,8 +84,6 @@ def test_services_cannot_import_persistence_helpers():
 def test_unscoped_draft_helpers_are_reserved_for_deferred_media():
     allowed = {
         ("features/drafts/service.py", "require_pending_draft", "require_draft"),
-        ("features/media/workflows_service.py", "_draft", "require_draft"),
-        ("features/media/workflows_service.py", "_pending_draft", "require_pending_draft"),
     }
     actual = set()
     for path in (APP_ROOT / "features").rglob("*.py"):

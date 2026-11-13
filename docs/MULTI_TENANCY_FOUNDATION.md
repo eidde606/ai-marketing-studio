@@ -108,6 +108,32 @@ only for empty/disposable schemas or an explicitly reviewed recovery plan. It do
 not delete existing businesses/drafts. Do not downgrade a populated production
 identity schema without a backup and explicit approval.
 
+### Local database recovery and ownership provisioning
+
+Before any database change, confirm that the configured `DATABASE_URL` is the
+intended non-production target. Record its redacted host/database identity, run
+read-only `alembic current` and `alembic heads`, and inspect counts/IDs for
+`businesses`, `drafts`, `app_users`, and `business_memberships`. Never infer the
+database identity from a developer's shell or copy production credentials into a
+local environment.
+
+After separate approval, take and verify a restorable backup, then upgrade the
+confirmed target to the reviewed Alembic head. The existing additive identity
+migration creates `app_users` and `business_memberships` without populating
+either table; the HeyGen asset migration likewise creates an empty access
+registry. Neither migration assigns business ownership or classifies provider
+assets.
+
+Initial ownership must use a reviewed manifest mapping each exact business ID
+to a verified auth issuer/subject and explicit `owner` role. Confirm that the
+identity corresponds to the still-enforced `ALLOWED_USER_ID`, resolve or reject
+businesses with missing/ambiguous ownership, and separately identify drafts
+with null or invalid business IDs. Provision one application user per verified
+identity, then the approved active membership rows. Validate all foreign keys
+and that each in-scope business has exactly one intended active Owner before
+enabling application traffic. Do not use email matching, create default
+ownership, or backfill HeyGen stock/private asset records automatically.
+
 ## Deferred work
 
 Slice 2 requires separate approval: integrate verified identities and membership

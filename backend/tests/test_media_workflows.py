@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Business, Draft, ImageRevision
+from tests.tenancy_fixtures import grant_test_owner
 
 
 @pytest.fixture
@@ -15,6 +16,7 @@ def media_case(isolated_client):
         business = Business(name="Media workflow business")
         db.add(business)
         db.flush()
+        grant_test_owner(db, [business.id])
         draft = Draft(
             business_id=business.id,
             title="Media draft",
@@ -141,7 +143,9 @@ def test_video_preview_only_returns_signed_url_for_valid_private_path(
     sign.assert_called_once_with(
         f"businesses/{case.business_id}/manual.mp4",
         expires_in=900,
+        context=sign.call_args.kwargs["context"],
     )
+    assert sign.call_args.kwargs["context"].business_id == case.business_id
 
 
 def test_video_preview_rejects_incomplete_or_cross_business_path(media_case):
@@ -188,7 +192,64 @@ def test_image_generation_saves_completed_private_storage_path(
     assert saved_draft(case).image_url == (
         f"businesses/{case.business_id}/generated.png"
     )
-    sign.assert_called_once_with(f"businesses/{case.business_id}/generated.png")
+    sign.assert_called_once_with(
+        f"businesses/{case.business_id}/generated.png",
+        context=sign.call_args.kwargs["context"],
+    )
+    assert sign.call_args.kwargs["context"].business_id == case.business_id
+
+
+def test_membership_revocation_during_image_generation_prevents_result_persistence(
+    media_case, monkeypatch,
+):
+    from app.auth import SUPABASE_ISSUER, get_authenticated_principal
+    from app.features.access.principal import AuthenticatedPrincipal
+    from app.main import app
+    from app.models import BusinessMembership, User
+
+    case = media_case
+    with Session(case.engine) as db:
+        user = User(
+            auth_issuer=SUPABASE_ISSUER,
+            auth_subject="revoked-image-user",
+        )
+        db.add(user)
+        db.flush()
+        membership = BusinessMembership(
+            business_id=case.business_id,
+            user_id=user.id,
+            role="member",
+            status="active",
+        )
+        db.add(membership)
+        db.commit()
+        principal = AuthenticatedPrincipal(
+            SUPABASE_ISSUER, user.auth_subject, user.id,
+        )
+        membership_id = membership.id
+
+    previous = app.dependency_overrides[get_authenticated_principal]
+    app.dependency_overrides[get_authenticated_principal] = lambda: principal
+
+    def revoke_then_return(**_kwargs):
+        with Session(case.engine) as db:
+            db.get(BusinessMembership, membership_id).status = "revoked"
+            db.commit()
+        return f"businesses/{case.business_id}/generated.png"
+
+    monkeypatch.setattr(
+        "app.features.media.workflows_service.generate_marketing_image",
+        revoke_then_return,
+    )
+    try:
+        response = case.client.post(f"/drafts/{case.draft_id}/generate-image")
+    finally:
+        app.dependency_overrides[get_authenticated_principal] = previous
+
+    assert response.status_code == 404
+    draft = saved_draft(case)
+    assert draft.image_status == "failed"
+    assert draft.image_url is None
 
 
 def test_image_generation_failure_marks_attempt_failed(
@@ -246,6 +307,10 @@ def image_revision_case(media_case, monkeypatch):
     monkeypatch.setattr(
         "app.features.media.repository.lock_draft_revisions",
         lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        "app.features.media.repository.lock_draft_revisions_scoped",
+        lambda *_args: True,
     )
     monkeypatch.setattr(
         "app.features.media.workflows_service.download_marketing_image",
