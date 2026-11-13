@@ -48,7 +48,6 @@ from app.storage_service import (
     get_storage_client,
     upload_marketing_video,
 )
-from app.tiktok_auth_routes import router as tiktok_auth_router
 from app.tiktok_service import (
     get_creator_info,
     get_tiktok_publish_status,
@@ -57,6 +56,7 @@ from app.tiktok_service import (
     publish_tiktok_video_file,
 )
 from app.tiktok_oauth import refresh_tiktok_token
+from app.features.tiktok.routes import router as tiktok_auth_router
 from app.token_service import decrypt_token, encrypt_token
 
 app = FastAPI()

@@ -11,7 +11,7 @@ contract, deployment or production changes are part of this work.
 4. Instagram: service-owned connection policy and transaction boundaries.
 5. Sofía/Leo: characterize conversation persistence/failures, then extract workflows.
 6. Analytics: preserve business-scoped account lookup, provider error handling and response contracts.
-7. Facebook/TikTok OAuth and token refresh: characterize state/handoff/account contracts.
+7. Facebook OAuth: characterize the multi-stage state/handoff/page-selection contract.
 8. Facebook/TikTok publishing: retain reservations, uncertain outcomes and verification.
 9. Images/revisions/manual video: preserve advisory locks and cross-media reservations.
 10. HeyGen: preserve attempts, idempotency, leases, webhook deduplication and reconciliation.
@@ -67,6 +67,12 @@ than redesigning concurrency or fixing product semantics during extraction.
   Published-post eligibility, business-scoped connected-account lookup,
   provider error mapping, and response shapes remain unchanged. Baseline and
   post-extraction focused suites each passed 23 tests.
+- TikTok OAuth/account listing: characterization tests passed before extraction.
+  The feature now owns its routes, service workflow, SQL repository and provider
+  adapter; state hashing/expiry and its consume-and-commit-before-provider-call
+  ordering remain unchanged. Legacy route/provider modules are compatibility
+  imports. Publishing and the `main.py` token-refresh orchestration remain
+  outside this slice.
 
 `test_closed_layers.py` additionally rejects direct session operations in feature
 routes/services, HTTPException construction in feature services, and commits or
