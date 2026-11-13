@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.errors import ApplicationError, ErrorKind
 from app.models import SocialAccount, TikTokOAuthState
-from app.token_service import encrypt_token
+from app.token_service import decrypt_token, encrypt_token
 from app.transactions import Transactions
 from . import provider, repository
 
@@ -119,3 +119,43 @@ def list_accounts(business_id: str, *, db: Session) -> dict[str, list[dict[str, 
             for account in accounts
         ]
     }
+
+
+async def get_valid_access_token(
+    account: SocialAccount,
+    *,
+    db: Session,
+) -> str:
+    now = datetime.now(timezone.utc)
+    expires_at = account.token_expires_at
+
+    if expires_at is not None:
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at > now + timedelta(minutes=5):
+            return decrypt_token(account.encrypted_access_token)
+
+    if not account.encrypted_refresh_token:
+        raise ApplicationError(
+            ErrorKind.CONFLICT,
+            "Reconnect your TikTok account",
+        )
+
+    try:
+        tokens = await provider.refresh_tiktok_token(
+            decrypt_token(account.encrypted_refresh_token),
+        )
+    except (httpx.HTTPError, ValueError, KeyError):
+        raise ApplicationError(
+            ErrorKind.CONFLICT,
+            "TikTok authorization expired. Reconnect TikTok.",
+        ) from None
+
+    repository.save_refreshed_credentials(
+        account,
+        encrypted_access_token=encrypt_token(tokens["access_token"]),
+        encrypted_refresh_token=encrypt_token(tokens["refresh_token"]),
+        token_expires_at=now + timedelta(seconds=int(tokens["expires_in"])),
+    )
+    Transactions(db).commit()
+    return tokens["access_token"]

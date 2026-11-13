@@ -25,6 +25,9 @@ from app.features.drafts.routes import router as draft_router
 from app.features.drafts.routes import draft_http_exception
 from app.features.drafts import service as draft_service
 from app.features.analytics.routes import router as analytics_router
+from app.features.tiktok import service as tiktok_oauth_service
+from app.errors import ApplicationError
+from app.http_errors import http_error
 from app.features.instagram.routes import (
     InstagramCallbackAccessLogRedactionMiddleware,
     router as instagram_auth_router,
@@ -55,7 +58,6 @@ from app.tiktok_service import (
     publish_tiktok_video,
     publish_tiktok_video_file,
 )
-from app.tiktok_oauth import refresh_tiktok_token
 from app.features.tiktok.routes import router as tiktok_auth_router
 from app.token_service import decrypt_token, encrypt_token
 
@@ -107,42 +109,13 @@ async def get_valid_tiktok_token(
         account: SocialAccount,
         db: Session,
 ) -> str:
-    now = datetime.now(timezone.utc)
-
-    expires_at = account.token_expires_at
-
-    if expires_at is not None:
-        if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=timezone.utc)
-
-        if expires_at > now + timedelta(minutes=5):
-            return decrypt_token(account.encrypted_access_token)
-
-    if not account.encrypted_refresh_token:
-        raise HTTPException(
-            status_code=409,
-            detail="Reconnect your TikTok account",
-        )
-
     try:
-        tokens = await refresh_tiktok_token(
-            decrypt_token(account.encrypted_refresh_token)
+        return await tiktok_oauth_service.get_valid_access_token(
+            account,
+            db=db,
         )
-    except (httpx.HTTPError, ValueError, KeyError):
-        raise HTTPException(
-            status_code=409,
-            detail="TikTok authorization expired. Reconnect TikTok.",
-        ) from None
-
-    account.encrypted_access_token = encrypt_token(tokens["access_token"])
-    account.encrypted_refresh_token = encrypt_token(tokens["refresh_token"])
-    account.token_expires_at = now + timedelta(
-        seconds=int(tokens["expires_in"])
-    )
-
-    db.commit()
-
-    return tokens["access_token"]
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
 
 
 # Compatibility wrapper for legacy handlers; remove when those handlers are extracted.

@@ -80,6 +80,11 @@ than redesigning concurrency or fixing product semantics during extraction.
   routes, schemas, service, repository and provider adapter. Facebook login
   configuration, callback URI, provider calls, Page-selection lock, and commit
   boundaries are unchanged; legacy root modules re-export feature entry points.
+- TikTok token refresh: the five-minute expiry window, encrypted credential
+  handling, refresh-token rotation, persistence commit and existing reconnect
+  errors now live in the TikTok service/repository. The `main.py` helper only
+  translates application errors for legacy publishing and verification routes;
+  those publishing workflows remain the next slice.
 
 `test_closed_layers.py` additionally rejects direct session operations in feature
 routes/services, HTTPException construction in feature services, and commits or

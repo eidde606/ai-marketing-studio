@@ -49,6 +49,18 @@ def add_account(db: Session, account: SocialAccount) -> None:
     db.add(account)
 
 
+def save_refreshed_credentials(
+    account: SocialAccount,
+    *,
+    encrypted_access_token: str,
+    encrypted_refresh_token: str,
+    token_expires_at: datetime,
+) -> None:
+    account.encrypted_access_token = encrypted_access_token
+    account.encrypted_refresh_token = encrypted_refresh_token
+    account.token_expires_at = token_expires_at
+
+
 def list_accounts(db: Session, business_id: str) -> list[SocialAccount]:
     return db.scalars(
         select(SocialAccount).where(
