@@ -50,7 +50,7 @@ def isolated_client():
     from sqlalchemy.orm import Session
     from sqlalchemy.pool import StaticPool
 
-    from app.auth import verify_token
+    from app.auth import verify_token, get_authenticated_principal
     from app.database import get_db
     from app.main import app
     from app.models import Base
@@ -64,6 +64,10 @@ def isolated_client():
         connection.execute("PRAGMA foreign_keys=ON")
 
     Base.metadata.create_all(engine)
+    from tests.tenancy_fixtures import grant_test_owner
+    with Session(engine) as db:
+        principal = grant_test_owner(db)
+        db.commit()
 
     def override_db():
         with Session(engine) as db:
@@ -71,6 +75,7 @@ def isolated_client():
 
     previous_overrides = app.dependency_overrides.copy()
     app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_authenticated_principal] = lambda: principal
     app.dependency_overrides[verify_token] = lambda: {"sub": "test-authorized-user"}
     try:
         with TestClient(app) as client:

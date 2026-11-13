@@ -123,3 +123,16 @@ def update_campaign_scoped(db: Session, context: TenantAccess, campaign_id: str,
     return db.execute(update(Campaign).where(
         tenant.predicate(Campaign, context), Campaign.id == campaign_id,
     ).values(**values).returning(Campaign.id)).scalar_one_or_none() is not None
+
+
+def lock_campaign_scoped(db: Session, context: TenantAccess, campaign_id: str):
+    return tenant.get(db, context, Campaign, campaign_id, lock=True)
+
+
+def lock_campaign_drafts_scoped(db: Session, context: TenantAccess, campaign_id: str):
+    return db.scalars(tenant.selection(Draft, context).where(Draft.campaign_id == campaign_id)
+                      .order_by(Draft.id).with_for_update()).all()
+
+
+def lock_association_draft_scoped(db: Session, context: TenantAccess, draft_id: str):
+    return tenant.get(db, context, Draft, draft_id, lock=True)

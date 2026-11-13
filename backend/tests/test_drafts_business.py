@@ -185,6 +185,8 @@ def test_deleted_published_drafts_only_appear_in_history(isolated_client):
             facebook_post_id="page-post",
         )
         db.add(draft)
+        from tests.tenancy_fixtures import grant_test_owner
+        grant_test_owner(db, [business.id])
         db.commit()
         engine_business_id = business.id
         draft_id = draft.id

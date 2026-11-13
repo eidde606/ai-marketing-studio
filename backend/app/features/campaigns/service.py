@@ -5,7 +5,10 @@ from enum import Enum
 from sqlalchemy.orm import Session
 
 from app.models import Campaign, Draft
-from app.transactions import Transactions
+from app.features.access.principal import AuthenticatedPrincipal
+from app.features.access.permissions import Permission
+from app.features.access.service import require_permission
+from app.transactions import Transactions, rollback_on_failure
 from . import repository
 from .schemas import (
     CampaignCreate,
@@ -28,18 +31,6 @@ class CampaignError(Exception):
         super().__init__(detail)
         self.kind = kind
         self.detail = detail
-
-
-def require_business(db: Session, business_id: str) -> None:
-    if repository.find_business(db, business_id) is None:
-        raise CampaignError(CampaignErrorKind.NOT_FOUND, "Negocio no encontrado.")
-
-
-def require_campaign(db: Session, business_id: str, campaign_id: str) -> Campaign:
-    campaign = repository.find_campaign(db, business_id, campaign_id)
-    if campaign is None:
-        raise CampaignError(CampaignErrorKind.NOT_FOUND, "Campaña no encontrada para este negocio.")
-    return campaign
 
 
 def validate_dates(start_date: date | None, end_date: date | None) -> None:
@@ -94,67 +85,92 @@ def campaign_response(campaign: Campaign) -> CampaignResponse:
     }
 
 
-def list_campaigns(business_id: str, db: Session) -> list[CampaignResponse]:
-    require_business(db, business_id)
-    campaigns = repository.list_campaigns(db, business_id)
-    return [campaign_response(campaign) for campaign in campaigns]
+def _campaign(db, context, campaign_id):
+    campaign = repository.find_campaign_scoped(db, context, campaign_id)
+    if campaign is None:
+        raise CampaignError(CampaignErrorKind.NOT_FOUND, "Campaña no encontrada para este negocio.")
+    return campaign
 
 
-def create_campaign(
-    business_id: str, request: CampaignCreate, db: Session,
-) -> CampaignResponse:
-    require_business(db, business_id)
+def _lock_campaign(db, principal, business_id, campaign_id):
+    context = require_permission(db, principal, business_id, Permission.MANAGE_CAMPAIGNS)
+    campaign = repository.lock_campaign_scoped(db, context, campaign_id)
+    context = require_permission(db, principal, business_id, Permission.MANAGE_CAMPAIGNS)
+    if campaign is None:
+        raise CampaignError(CampaignErrorKind.NOT_FOUND, "Campaña no encontrada para este negocio.")
+    return context, campaign
+
+
+def _response(db, principal, business_id, campaign_id):
+    context = require_permission(db, principal, business_id, Permission.READ)
+    return campaign_response(_campaign(db, context, campaign_id))
+
+
+def list_campaigns(business_id: str, db: Session, *, principal: AuthenticatedPrincipal) -> list[CampaignResponse]:
+    context = require_permission(db, principal, business_id, Permission.READ)
+    result = []
+    while True:
+        page = repository.list_campaigns_scoped(db, context, limit=100, offset=len(result))
+        result.extend(campaign_response(c) for c in page)
+        if len(page) < 100:
+            return result
+
+
+@rollback_on_failure
+def create_campaign(business_id: str, request: CampaignCreate, db: Session, *,
+                    principal: AuthenticatedPrincipal) -> CampaignResponse:
+    context = require_permission(db, principal, business_id, Permission.MANAGE_CAMPAIGNS)
     validate_dates(request.start_date, request.end_date)
-    campaign = Campaign(business_id=business_id, **request.model_dump())
-    repository.add_campaign(db, campaign)
+    campaign_id = repository.add_campaign_scoped(db, context, Campaign(business_id=business_id, **request.model_dump()))
+    require_permission(db, principal, business_id, Permission.MANAGE_CAMPAIGNS)
     Transactions(db).commit()
-    Transactions(db).refresh(campaign)
-    return campaign_response(campaign)
+    return _response(db, principal, business_id, campaign_id)
 
 
-def get_campaign(business_id: str, campaign_id: str, db: Session) -> CampaignResponse:
-    return campaign_response(require_campaign(db, business_id, campaign_id))
+def get_campaign(business_id: str, campaign_id: str, db: Session, *, principal: AuthenticatedPrincipal) -> CampaignResponse:
+    return _response(db, principal, business_id, campaign_id)
 
 
-def update_campaign(
-    business_id: str, campaign_id: str, request: CampaignUpdate, db: Session,
-) -> CampaignResponse:
-    campaign = require_campaign(db, business_id, campaign_id)
+@rollback_on_failure
+def update_campaign(business_id: str, campaign_id: str, request: CampaignUpdate, db: Session, *,
+                    principal: AuthenticatedPrincipal) -> CampaignResponse:
+    context, campaign = _lock_campaign(db, principal, business_id, campaign_id)
     changes = request.model_dump(exclude_unset=True)
-    validate_dates(
-        changes.get("start_date", campaign.start_date),
-        changes.get("end_date", campaign.end_date),
-    )
-    for key, value in changes.items():
-        setattr(campaign, key, value)
+    validate_dates(changes.get("start_date", campaign.start_date), changes.get("end_date", campaign.end_date))
+    if changes:
+        repository.update_campaign_scoped(db, context, campaign_id, changes)
+    require_permission(db, principal, business_id, Permission.MANAGE_CAMPAIGNS)
     Transactions(db).commit()
-    Transactions(db).refresh(campaign)
-    return campaign_response(campaign)
+    return _response(db, principal, business_id, campaign_id)
 
 
-def delete_campaign(business_id: str, campaign_id: str, db: Session) -> dict[str, str]:
-    campaign = require_campaign(db, business_id, campaign_id)
-    repository.delete_campaign(db, business_id, campaign)
+@rollback_on_failure
+def delete_campaign(business_id: str, campaign_id: str, db: Session, *, principal: AuthenticatedPrincipal) -> dict[str, str]:
+    context, _ = _lock_campaign(db, principal, business_id, campaign_id)
+    # Parent first, then drafts in stable order; reauthorize after all lock waits.
+    repository.lock_campaign_drafts_scoped(db, context, campaign_id)
+    context = require_permission(db, principal, business_id, Permission.MANAGE_CAMPAIGNS)
+    repository.delete_campaign_scoped(db, context, campaign_id)
+    require_permission(db, principal, business_id, Permission.MANAGE_CAMPAIGNS)
     Transactions(db).commit()
     return {"message": "Campaña eliminada correctamente."}
 
 
-def change_association(
-    db: Session, business_id: str, campaign_id: str, draft_id: str, attach: bool,
-) -> CampaignResponse:
-    campaign = require_campaign(db, business_id, campaign_id)
-    # Serialize association changes with existing draft edits and soft deletion.
-    draft = repository.lock_draft(db, business_id, draft_id)
+@rollback_on_failure
+def change_association(db: Session, business_id: str, campaign_id: str, draft_id: str, attach: bool, *,
+                       principal: AuthenticatedPrincipal) -> CampaignResponse:
+    context, campaign = _lock_campaign(db, principal, business_id, campaign_id)
+    draft = repository.lock_association_draft_scoped(db, context, draft_id)
+    context = require_permission(db, principal, business_id, Permission.MANAGE_CAMPAIGNS)
     if draft is None or (attach and draft.deleted_at is not None):
         raise CampaignError(CampaignErrorKind.NOT_FOUND, "Contenido no encontrado para este negocio.")
     if attach and draft.campaign_id not in (None, campaign.id):
-        raise CampaignError(
-            CampaignErrorKind.ASSOCIATION_CONFLICT, "Desvincula el contenido de su campaña actual antes de asociarlo.",
-        )
+        raise CampaignError(CampaignErrorKind.ASSOCIATION_CONFLICT, "Desvincula el contenido de su campaña actual antes de asociarlo.")
     if not attach and draft.campaign_id != campaign.id:
         raise CampaignError(CampaignErrorKind.NOT_FOUND, "El contenido no pertenece a esta campaña.")
-    draft.campaign_id = campaign.id if attach else None
-    campaign.updated_at = datetime.now(timezone.utc)
+    if not repository.change_association_scoped(db, context, campaign_id, draft_id, attach=attach):
+        raise CampaignError(CampaignErrorKind.NOT_FOUND, "Contenido no encontrado para este negocio.")
+    repository.update_campaign_scoped(db, context, campaign_id, {"updated_at": datetime.now(timezone.utc)})
+    require_permission(db, principal, business_id, Permission.MANAGE_CAMPAIGNS)
     Transactions(db).commit()
-    Transactions(db).refresh(campaign)
-    return campaign_response(campaign)
+    return _response(db, principal, business_id, campaign_id)

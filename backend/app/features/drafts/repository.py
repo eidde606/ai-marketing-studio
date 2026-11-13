@@ -102,10 +102,11 @@ def get_draft_scoped(db: Session, context: TenantAccess, draft_id: str, *, inclu
     return db.scalar(statement)
 
 
-def lock_draft_scoped(db: Session, context: TenantAccess, draft_id: str):
-    return db.scalar(tenant.selection(Draft, context).where(
-        Draft.id == draft_id, Draft.deleted_at.is_(None),
-    ).with_for_update().execution_options(populate_existing=True))
+def lock_draft_scoped(db: Session, context: TenantAccess, draft_id: str, *, include_deleted=False):
+    statement = tenant.selection(Draft, context).where(Draft.id == draft_id)
+    if not include_deleted:
+        statement = statement.where(Draft.deleted_at.is_(None))
+    return db.scalar(statement.with_for_update().execution_options(populate_existing=True))
 
 
 def list_drafts_scoped(db: Session, context: TenantAccess, *, include_deleted_published=False,
@@ -139,3 +140,7 @@ def add_draft_scoped(db: Session, context: TenantAccess, record: Draft):
     if not isinstance(record, Draft):
         raise TypeError("Expected Draft")
     return tenant.insert_record(db, context, record)
+
+
+def connected_platforms_scoped(db: Session, context: TenantAccess, platforms: list[str]) -> set[str]:
+    return connected_platforms(db, tenant.business_id(context), platforms)

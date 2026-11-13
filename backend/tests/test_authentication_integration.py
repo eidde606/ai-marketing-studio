@@ -71,6 +71,12 @@ def auth_client(isolated_client):
     client, engine = isolated_client
     # Exercise the production dependency chain instead of the legacy test override.
     client.app.dependency_overrides.pop(auth.verify_token)
+    client.app.dependency_overrides.pop(auth.get_authenticated_principal)
+    # This security suite provisions each identity explicitly (including absence).
+    from sqlalchemy import delete
+    with Session(engine) as db:
+        db.execute(delete(User))
+        db.commit()
     return client, engine
 
 
@@ -202,9 +208,9 @@ def test_existing_business_response_contract(auth_client, signed_token):
     response = client.get("/businesses", headers=headers(signed_token()))
     assert response.status_code == 200
     assert response.json() == [created.json()]
-    # Business workflow changes/atomic owner creation belong to later slices.
+    # Only the newly created business receives an owner membership.
     with Session(engine) as db:
-        assert db.scalar(select(func.count()).select_from(BusinessMembership)) == 0
+        assert db.scalar(select(func.count()).select_from(BusinessMembership)) == 1
 
 
 @pytest.mark.parametrize("status", [None, "suspended", "revoked"])

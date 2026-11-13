@@ -57,3 +57,22 @@ def test_services_cannot_import_persistence_helpers():
                 assert not (node.module or "").startswith("app.persistence"), path
             elif isinstance(node, ast.Import):
                 assert all(not a.name.startswith("app.persistence") for a in node.names), path
+
+
+def test_unscoped_draft_helpers_are_reserved_for_deferred_media():
+    allowed = {
+        ("features/drafts/service.py", "require_pending_draft", "require_draft"),
+        ("features/media/workflows_service.py", "_draft", "require_draft"),
+        ("features/media/workflows_service.py", "_pending_draft", "require_pending_draft"),
+    }
+    actual = set()
+    for path in (APP_ROOT / "features").rglob("*.py"):
+        for function in ast.parse(path.read_text()).body:
+            if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for call in (n for n in ast.walk(function) if isinstance(n, ast.Call)):
+                name = (call.func.attr if isinstance(call.func, ast.Attribute)
+                        else call.func.id if isinstance(call.func, ast.Name) else None)
+                if name in {"require_draft", "require_pending_draft"}:
+                    actual.add((str(path.relative_to(APP_ROOT)), function.name, name))
+    assert actual == allowed

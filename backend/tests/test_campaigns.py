@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from app import auth
-from app.auth import verify_token
+from app.auth import verify_token, get_authenticated_principal
+from tests.tenancy_fixtures import grant_test_owner
 from app.database import get_db
 from app.main import app
 from app.models import Base, Business, Campaign, Draft, User
@@ -32,12 +33,15 @@ def campaign_client():
         db.commit()
         business_ids = [b.id for b in businesses]
         draft_ids = [d.id for d in drafts]
+        principal = grant_test_owner(db, business_ids, subject="test")
+        db.commit()
 
     def override_db():
         with Session(engine) as db:
             yield db
 
     app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_authenticated_principal] = lambda: principal
     app.dependency_overrides[verify_token] = lambda: {"sub": "test"}
     try:
         with TestClient(app) as client:
@@ -268,6 +272,7 @@ def test_all_campaign_endpoints_require_auth(campaign_client, monkeypatch):
     root = f'/businesses/{businesses[0]}/campaigns'
     detail = f'{root}/{campaign["id"]}'
     del app.dependency_overrides[verify_token]
+    del app.dependency_overrides[get_authenticated_principal]
     operations = [
         ("GET", root, None), ("POST", root, {"name": "Test", "objective": "Test"}),
         ("GET", detail, None), ("PATCH", detail, {"status": "active"}),
@@ -285,7 +290,7 @@ def test_all_campaign_endpoints_require_auth(campaign_client, monkeypatch):
     })
     assert client.get(root, headers={"Authorization": "Bearer fake"}).status_code == 403
     with Session(engine) as db:
-        db.add(User(auth_issuer=auth.SUPABASE_ISSUER, auth_subject=auth.ALLOWED_USER_ID))
+        grant_test_owner(db, businesses)
         db.commit()
     assert client.get(root, headers={"Authorization": "Bearer fake"}).status_code == 200
 
