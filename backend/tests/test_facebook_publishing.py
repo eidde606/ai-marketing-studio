@@ -6,6 +6,8 @@ import httpx
 import pytest
 from sqlalchemy.orm import Session
 
+from app.auth import verify_token
+from app.main import app
 from app.models import Business, Draft, SocialAccount
 
 
@@ -34,12 +36,22 @@ def publishing_case(isolated_client, monkeypatch):
         for media in ("text", "image", "video")
     }
     for media, publisher in publishers.items():
-        monkeypatch.setattr(f"app.main.publish_{media}_post", publisher)
-    monkeypatch.setattr("app.main.decrypt_token", lambda _: "fake_token")
-    download = Mock(return_value=b"\x89PNG\r\n\x1a\nmock-image")
-    monkeypatch.setattr("app.main.download_marketing_image", download)
+        monkeypatch.setattr(
+            f"app.features.facebook.publishing_service.publish_{media}_post",
+            publisher,
+        )
     monkeypatch.setattr(
-        "app.main.get_marketing_image_url", Mock(return_value="https://media.test.invalid/video.mp4"),
+        "app.features.facebook.publishing_service.decrypt_token",
+        lambda _: "fake_token",
+    )
+    download = Mock(return_value=b"\x89PNG\r\n\x1a\nmock-image")
+    monkeypatch.setattr(
+        "app.features.facebook.publishing_service.download_marketing_image",
+        download,
+    )
+    monkeypatch.setattr(
+        "app.features.facebook.publishing_service.get_marketing_image_url",
+        Mock(return_value="https://media.test.invalid/video.mp4"),
     )
     return SimpleNamespace(
         client=client, engine=engine, draft_id=draft_id, business_id=business_id,
@@ -204,7 +216,10 @@ def test_video_submission_is_processing_until_verified(publishing_case, monkeypa
         {"status": {"video_status": "processing"}},
         {"status": {"video_status": "ready"}},
     ])
-    monkeypatch.setattr("app.main.get_facebook_video_status", status)
+    monkeypatch.setattr(
+        "app.features.facebook.publishing_service.get_video_status",
+        status,
+    )
     url = f"/drafts/{case.draft_id}/verify-facebook-video"
     assert case.client.post(url).json()["status"] == "processing"
     assert_saved_state(case, "needs_review", "fake_post_123")
@@ -216,3 +231,45 @@ def test_video_submission_is_processing_until_verified(publishing_case, monkeypa
     # Verification is idempotent once confirmed, too.
     assert case.client.post(url).json()["status"] == "published"
     assert status.await_count == 2
+
+
+def test_facebook_manual_reset_requires_confirmation_and_review_state(
+    publishing_case,
+):
+    case = publishing_case
+    with Session(case.engine) as db:
+        draft = db.get(Draft, case.draft_id)
+        draft.facebook_publish_status = "needs_review"
+        db.commit()
+    url = f"/drafts/{case.draft_id}/reset-facebook-publishing"
+
+    unconfirmed = case.client.post(
+        url,
+        json={"confirmed_not_published": False},
+    )
+    assert unconfirmed.status_code == 400
+    assert unconfirmed.json() == {
+        "detail": "Confirm the post is absent on Facebook",
+    }
+    assert_saved_state(case, "needs_review")
+
+    confirmed = case.client.post(
+        url,
+        json={"confirmed_not_published": True},
+    )
+    assert confirmed.status_code == 200
+    assert confirmed.json() == {"status": "not_published"}
+    assert_saved_state(case, "not_published")
+    assert case.client.post(
+        url,
+        json={"confirmed_not_published": True},
+    ).status_code == 409
+
+
+def test_facebook_publishing_requires_authentication(publishing_case):
+    case = publishing_case
+    del app.dependency_overrides[verify_token]
+
+    response = case.client.post(case.url)
+
+    assert response.status_code == 401

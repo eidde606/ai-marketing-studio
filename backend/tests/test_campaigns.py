@@ -298,9 +298,15 @@ def test_existing_facebook_workflow_updates_campaign_progress(campaign_client, m
             account_name="Test page", encrypted_access_token="fake",
         ))
         db.commit()
-    monkeypatch.setattr("app.main.decrypt_token", lambda value: "fake")
+    monkeypatch.setattr(
+        "app.features.facebook.publishing_service.decrypt_token",
+        lambda value: "fake",
+    )
     publish = AsyncMock(return_value={"id": "confirmed-post"})
-    monkeypatch.setattr("app.main.publish_text_post", publish)
+    monkeypatch.setattr(
+        "app.features.facebook.publishing_service.publish_text_post",
+        publish,
+    )
     assert client.patch(f'/drafts/{drafts[0]}/approve').status_code == 200
     assert client.get(root).json()["progress"] == 0
     assert client.post(f'/drafts/{drafts[0]}/publish-facebook').status_code == 200

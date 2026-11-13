@@ -198,7 +198,7 @@ def test_heygen_409_in_flight_is_unknown_and_does_not_create_new_key(
     isolated_client, monkeypatch,
 ):
     from app.features.media import generation_service
-    from app.heygen_service import HeyGenRequestInProgress
+    from app.features.media.heygen_provider import HeyGenRequestInProgress
 
     client, engine = isolated_client
     create_draft(engine)
@@ -226,7 +226,7 @@ def test_provider_5xx_is_ambiguous_and_retains_attempt(
     isolated_client, monkeypatch,
 ):
     from app.features.media import generation_service
-    from app.heygen_service import HeyGenProviderError
+    from app.features.media.heygen_provider import HeyGenProviderError
 
     client, engine = isolated_client
     create_draft(engine)
@@ -257,7 +257,7 @@ def test_potentially_billable_provider_errors_never_open_a_new_attempt(
     isolated_client, monkeypatch, provider_error,
 ):
     from app.features.media import generation_service
-    from app.heygen_service import HeyGenProviderError
+    from app.features.media.heygen_provider import HeyGenProviderError
 
     client, engine = isolated_client
     create_draft(engine)
@@ -290,7 +290,7 @@ def test_definitive_provider_failure_releases_attempt_only_for_explicit_new_requ
     isolated_client, monkeypatch,
 ):
     from app.features.media import generation_service
-    from app.heygen_service import HeyGenProviderError
+    from app.features.media.heygen_provider import HeyGenProviderError
 
     client, engine = isolated_client
     create_draft(engine)
@@ -1070,12 +1070,12 @@ def test_manual_upload_remains_available_but_is_blocked_while_attempt_is_unknown
 def test_manual_mp4_upload_still_completes_draft_without_generation_attempt(
     isolated_client, monkeypatch,
 ):
-    from app import main
+    from app.features.media import workflows_service
 
     client, engine = isolated_client
     create_draft(engine)
     monkeypatch.setattr(
-        main,
+        workflows_service,
         "upload_marketing_video",
         lambda *, video_bytes, business_id: f"businesses/{business_id}/video.mp4",
     )
@@ -1132,7 +1132,7 @@ def test_database_index_allows_only_one_active_attempt_per_draft(isolated_client
 
 
 def test_provider_client_sends_persisted_idempotency_key(monkeypatch):
-    from app import heygen_service
+    from app.features.media import heygen_provider as heygen_service
 
     captured = {}
 
@@ -1175,8 +1175,8 @@ def test_provider_client_sends_persisted_idempotency_key(monkeypatch):
 
 
 def test_provider_client_classifies_409_as_in_flight(monkeypatch):
-    from app import heygen_service
-    from app.heygen_service import HeyGenRequestInProgress
+    from app.features.media import heygen_provider as heygen_service
+    from app.features.media.heygen_provider import HeyGenRequestInProgress
 
     class MockClient:
         def __init__(self, **_kwargs):
@@ -1209,7 +1209,7 @@ def test_provider_client_classifies_409_as_in_flight(monkeypatch):
 
 
 def test_video_downloader_validates_each_https_redirect(monkeypatch):
-    from app import heygen_service
+    from app.features.media import heygen_provider as heygen_service
 
     requests = []
 
@@ -1257,7 +1257,7 @@ def test_video_downloader_validates_each_https_redirect(monkeypatch):
 
 
 def test_video_downloader_follows_valid_redirect_and_enforces_size_limit(monkeypatch):
-    from app import heygen_service
+    from app.features.media import heygen_provider as heygen_service
 
     requests = []
     video_bytes = b"\x00\x00\x00\x18ftypisom"
@@ -1558,8 +1558,8 @@ def test_media_reservations_block_other_provider_while_first_is_pending(
     isolated_client, monkeypatch, first,
 ):
     """Overlap requests during provider I/O, after reservation commit."""
-    from app import main
     from app.features.media import generation_service
+    from app.features.media import workflows_service
     from app.models import Draft
 
     client, engine = isolated_client
@@ -1580,8 +1580,8 @@ def test_media_reservations_block_other_provider_while_first_is_pending(
         blocked.append(client.post("/drafts/draft-1/generate-image").status_code)
         return {"video_id": "exclusive-video"}
 
-    monkeypatch.setattr(main, "get_marketing_image_url", lambda *_args, **_kw: "https://storage.test/signed-image")
-    monkeypatch.setattr(main, "generate_marketing_image", image_provider)
+    monkeypatch.setattr(workflows_service, "get_marketing_image_url", lambda *_args, **_kw: "https://storage.test/signed-image")
+    monkeypatch.setattr(workflows_service, "generate_marketing_image", image_provider)
     monkeypatch.setattr(generation_service, "generate_video", video_provider)
     if first == "image":
         result = client.post("/drafts/draft-1/generate-image")
@@ -1596,7 +1596,7 @@ def test_media_reservations_block_other_provider_while_first_is_pending(
 def test_image_generation_rejects_reserved_or_stored_video(
     isolated_client, monkeypatch, video_status,
 ):
-    from app import main
+    from app.features.media import workflows_service
     from app.models import Draft
     client, engine = isolated_client
     create_draft(engine)
@@ -1607,7 +1607,7 @@ def test_image_generation_rejects_reserved_or_stored_video(
         db.commit()
     def forbidden(**_kwargs):
         pytest.fail("Conflicting paid image generation")
-    monkeypatch.setattr(main, "generate_marketing_image", forbidden)
+    monkeypatch.setattr(workflows_service, "generate_marketing_image", forbidden)
     assert client.post("/drafts/draft-1/generate-image").status_code == 409
 
 
@@ -1653,7 +1653,7 @@ def test_simultaneous_image_and_video_reservations_share_draft_lock(isolated_cli
     from concurrent.futures import ThreadPoolExecutor
     from threading import Barrier, Event, Lock
     from sqlalchemy import event
-    from app import main
+    from app.features.drafts import repository as drafts_repository
     from app.features.media import generation_service
     from app.models import Draft
 
@@ -1662,7 +1662,7 @@ def test_simultaneous_image_and_video_reservations_share_draft_lock(isolated_cli
     with Session(engine) as db:
         db.get(Draft, "draft-1").image_prompt = "Una imagen"
         db.commit()
-    image_lock = main.require_pending_draft
+    image_lock = drafts_repository.lock_draft
     video_lock = generation_service.repository.lock_draft_for_generation
 
     def identify_image(db, draft_id):
@@ -1673,7 +1673,7 @@ def test_simultaneous_image_and_video_reservations_share_draft_lock(isolated_cli
         db.info["reservation_kind"] = "video"
         return video_lock(db, **kwargs)
 
-    monkeypatch.setattr(main, "require_pending_draft", identify_image)
+    monkeypatch.setattr(drafts_repository, "lock_draft", identify_image)
     monkeypatch.setattr(generation_service.repository, "lock_draft_for_generation", identify_video)
     contenders = Barrier(2)
     first_acquired = Event()
@@ -1708,8 +1708,10 @@ def test_simultaneous_image_and_video_reservations_share_draft_lock(isolated_cli
         assert loser_finished.wait(timeout=5)
         return result
 
-    monkeypatch.setattr(main, "get_marketing_image_url", lambda *_args, **_kw: "https://storage.test/signed-image")
-    monkeypatch.setattr(main, "generate_marketing_image", lambda **_kw: provider("image", "businesses/business-1/image.png"))
+    from app.features.media import workflows_service
+
+    monkeypatch.setattr(workflows_service, "get_marketing_image_url", lambda *_args, **_kw: "https://storage.test/signed-image")
+    monkeypatch.setattr(workflows_service, "generate_marketing_image", lambda **_kw: provider("image", "businesses/business-1/image.png"))
     monkeypatch.setattr(generation_service, "generate_video", lambda **_kw: provider("video", {"video_id": "concurrent-video"}))
 
     def request(kind):

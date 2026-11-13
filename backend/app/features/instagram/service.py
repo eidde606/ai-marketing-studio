@@ -10,6 +10,7 @@ from app.features.instagram import provider, repository
 from app.features.instagram.provider import MetaAPIError, TokenExchangeError
 from app.models import InstagramOAuthState
 from app.token_service import encrypt_token
+from app.transactions import Transactions
 
 STATUS_MESSAGES = {
     "not_connected": "La página autorizada no tiene una cuenta profesional de Instagram vinculada.",
@@ -21,6 +22,14 @@ STATUS_MESSAGES = {
 }
 
 logger = logging.getLogger(__name__)
+
+
+class BusinessNotFoundError(Exception):
+    """The requested business does not exist."""
+
+
+class ConnectionStartConflictError(Exception):
+    """The business exists, but its Instagram connection cannot be started."""
 
 
 def _log_provider_failure(stage: str, error: Exception) -> None:
@@ -40,6 +49,16 @@ def _log_provider_failure(stage: str, error: Exception) -> None:
 
 
 def start_connection(db: Session, business_id: str, user_id: str) -> str:
+    try:
+        return _start_connection(db, business_id, user_id)
+    except ValueError as exc:
+        # Preserve the existing failure-time business lookup and error detail.
+        if repository.get_business(db, business_id) is None:
+            raise BusinessNotFoundError(str(exc)) from exc
+        raise ConnectionStartConflictError(str(exc)) from exc
+
+
+def _start_connection(db: Session, business_id: str, user_id: str) -> str:
     business = repository.get_business(db, business_id)
     if business is None:
         raise ValueError("No se encontró el negocio seleccionado.")
@@ -63,12 +82,23 @@ def start_connection(db: Session, business_id: str, user_id: str) -> str:
         facebook_page_id=page.platform_account_id,
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
     )
+    Transactions(db).commit()
     return authorization_url
 
 
 def consume_callback_state(db: Session, state: str) -> InstagramOAuthState | None:
-    return repository.consume_oauth_state(
-        db, hashlib.sha256(state.encode()).hexdigest(),
+    now = datetime.now(timezone.utc)
+    state_hash = hashlib.sha256(state.encode()).hexdigest()
+    row = repository.consume_oauth_state(db, state_hash, now)
+    Transactions(db).commit()
+    if row is None:
+        return None
+    return InstagramOAuthState(
+        business_id=row.business_id,
+        user_id=row.user_id,
+        facebook_page_id=row.facebook_page_id,
+        expires_at=now,
+        state_hash=state_hash,
     )
 
 
@@ -96,20 +126,27 @@ def _save_status(
         if expires_in is not None
         else None
     )
-    repository.save_connection(
-        db,
-        business_id,
-        {
-            "instagram_account_id": account_id,
-            "username": username,
-            "facebook_page_id": page_id,
-            "encrypted_access_token": encrypt_token(token) if token else None,
-            "token_expires_at": token_expiry,
-            "granted_permissions": sorted(permissions or set()),
-            "status": status,
-            "last_error": STATUS_MESSAGES[status],
-        },
-    )
+    values = {
+        "instagram_account_id": account_id,
+        "username": username,
+        "facebook_page_id": page_id,
+        "encrypted_access_token": encrypt_token(token) if token else None,
+        "token_expires_at": token_expiry,
+        "granted_permissions": sorted(permissions or set()),
+        "status": status,
+        "last_error": STATUS_MESSAGES[status],
+    }
+    # Keep the second lookup at its existing point, after token preparation.
+    existing = repository.get_connection(db, business_id)
+    if (
+        existing is not None
+        and existing.status == "connected_and_authorized"
+        and status != "connected_and_authorized"
+    ):
+        return
+    connection = repository.save_connection(db, business_id, values, connection=existing)
+    Transactions(db).commit()
+    Transactions(db).refresh(connection)
 
 
 async def complete_authorization(
@@ -308,6 +345,9 @@ async def complete_authorization(
 
 
 def connection_response(db: Session, business_id: str) -> dict:
+    if repository.get_business(db, business_id) is None:
+        raise BusinessNotFoundError(business_id)
+
     connection = repository.get_connection(db, business_id)
     if connection is None:
         return {

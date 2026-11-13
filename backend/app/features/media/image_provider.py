@@ -1,3 +1,4 @@
+"""OpenAI image-generation adapter with private-storage output."""
 import base64
 import os
 from io import BytesIO
