@@ -18,10 +18,8 @@ from app.auth import verify_token
 from app.database import get_db
 from app.errors import ApplicationError, ErrorKind
 from app.http_errors import http_error
-from app.heygen_service import HeyGenConfigurationError
-from . import service
-from . import generation_service
-from . import workflows_service
+from . import generation_service, service, workflows_service
+from .heygen_provider import HeyGenConfigurationError
 from .schemas import (
     AvatarLook,
     AvatarLookPage,

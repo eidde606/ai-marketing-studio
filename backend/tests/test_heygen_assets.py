@@ -161,7 +161,7 @@ def test_legacy_avatar_and_voice_routes_keep_list_responses(
 
 
 def test_provider_voice_client_uses_v3_and_query_pagination(monkeypatch):
-    from app import heygen_service
+    from app.features.media import heygen_provider as heygen_service
 
     expected = {
         "data": [{"voice_id": "voice-1", "name": "Voz"}],
@@ -210,7 +210,7 @@ def test_provider_voice_client_uses_v3_and_query_pagination(monkeypatch):
 
 
 def test_provider_avatar_client_uses_v3_filtering(monkeypatch):
-    from app import heygen_service
+    from app.features.media import heygen_provider as heygen_service
 
     captured = {}
 
@@ -275,7 +275,7 @@ def test_provider_errors_return_gateway_response(isolated_client, monkeypatch):
 
 
 def test_legacy_voice_service_collects_all_v3_pages(monkeypatch):
-    from app import heygen_service
+    from app.features.media import heygen_provider as heygen_service
 
     calls = []
 

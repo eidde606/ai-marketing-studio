@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session
 from app.errors import ApplicationError, ErrorKind
 from app.features.drafts import service as draft_service
 from app.features.drafts.service import DraftError, DraftErrorKind
-from app.image_service import edit_marketing_image, generate_marketing_image
 from app.models import Draft, ImageRevision
 from app.storage_service import (
     download_marketing_image,
@@ -17,6 +16,7 @@ from app.storage_service import (
 )
 from app.transactions import Transactions
 from . import generation_service, repository
+from .image_provider import edit_marketing_image, generate_marketing_image
 
 logger = logging.getLogger(__name__)
 MAX_MANUAL_VIDEO_SIZE = 100 * 1024 * 1024

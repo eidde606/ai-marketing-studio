@@ -198,7 +198,7 @@ def test_heygen_409_in_flight_is_unknown_and_does_not_create_new_key(
     isolated_client, monkeypatch,
 ):
     from app.features.media import generation_service
-    from app.heygen_service import HeyGenRequestInProgress
+    from app.features.media.heygen_provider import HeyGenRequestInProgress
 
     client, engine = isolated_client
     create_draft(engine)
@@ -226,7 +226,7 @@ def test_provider_5xx_is_ambiguous_and_retains_attempt(
     isolated_client, monkeypatch,
 ):
     from app.features.media import generation_service
-    from app.heygen_service import HeyGenProviderError
+    from app.features.media.heygen_provider import HeyGenProviderError
 
     client, engine = isolated_client
     create_draft(engine)
@@ -257,7 +257,7 @@ def test_potentially_billable_provider_errors_never_open_a_new_attempt(
     isolated_client, monkeypatch, provider_error,
 ):
     from app.features.media import generation_service
-    from app.heygen_service import HeyGenProviderError
+    from app.features.media.heygen_provider import HeyGenProviderError
 
     client, engine = isolated_client
     create_draft(engine)
@@ -290,7 +290,7 @@ def test_definitive_provider_failure_releases_attempt_only_for_explicit_new_requ
     isolated_client, monkeypatch,
 ):
     from app.features.media import generation_service
-    from app.heygen_service import HeyGenProviderError
+    from app.features.media.heygen_provider import HeyGenProviderError
 
     client, engine = isolated_client
     create_draft(engine)
@@ -1132,7 +1132,7 @@ def test_database_index_allows_only_one_active_attempt_per_draft(isolated_client
 
 
 def test_provider_client_sends_persisted_idempotency_key(monkeypatch):
-    from app import heygen_service
+    from app.features.media import heygen_provider as heygen_service
 
     captured = {}
 
@@ -1175,8 +1175,8 @@ def test_provider_client_sends_persisted_idempotency_key(monkeypatch):
 
 
 def test_provider_client_classifies_409_as_in_flight(monkeypatch):
-    from app import heygen_service
-    from app.heygen_service import HeyGenRequestInProgress
+    from app.features.media import heygen_provider as heygen_service
+    from app.features.media.heygen_provider import HeyGenRequestInProgress
 
     class MockClient:
         def __init__(self, **_kwargs):
@@ -1209,7 +1209,7 @@ def test_provider_client_classifies_409_as_in_flight(monkeypatch):
 
 
 def test_video_downloader_validates_each_https_redirect(monkeypatch):
-    from app import heygen_service
+    from app.features.media import heygen_provider as heygen_service
 
     requests = []
 
@@ -1257,7 +1257,7 @@ def test_video_downloader_validates_each_https_redirect(monkeypatch):
 
 
 def test_video_downloader_follows_valid_redirect_and_enforces_size_limit(monkeypatch):
-    from app import heygen_service
+    from app.features.media import heygen_provider as heygen_service
 
     requests = []
     video_bytes = b"\x00\x00\x00\x18ftypisom"

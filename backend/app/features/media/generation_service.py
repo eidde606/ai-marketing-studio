@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.errors import ApplicationError, ErrorKind
-from app.heygen_service import (
+from .heygen_provider import (
     HeyGenConfigurationError,
     HeyGenProviderError,
     HeyGenRequestInProgress,
