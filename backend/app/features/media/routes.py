@@ -2,14 +2,26 @@
 import json
 import os
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from sqlalchemy.orm import Session
 
 from app.auth import verify_token
 from app.database import get_db
+from app.errors import ApplicationError, ErrorKind
+from app.http_errors import http_error
 from app.heygen_service import HeyGenConfigurationError
 from . import service
 from . import generation_service
+from . import workflows_service
 from .schemas import (
     AvatarLook,
     AvatarLookPage,
@@ -19,11 +31,150 @@ from .schemas import (
     HeyGenGenerationResponse,
     HeyGenVoice,
     HeyGenVoicePage,
+    ImageRevisionRequest,
     VoiceType,
 )
 
 router = APIRouter(dependencies=[Depends(verify_token)])
 webhook_router = APIRouter()
+
+
+@router.post("/drafts/{draft_id}/upload-video")
+def upload_draft_video(
+    draft_id: str,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    try:
+        draft = workflows_service.prepare_manual_video_upload(db, draft_id)
+        if file.content_type != "video/mp4":
+            raise http_error(
+                ApplicationError(
+                    ErrorKind.UNSUPPORTED_MEDIA,
+                    "Only MP4 videos are supported",
+                )
+            )
+        video_bytes = file.file.read(workflows_service.MAX_MANUAL_VIDEO_SIZE + 1)
+        if len(video_bytes) > workflows_service.MAX_MANUAL_VIDEO_SIZE:
+            raise http_error(
+                ApplicationError(
+                    ErrorKind.TOO_LARGE,
+                    "Video exceeds the 100 MB limit",
+                )
+            )
+        return workflows_service.save_manual_video_upload(
+            db,
+            draft,
+            video_bytes,
+        )
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
+
+
+@router.get("/drafts/{draft_id}/video-preview")
+def get_draft_video_preview(
+    draft_id: str,
+    db: Session = Depends(get_db),
+):
+    try:
+        return workflows_service.video_preview(db, draft_id)
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
+
+
+@router.post("/drafts/{draft_id}/generate-image")
+def generate_draft_image(
+    draft_id: str,
+    db: Session = Depends(get_db),
+):
+    try:
+        return workflows_service.generate_image(db, draft_id)
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
+
+
+@router.get("/drafts/{draft_id}/image")
+def get_draft_image(
+    draft_id: str,
+    db: Session = Depends(get_db),
+):
+    try:
+        return workflows_service.image_preview(db, draft_id)
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
+
+
+@router.post("/drafts/{draft_id}/reset-image")
+def reset_stuck_image(
+    draft_id: str,
+    db: Session = Depends(get_db),
+):
+    try:
+        return workflows_service.reset_image(db, draft_id)
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
+
+
+@router.post(
+    "/drafts/{draft_id}/image-revisions",
+    status_code=201,
+)
+def create_image_revision(
+    draft_id: str,
+    request: ImageRevisionRequest,
+    db: Session = Depends(get_db),
+):
+    try:
+        return workflows_service.create_image_revision(
+            db,
+            draft_id,
+            request.instructions,
+        )
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
+
+
+@router.get("/drafts/{draft_id}/image-revisions")
+def list_image_revisions(
+    draft_id: str,
+    db: Session = Depends(get_db),
+):
+    try:
+        return workflows_service.list_image_revisions(db, draft_id)
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
+
+
+@router.post("/drafts/{draft_id}/image-revisions/{revision_id}/accept")
+def accept_image_revision(
+    draft_id: str,
+    revision_id: str,
+    db: Session = Depends(get_db),
+):
+    try:
+        return workflows_service.accept_image_revision(
+            db,
+            draft_id,
+            revision_id,
+        )
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
+
+
+@router.post("/drafts/{draft_id}/image-revisions/{revision_id}/reject")
+def reject_image_revision(
+    draft_id: str,
+    revision_id: str,
+    db: Session = Depends(get_db),
+):
+    try:
+        return workflows_service.reject_image_revision(
+            db,
+            draft_id,
+            revision_id,
+        )
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
 
 
 def _raise_provider_error(exc: Exception) -> None:

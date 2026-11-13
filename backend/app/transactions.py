@@ -18,3 +18,6 @@ class Transactions:
 
     def refresh(self, entity: object) -> None:
         self._session.refresh(entity)
+
+    def expire_all(self) -> None:
+        self._session.expire_all()

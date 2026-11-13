@@ -99,6 +99,15 @@ than redesigning concurrency or fixing product semantics during extraction.
   verification endpoints, repository claims and provider adapter now belong to
   the TikTok feature. The existing unsupported-photo response and all
   transaction boundaries are retained.
+- Media workflows: manual MP4 upload, video/image previews, image generation,
+  interrupted-generation recovery, and image revision create/list/accept/reject
+  now use feature routes, an application service, and repository operations.
+  Reservation predicates, row/advisory locks, storage paths, provider call
+  ordering, transaction boundaries, HTTP responses, and the original-image
+  preservation behavior are retained. Characterization tests cover these
+  workflows; focused media, HeyGen, and architecture tests pass (104 tests).
+  SQLite fixtures simulate PostgreSQL lock scheduling and do not verify actual
+  PostgreSQL locking behavior.
 
 `test_closed_layers.py` additionally rejects direct session operations in feature
 routes/services, HTTPException construction in feature services, and commits or

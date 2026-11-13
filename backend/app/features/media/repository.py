@@ -1,5 +1,5 @@
 """Persistence helpers for draft-scoped HeyGen generation attempts."""
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -7,6 +7,7 @@ from app.models import (
     Draft,
     HeyGenGenerationAttempt,
     HeyGenWebhookDelivery,
+    ImageRevision,
 )
 
 ACTIVE_STATUSES = ("SUBMITTING", "UNKNOWN", "PROCESSING")
@@ -152,3 +153,180 @@ def pending_webhook_delivery_for_attempt(
 
 def has_active_attempt(db: Session, draft_id: str) -> bool:
     return active_attempt_for_draft(db, draft_id) is not None
+
+
+def lock_draft_revisions(db: Session, draft_id: str) -> None:
+    db.execute(select(func.pg_advisory_xact_lock(func.hashtext(draft_id))))
+
+
+def active_revision(db: Session, draft_id: str) -> ImageRevision | None:
+    return db.scalar(
+        select(ImageRevision)
+        .where(
+            ImageRevision.draft_id == draft_id,
+            ImageRevision.status.in_(["generating", "ready"]),
+        )
+        .limit(1)
+    )
+
+
+def add_revision(db: Session, revision: ImageRevision) -> None:
+    db.add(revision)
+
+
+def get_revision(
+    db: Session,
+    draft_id: str,
+    revision_id: str,
+) -> ImageRevision | None:
+    revision = db.get(ImageRevision, revision_id)
+    if revision is None or revision.draft_id != draft_id:
+        return None
+    return revision
+
+
+def list_revisions(db: Session, draft_id: str) -> list[ImageRevision]:
+    return db.scalars(
+        select(ImageRevision)
+        .where(ImageRevision.draft_id == draft_id)
+        .order_by(ImageRevision.created_at.desc())
+    ).all()
+
+
+def mark_revision_failed(db: Session, revision_id: str) -> None:
+    db.execute(
+        update(ImageRevision)
+        .where(
+            ImageRevision.id == revision_id,
+            ImageRevision.status == "generating",
+        )
+        .values(status="failed")
+    )
+
+
+def mark_revision_rejected(db: Session, revision_id: str) -> None:
+    db.execute(
+        update(ImageRevision)
+        .where(
+            ImageRevision.id == revision_id,
+            ImageRevision.status == "generating",
+        )
+        .values(status="rejected")
+    )
+
+
+def save_ready_revision(
+    db: Session,
+    revision_id: str,
+    revised_path: str,
+) -> bool:
+    result = db.execute(
+        update(ImageRevision)
+        .where(
+            ImageRevision.id == revision_id,
+            ImageRevision.status == "generating",
+        )
+        .values(
+            revised_image_path=revised_path,
+            status="ready",
+        )
+        .returning(ImageRevision.id)
+    )
+    return result.first() is not None
+
+
+def reserve_image_generation(
+    db: Session,
+    draft_id: str,
+    generation_id: str,
+    started_at,
+) -> bool:
+    result = db.execute(
+        update(Draft)
+        .where(
+            Draft.id == draft_id,
+            Draft.deleted_at.is_(None),
+            Draft.status == "pending",
+            Draft.image_status.in_(["not_started", "failed"]),
+            Draft.image_url.is_(None),
+            Draft.image_prompt.is_not(None),
+            Draft.image_prompt != "",
+        )
+        .values(
+            image_status="generating",
+            image_started_at=started_at,
+            image_generation_id=generation_id,
+        )
+        .returning(Draft.id)
+    )
+    return result.first() is not None
+
+
+def mark_image_generation_failed(
+    db: Session,
+    draft_id: str,
+    generation_id: str,
+) -> None:
+    db.execute(
+        update(Draft)
+        .where(
+            Draft.id == draft_id,
+            Draft.image_status == "generating",
+            Draft.image_generation_id == generation_id,
+        )
+        .values(
+            image_status="failed",
+            image_started_at=None,
+            image_generation_id=None,
+        )
+    )
+
+
+def save_generated_image(
+    db: Session,
+    draft_id: str,
+    generation_id: str,
+    storage_path: str,
+) -> bool:
+    result = db.execute(
+        update(Draft)
+        .where(
+            Draft.id == draft_id,
+            Draft.deleted_at.is_(None),
+            Draft.status == "pending",
+            Draft.image_status == "generating",
+            Draft.image_generation_id == generation_id,
+            Draft.image_url.is_(None),
+        )
+        .values(
+            image_url=storage_path,
+            media_type="image",
+            image_status="completed",
+            image_started_at=None,
+            image_generation_id=None,
+        )
+        .returning(Draft.id)
+    )
+    return result.first() is not None
+
+
+def reset_image_generation(db: Session, draft_id: str, cutoff) -> bool:
+    result = db.execute(
+        update(Draft)
+        .where(
+            Draft.id == draft_id,
+            Draft.deleted_at.is_(None),
+            Draft.status == "pending",
+            Draft.image_status == "generating",
+            Draft.image_url.is_(None),
+            Draft.image_started_at.is_not(None),
+            Draft.image_started_at < cutoff,
+        )
+        .values(
+            image_status="failed",
+            image_started_at=None,
+            image_generation_id=None,
+        )
+        .returning(Draft.id)
+    )
+    return result.first() is not None
