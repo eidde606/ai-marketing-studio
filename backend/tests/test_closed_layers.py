@@ -14,7 +14,7 @@ def violations(source: str, module: str) -> set[tuple[str, str, str]]:
     """Report exact module/function/operation edges, including nested functions."""
     tree = ast.parse(source)
     result = set()
-    is_repository = module.endswith(".repository")
+    is_repository = module.endswith(".repository") or module.startswith("app.persistence.")
     is_service = module.endswith("service")
     is_route = module.endswith("routes") or module in {"app.main", "app.auth"}
     for function in (n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))):
@@ -36,7 +36,8 @@ EXCEPTIONS = set()
 
 def test_feature_layers():
     actual = set()
-    for path in [*(APP_ROOT / "features").rglob("*.py"), APP_ROOT / "auth.py"]:
+    for path in [*(APP_ROOT / "features").rglob("*.py"),
+                 *(APP_ROOT / "persistence").rglob("*.py"), APP_ROOT / "auth.py"]:
         module = ".".join(path.relative_to(APP_ROOT.parent).with_suffix("").parts)
         actual.update(violations(path.read_text(), module))
     assert actual == EXCEPTIONS, (

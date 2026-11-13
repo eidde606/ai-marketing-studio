@@ -5,6 +5,10 @@ from sqlalchemy.orm import Session
 from app.models import Business, Conversation, ConversationMessage, Draft
 
 
+from app.features.access.principal import TenantAccess
+from app.persistence import tenant
+
+
 def get_business(db: Session, business_id: str) -> Business | None:
     return db.get(Business, business_id)
 
@@ -135,3 +139,34 @@ def get_conversation(
             Conversation.business_id == business.id,
         )
     )
+
+
+
+
+def get_conversation_scoped(db: Session, context: TenantAccess, conversation_id: str):
+    return tenant.get(db, context, Conversation, conversation_id)
+
+
+def list_conversations_scoped(db: Session, context: TenantAccess, *, limit=100, offset=0):
+    return db.scalars(tenant.page(tenant.selection(Conversation, context)
+        .order_by(Conversation.created_at.desc(), Conversation.id.desc()), limit=limit, offset=offset)).all()
+
+
+def list_messages_scoped(db: Session, context: TenantAccess, conversation_id: str, *, limit=100, offset=0):
+    return db.scalars(tenant.page(tenant.selection(ConversationMessage, context)
+        .where(ConversationMessage.conversation_id == conversation_id)
+        .order_by(ConversationMessage.created_at, ConversationMessage.id), limit=limit, offset=offset)).all()
+
+
+def add_message_scoped(db: Session, context: TenantAccess, conversation_id: str, *, role: str, content: str):
+    if role not in {"user", "assistant"}:
+        raise ValueError("Unsupported conversation role")
+    return tenant.insert_record(db, context, ConversationMessage(
+        conversation_id=conversation_id, role=role, content=content,
+    ))
+
+
+def add_conversation_scoped(db: Session, context: TenantAccess, record: Conversation):
+    if not isinstance(record, Conversation):
+        raise TypeError("Expected Conversation")
+    return tenant.insert_record(db, context, record)

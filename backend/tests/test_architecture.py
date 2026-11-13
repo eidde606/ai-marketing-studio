@@ -21,6 +21,8 @@ def _is_route(module: str) -> bool:
 
 
 def _is_repository(module: str) -> bool:
+    if module == "app.persistence" or module.startswith("app.persistence."):
+        return True
     return module.startswith("app.") and any(
         part in {"repository", "repositories"} or part.endswith("_repository")
         for part in module.split(".")[1:]

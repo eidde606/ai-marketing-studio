@@ -7,6 +7,11 @@ from sqlalchemy.orm import Session
 from app.models import Business, Draft, SocialAccount, TikTokOAuthState
 
 
+from app.features.access.principal import TenantAccess
+from app.persistence import tenant
+from app.features.drafts.repository import get_draft_scoped
+
+
 def get_business(db: Session, business_id: str) -> Business | None:
     return db.get(Business, business_id)
 
@@ -21,12 +26,7 @@ def consume_oauth_state(
     now: datetime,
 ) -> str | None:
     result = db.execute(
-        delete(TikTokOAuthState)
-        .where(
-            TikTokOAuthState.state_hash == state_hash,
-            TikTokOAuthState.expires_at > now,
-        )
-        .returning(TikTokOAuthState.business_id)
+        _consume_oauth_state_statement(state_hash, now)
     )
     return result.scalar_one_or_none()
 
@@ -103,6 +103,13 @@ def claim_publication(
     account_id: str,
 ) -> bool:
     result = db.execute(
+        _claim_publication_statement(draft_id, account_id)
+    )
+    return result.scalar_one_or_none() is not None
+
+
+def _claim_publication_statement(draft_id, account_id):
+    return (
         update(Draft)
         .where(
             Draft.id == draft_id,
@@ -117,4 +124,77 @@ def claim_publication(
         )
         .returning(Draft.id)
     )
-    return result.scalar_one_or_none() is not None
+
+
+def _consume_oauth_state_statement(state_hash, now):
+    return (
+        delete(TikTokOAuthState)
+        .where(
+            TikTokOAuthState.state_hash == state_hash,
+            TikTokOAuthState.expires_at > now,
+        )
+        .returning(TikTokOAuthState.business_id)
+    )
+
+
+
+
+def get_account_scoped(db: Session, context: TenantAccess, account_id: str):
+    return db.scalar(tenant.selection(SocialAccount, context).where(
+        SocialAccount.id == account_id, SocialAccount.platform == "tiktok"))
+
+
+def list_accounts_scoped(db: Session, context: TenantAccess, *, limit=100, offset=0):
+    return db.scalars(tenant.page(tenant.selection(SocialAccount, context)
+        .where(SocialAccount.platform == "tiktok").order_by(SocialAccount.id), limit=limit, offset=offset)).all()
+
+
+def claim_publication_scoped(db: Session, context: TenantAccess, draft_id: str, account_id: str) -> bool:
+    return db.execute(_claim_publication_statement(draft_id, account_id).where(
+        tenant.predicate(Draft, context), select(SocialAccount.id).where(
+            tenant.predicate(SocialAccount, context), SocialAccount.id == account_id,
+            SocialAccount.platform == "tiktok", SocialAccount.connection_status == "connected",
+        ).exists(),
+    )).scalar_one_or_none() is not None
+
+
+def save_refreshed_credentials_scoped(db: Session, context: TenantAccess, account_id: str, *,
+                                      encrypted_access_token: str, encrypted_refresh_token: str,
+                                      token_expires_at: datetime) -> bool:
+    return db.execute(update(SocialAccount).where(
+        tenant.predicate(SocialAccount, context), SocialAccount.id == account_id,
+        SocialAccount.platform == "tiktok", SocialAccount.connection_status == "connected",
+    ).values(encrypted_access_token=encrypted_access_token, encrypted_refresh_token=encrypted_refresh_token,
+             token_expires_at=token_expires_at).returning(SocialAccount.id)).scalar_one_or_none() is not None
+
+
+def consume_oauth_state_scoped(db: Session, context: TenantAccess, state_hash: str,
+                               initiator_subject: str, now: datetime):
+    return db.execute(_consume_oauth_state_statement(state_hash, now).where(
+        tenant.predicate(TikTokOAuthState, context), TikTokOAuthState.user_id == initiator_subject,
+    )).scalar_one_or_none()
+
+
+def add_account_scoped(db: Session, context: TenantAccess, record: SocialAccount):
+    if not isinstance(record, SocialAccount):
+        raise TypeError("Expected SocialAccount")
+    if record.platform != "tiktok":
+        raise ValueError("Account platform does not match repository")
+    return tenant.insert_record(db, context, record)
+
+
+def add_oauth_state_scoped(db: Session, context: TenantAccess, record: TikTokOAuthState):
+    if not isinstance(record, TikTokOAuthState):
+        raise TypeError("Expected TikTokOAuthState")
+    return tenant.insert_record(db, context, record)
+
+
+def save_publication_scoped(db: Session, context: TenantAccess, draft_id: str, *,
+                            expected_status: str, values: dict) -> bool:
+    allowed = {"tiktok_publish_id", "tiktok_publish_status", "published_at"}
+    if not values or not set(values) <= allowed:
+        raise ValueError("Unsupported TikTok publication fields")
+    return db.execute(update(Draft).where(
+        tenant.predicate(Draft, context), Draft.id == draft_id,
+        Draft.tiktok_publish_status == expected_status,
+    ).values(**values).returning(Draft.id)).scalar_one_or_none() is not None
