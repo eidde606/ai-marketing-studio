@@ -14,8 +14,6 @@ from app.campaign_routes import router as campaign_router
 from app.facebook_auth_routes import router as facebook_auth_router
 from app.facebook_service import (
     get_page_info,
-    get_post_insights,
-    get_post_reach,
     get_video_status as get_facebook_video_status,
     publish_image_post,
     publish_text_post,
@@ -26,6 +24,7 @@ from app.features.content.routes import router as content_router
 from app.features.drafts.routes import router as draft_router
 from app.features.drafts.routes import draft_http_exception
 from app.features.drafts import service as draft_service
+from app.features.analytics.routes import router as analytics_router
 from app.features.instagram.routes import (
     InstagramCallbackAccessLogRedactionMiddleware,
     router as instagram_auth_router,
@@ -1413,163 +1412,6 @@ def reject_image_revision(
     }
 
 
-@protected.get("/drafts/{draft_id}/analytics/facebook")
-async def get_facebook_draft_analytics(
-        draft_id: str,
-        db: Session = Depends(get_db),
-):
-    # Find the draft.
-    draft = db.get(Draft, draft_id)
-
-    if draft is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Draft not found",
-        )
-
-    # Only published drafts have Facebook analytics.
-    if draft.facebook_publish_status != "published" or not draft.facebook_post_id:
-        raise HTTPException(
-            status_code=409,
-            detail="Draft has not been published to Facebook",
-        )
-
-    # Find the connected Facebook account for this business.
-    account = db.scalar(
-        select(SocialAccount).where(
-            SocialAccount.business_id == draft.business_id,
-            SocialAccount.platform == "facebook",
-            SocialAccount.connection_status == "connected",
-        )
-    )
-
-    if account is None:
-        raise HTTPException(
-            status_code=409,
-            detail="Connect a Facebook Page to this business first",
-        )
-
-    access_token = decrypt_token(account.encrypted_access_token)
-
-    # Request engagement information from Facebook.
-    try:
-        data = await get_post_insights(
-            post_id=draft.facebook_post_id,
-            access_token=access_token,
-            media_type=draft.media_type,
-        )
-
-    except httpx.HTTPStatusError as exc:
-        try:
-            error_data = exc.response.json().get("error", {})
-            if not isinstance(error_data, dict):
-                error_data = {}
-        except ValueError:
-            error_data = {}
-
-        logger.warning(
-            "Facebook analytics error: status=%s, code=%s, message=%s",
-            exc.response.status_code,
-            error_data.get("code"),
-            error_data.get("message"),
-        )
-
-        raise HTTPException(
-            status_code=502,
-            detail="Unable to retrieve Facebook analytics",
-        ) from exc
-
-    except httpx.RequestError as exc:
-        logger.warning(
-            "Facebook analytics connection error: %s",
-            type(exc).__name__,
-        )
-        raise HTTPException(
-            status_code=502,
-            detail="Facebook analytics service is unavailable",
-        ) from exc
-
-    def metric_count(name: str):
-        metric = data.get(name)
-        if not isinstance(metric, dict):
-            return None
-        summary = metric.get("summary")
-        if not isinstance(summary, dict):
-            return None
-        return summary.get("total_count")
-
-    shares = data.get("shares")
-    share_count = shares.get("count") if isinstance(shares, dict) else None
-
-    return {
-        "draft_id": draft.id,
-        "platform": "facebook",
-        "post_id": draft.facebook_post_id,
-        "reactions": metric_count("reactions"),
-        "comments": metric_count("comments"),
-        "shares": share_count,
-        "permalink_url": data.get("permalink_url"),
-    }
-
-
-@protected.get("/drafts/{draft_id}/analytics/facebook/reach")
-async def test_facebook_reach(
-        draft_id: str,
-        db: Session = Depends(get_db),
-):
-    draft = db.get(Draft, draft_id)
-
-    if draft is None:
-        raise HTTPException(status_code=404, detail="Draft not found")
-
-    if draft.facebook_publish_status != "published" or not draft.facebook_post_id:
-        raise HTTPException(status_code=409, detail="Draft is not published")
-
-    account = db.scalar(
-        select(SocialAccount).where(
-            SocialAccount.business_id == draft.business_id,
-            SocialAccount.platform == "facebook",
-            SocialAccount.connection_status == "connected",
-        )
-    )
-
-    if account is None:
-        raise HTTPException(status_code=409, detail="Facebook not connected")
-
-    access_token = decrypt_token(account.encrypted_access_token)
-
-    try:
-        data = await get_post_reach(draft.facebook_post_id, access_token)
-
-        unique_media_viewers = next(
-            (
-                metric["values"][0]["value"]
-                for metric in data.get("data", [])
-                if metric.get("name") == "post_total_media_view_unique"
-                   and metric.get("period") == "lifetime"
-                   and metric.get("values")
-            ),
-            None,
-        )
-
-        return {"unique_media_viewers": unique_media_viewers}
-    except httpx.HTTPStatusError as exc:
-        error_data = exc.response.json()
-
-        facebook_error = error_data.get("error", {})
-
-        logger.warning(
-            "Facebook reach error: code=%s, message=%s",
-            facebook_error.get("code"),
-            facebook_error.get("message"),
-        )
-
-        raise HTTPException(
-            status_code=502,
-            detail="Facebook did not return reach data",
-        ) from exc
-
-
 # --------------------------------------------------
 # Register Protected Endpoints
 # --------------------------------------------------
@@ -1582,6 +1424,7 @@ app.include_router(media_router)
 app.include_router(heygen_webhook_router)
 app.include_router(facebook_auth_router)
 app.include_router(instagram_auth_router)
+app.include_router(analytics_router)
 
 app.include_router(tiktok_auth_router)
 

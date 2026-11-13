@@ -10,11 +10,12 @@ contract, deployment or production changes are part of this work.
 3. Campaigns: typed application errors, explicit transaction policy, repository queries.
 4. Instagram: service-owned connection policy and transaction boundaries.
 5. Sofía/Leo: characterize conversation persistence/failures, then extract workflows.
-6. Facebook/TikTok OAuth and token refresh: characterize state/handoff/account contracts.
-7. Facebook/TikTok publishing: retain reservations, uncertain outcomes and verification.
-8. Images/revisions/manual video: preserve advisory locks and cross-media reservations.
-9. HeyGen: preserve attempts, idempotency, leases, webhook deduplication and reconciliation.
-10. Analytics and composition root: finish extraction and architecture enforcement.
+6. Analytics: preserve business-scoped account lookup, provider error handling and response contracts.
+7. Facebook/TikTok OAuth and token refresh: characterize state/handoff/account contracts.
+8. Facebook/TikTok publishing: retain reservations, uncertain outcomes and verification.
+9. Images/revisions/manual video: preserve advisory locks and cross-media reservations.
+10. HeyGen: preserve attempts, idempotency, leases, webhook deduplication and reconciliation.
+11. Composition root: finish router registration and architecture enforcement.
 
 Each feature gets a separate local commit after relevant tests pass. Complete
 offline backend tests run at milestones. Characterization tests precede complex
@@ -61,6 +62,11 @@ than redesigning concurrency or fixing product semantics during extraction.
   transaction ordering are retained. Characterization tests cover generated
   platform/destination behavior, conversation persistence, business isolation,
   provider failures, and rollback.
+- Facebook analytics: extracted engagement and reach routes into a feature
+  service/repository boundary while reusing the existing Facebook provider.
+  Published-post eligibility, business-scoped connected-account lookup,
+  provider error mapping, and response shapes remain unchanged. Baseline and
+  post-extraction focused suites each passed 23 tests.
 
 `test_closed_layers.py` additionally rejects direct session operations in feature
 routes/services, HTTPException construction in feature services, and commits or

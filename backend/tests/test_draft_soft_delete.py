@@ -115,13 +115,22 @@ def test_delete_enforces_real_authorization(drafts_client, monkeypatch):
 
 def test_deleted_publication_keeps_analytics(drafts_client, monkeypatch):
     client, _, _, ids = drafts_client
-    monkeypatch.setattr("app.main.decrypt_token", lambda token: "fake")
+    monkeypatch.setattr(
+        "app.features.analytics.service.decrypt_token",
+        lambda token: "fake",
+    )
     insights = AsyncMock(return_value={"reactions": {"summary": {"total_count": 25}},
                                       "comments": {"summary": {"total_count": 8}}, "shares": {"count": 4}})
     reach = AsyncMock(return_value={"data": [{"name": "post_total_media_view_unique", "period": "lifetime", "values": [{"value": 42}]}]})
     publish = AsyncMock()
-    monkeypatch.setattr("app.main.get_post_insights", insights)
-    monkeypatch.setattr("app.main.get_post_reach", reach)
+    monkeypatch.setattr(
+        "app.features.analytics.service.get_post_insights",
+        insights,
+    )
+    monkeypatch.setattr(
+        "app.features.analytics.service.get_post_reach",
+        reach,
+    )
     monkeypatch.setattr("app.main.publish_text_post", publish)
     before = client.get(f"/drafts/{ids[1]}/analytics/facebook")
     before_reach = client.get(f"/drafts/{ids[1]}/analytics/facebook/reach")
