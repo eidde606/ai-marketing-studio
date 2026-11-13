@@ -11,7 +11,6 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.campaign_routes import router as campaign_router
-from app.facebook_auth_routes import router as facebook_auth_router
 from app.facebook_service import (
     get_page_info,
     get_video_status as get_facebook_video_status,
@@ -20,6 +19,7 @@ from app.facebook_service import (
     publish_video_post,
 )
 from app.features.businesses.routes import router as business_router
+from app.features.facebook.routes import router as facebook_auth_router
 from app.features.content.routes import router as content_router
 from app.features.drafts.routes import router as draft_router
 from app.features.drafts.routes import draft_http_exception

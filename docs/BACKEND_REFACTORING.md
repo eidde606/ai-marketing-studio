@@ -11,11 +11,12 @@ contract, deployment or production changes are part of this work.
 4. Instagram: service-owned connection policy and transaction boundaries.
 5. Sofía/Leo: characterize conversation persistence/failures, then extract workflows.
 6. Analytics: preserve business-scoped account lookup, provider error handling and response contracts.
-7. Facebook OAuth: characterize the multi-stage state/handoff/page-selection contract.
-8. Facebook/TikTok publishing: retain reservations, uncertain outcomes and verification.
-9. Images/revisions/manual video: preserve advisory locks and cross-media reservations.
-10. HeyGen: preserve attempts, idempotency, leases, webhook deduplication and reconciliation.
-11. Composition root: finish router registration and architecture enforcement.
+7. Facebook OAuth: preserve the multi-stage state/handoff/page-selection contract.
+8. TikTok token refresh: preserve expiry handling and token persistence.
+9. Facebook/TikTok publishing: retain reservations, uncertain outcomes and verification.
+10. Images/revisions/manual video: preserve advisory locks and cross-media reservations.
+11. HeyGen: preserve attempts, idempotency, leases, webhook deduplication and reconciliation.
+12. Composition root: finish router registration and architecture enforcement.
 
 Each feature gets a separate local commit after relevant tests pass. Complete
 offline backend tests run at milestones. Characterization tests precede complex
@@ -73,6 +74,12 @@ than redesigning concurrency or fixing product semantics during extraction.
   ordering remain unchanged. Legacy route/provider modules are compatibility
   imports. Publishing and the `main.py` token-refresh orchestration remain
   outside this slice.
+- Facebook OAuth/Page selection: added offline characterization for state
+  issuance/consumption, provider failure, temporary Page handoff, user checks,
+  reconnect, token secrecy and business-scoped listing. The feature now owns
+  routes, schemas, service, repository and provider adapter. Facebook login
+  configuration, callback URI, provider calls, Page-selection lock, and commit
+  boundaries are unchanged; legacy root modules re-export feature entry points.
 
 `test_closed_layers.py` additionally rejects direct session operations in feature
 routes/services, HTTPException construction in feature services, and commits or
