@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.features.content import openai_provider
+from tests.tenancy_fixtures import grant_test_owner
 from app.models import Business, Conversation, ConversationMessage, Draft
 
 
@@ -46,6 +47,7 @@ def test_ai_platform_is_preserved_but_destination_defaults_to_facebook(
                 platform="Facebook",
             ),
         ])
+        grant_test_owner(db, [business.id])
         db.commit()
         business_id, conversation_id = business.id, conversation.id
 
@@ -107,6 +109,7 @@ def test_lowercase_tiktok_is_handled_differently_by_generation_routes(
         db.add(conversation)
         db.flush()
         db.add(ConversationMessage(conversation_id=conversation.id, role="user", content="TikTok"))
+        grant_test_owner(db, [business.id])
         db.commit()
         business_id, conversation_id = business.id, conversation.id
     generate = Mock(return_value=generated_content("tiktok"))

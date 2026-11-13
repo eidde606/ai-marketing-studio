@@ -16,7 +16,7 @@ def active_user_id(db: Session, principal: Principal) -> str | None:
     )
 
 
-def active_membership(db: Session, principal: Principal, business_id: str):
+def active_membership(db: Session, principal: Principal, business_id: str, *, lock=False):
     statement = (
         select(User.id, BusinessMembership.id, BusinessMembership.role)
         .join(BusinessMembership, BusinessMembership.user_id == User.id)
@@ -31,6 +31,8 @@ def active_membership(db: Session, principal: Principal, business_id: str):
     )
     if isinstance(principal, AuthenticatedPrincipal):
         statement = statement.where(User.id == principal.user_id)
+    if lock:
+        statement = statement.with_for_update(of=(User, BusinessMembership))
     return db.execute(statement).one_or_none()
 
 
@@ -44,3 +46,8 @@ def visible_draft_business(db: Session, principal: AuthenticatedPrincipal, draft
         User.auth_issuer == principal.issuer, User.auth_subject == principal.subject,
         User.status == "active", BusinessMembership.status == "active",
     ))
+
+
+def lock_business_for_authorization(db: Session, business_id: str):
+    # Same first lock as membership mutations; held only during short persistence.
+    return db.scalar(select(Business.id).where(Business.id == business_id).with_for_update())

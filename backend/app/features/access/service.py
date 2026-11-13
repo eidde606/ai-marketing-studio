@@ -16,7 +16,7 @@ def resolve_principal(db: Session, identity: Principal) -> AuthenticatedPrincipa
 
 
 def require_permission(
-    db: Session, principal: Principal, business_id: str, permission: Permission,
+    db: Session, principal: Principal, business_id: str, permission: Permission, *, lock: bool = False,
 ) -> TenantAccess:
     """Resolve a fresh business context for one service operation.
 
@@ -24,12 +24,20 @@ def require_permission(
     status and membership are queried again here, including after lock waits.
     TenantAccess is a selector for scoped persistence, not proof of resource
     ownership; feature repositories must also constrain each referenced resource.
+    Lock mode serializes short writes with membership/user changes. The caller
+    must commit or roll back to release locks; never hold them over provider I/O.
     No provisioning, ownership inference, cached roles, or allowlist bypass.
     """
     membership = repository.active_membership(db, principal, business_id)
     if membership is None:
         raise ApplicationError(ErrorKind.NOT_FOUND, "Business not found")
     user_id, membership_id, role = membership
+    if lock:
+        repository.lock_business_for_authorization(db, business_id)
+        membership = repository.active_membership(db, principal, business_id, lock=True)
+        if membership is None:
+            raise ApplicationError(ErrorKind.NOT_FOUND, "Business not found")
+        user_id, membership_id, role = membership
     if not allows(role, permission):
         raise ApplicationError(ErrorKind.FORBIDDEN, "Operation not permitted")
     return TenantAccess(user_id, business_id, membership_id, role)

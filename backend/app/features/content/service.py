@@ -1,239 +1,172 @@
-"""Application workflows; preserve existing ordering and transaction policy."""
+"""Authorized AI workflows with request-local provider inputs."""
 import logging
+from dataclasses import fields
+from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
 from app.errors import ApplicationError, ErrorKind
-from app.models import Conversation, ConversationMessage, Draft
-from app.transactions import Transactions
-from . import repository
-from . import adapters, generation_service
+from app.models import Conversation, Draft
+from app.transactions import Transactions, rollback_on_failure
+from app.features.access import service as access
+from app.features.access.permissions import Permission
+from app.features.access.principal import AuthenticatedPrincipal
+from . import repository, adapters, generation_service, execution
+from .context import BusinessProfile, Message, OperationContext
 from .schemas import SofiaChatRequest
 
 logger = logging.getLogger(__name__)
 
 
-def generate_content(business_id: str, *, db: Session) -> Draft:
-    business = repository.get_business(db, business_id)
-    if business is None:
-        raise ApplicationError(ErrorKind.NOT_FOUND, "Business not found")
-    recent_drafts = repository.recent_drafts(db, business)
-    recent_posts = [
-        {
-            "title": draft.title,
-            "caption": draft.caption,
-            "platform": draft.platform,
-        }
-        for draft in recent_drafts
-    ]
-    generated = generation_service.generate_marketing_content(
-        business,
-        recent_posts=recent_posts,
-    )
-    draft = Draft(
-        video_script=generated["video_script"],
-        business_id=business.id,
-        title=generated["title"],
-        caption=generated["caption"],
-        platform=generated["platform"],
-        publish_destinations=(
-            [generated["platform"]]
-            if generated["platform"] in ("facebook", "tiktok")
-            else ["facebook"]
-        ),
-        image_prompt=generated["image_prompt"],
-        status="pending",
-        source="ai",
-    )
-    repository.add_draft(db, draft)
-    transactions = Transactions(db)
-    transactions.commit()
-    transactions.refresh(draft)
-    return draft
+def _authorize(db, principal, business_id, *, generation=False, write=False, lock=False):
+    context = access.require_permission(db, principal, business_id,
+        Permission.USE_SOFIA if write or generation else Permission.READ, lock=lock)
+    if generation:
+        access.require_permission(db, principal, business_id, Permission.USE_LEO)
+    if write or generation:
+        access.require_permission(db, principal, business_id, Permission.EDIT_CONTENT)
+    return context
 
 
-def list_sofia_conversations(
-    business_id: str,
-    *,
-    db: Session,
-) -> list[dict[str, object]]:
-    business = repository.get_business(db, business_id)
+def _profile(db, context):
+    business = repository.get_business_scoped(db, context)
     if business is None:
         raise ApplicationError(ErrorKind.NOT_FOUND, "Business not found")
-    conversations = repository.list_conversations(db, business)
+    return BusinessProfile(**{field.name: getattr(business, field.name) for field in fields(BusinessProfile)})
+
+
+def _conversation(db, context, conversation_id, *, lock=False):
+    getter = repository.lock_conversation_scoped if lock else repository.get_conversation_scoped
+    conversation = getter(db, context, conversation_id)
+    if conversation is None:
+        raise ApplicationError(ErrorKind.NOT_FOUND, "Conversation not found for this business")
+    return conversation
+
+
+def _messages(db, context, conversation_id):
+    result = []
+    while True:
+        batch = repository.list_messages_scoped(db, context, conversation_id, offset=len(result))
+        result.extend(Message(message.role, message.content) for message in batch)
+        if len(batch) < 100:
+            return result
+
+
+def _run_provider(context, operation, callback, error_message):
+    attribution = OperationContext(str(uuid4()), context.business_id, context.user_id, operation)
+    execution.before_generation(attribution)
+    try:
+        result = callback()
+    except Exception as exc:
+        execution.after_generation(attribution, succeeded=False)
+        # Provider exceptions may contain prompts or credentials. Never log their text.
+        logger.warning("AI generation failed (%s)", type(exc).__name__)
+        raise ApplicationError(ErrorKind.UPSTREAM_FAILURE, error_message) from None
+    execution.after_generation(attribution, succeeded=True)
+    return result
+
+
+@rollback_on_failure
+def generate_content(business_id: str, *, db: Session, principal: AuthenticatedPrincipal) -> Draft:
+    return _generate(business_id, db=db, principal=principal)
+
+
+def list_sofia_conversations(business_id: str, *, db: Session, principal: AuthenticatedPrincipal):
+    context = _authorize(db, principal, business_id)
     results = []
-    for conversation in conversations:
-        first_message = repository.first_user_message(db, conversation)
-        title = (
-            first_message.content.strip()[:60]
-            if first_message
-            else "Nueva campaña"
-        )
-        results.append(
-            {
-                "id": conversation.id,
-                "created_at": conversation.created_at,
-                "title": title,
-            }
-        )
-    return results
+    while True:
+        batch = repository.list_conversations_scoped(db, context, offset=len(results))
+        for conversation in batch:
+            first = repository.first_user_message_scoped(db, context, conversation.id)
+            results.append({"id": conversation.id, "created_at": conversation.created_at,
+                "title": first.content.strip()[:60] if first else "Nueva campaña"})
+        if len(batch) < 100:
+            return results
 
 
-def get_sofia_conversation(
-    business_id: str,
-    conversation_id: str,
-    *,
-    db: Session,
-) -> dict[str, object]:
-    conversation = repository.get_scoped_conversation(db, business_id, conversation_id)
-    if conversation is None:
-        raise ApplicationError(
-            ErrorKind.NOT_FOUND,
-            "Conversation not found for this business",
-        )
-    messages = repository.list_messages(db, conversation)
-    return {
-        "conversation_id": conversation.id,
-        "messages": [
-            {"role": message.role, "content": message.content}
-            for message in messages
-        ],
-    }
+def get_sofia_conversation(business_id: str, conversation_id: str, *, db: Session,
+                           principal: AuthenticatedPrincipal):
+    context = _authorize(db, principal, business_id)
+    _conversation(db, context, conversation_id)
+    return {"conversation_id": conversation_id,
+        "messages": [{"role": m.role, "content": m.content} for m in _messages(db, context, conversation_id)]}
 
 
-def get_latest_sofia_conversation(
-    business_id: str,
-    *,
-    db: Session,
-) -> dict[str, object] | None:
-    """Retrieve the latest Sofía conversation for a business."""
-    business = repository.get_business(db, business_id)
-    if business is None:
-        raise ApplicationError(ErrorKind.NOT_FOUND, "Business not found")
-    conversation = repository.latest_conversation(db, business)
-    if conversation is None:
+def get_latest_sofia_conversation(business_id: str, *, db: Session, principal: AuthenticatedPrincipal):
+    context = _authorize(db, principal, business_id)
+    conversations = repository.list_conversations_scoped(db, context, limit=1)
+    if not conversations:
         return None
-    messages = repository.list_messages(db, conversation)
-    return {
-        "conversation_id": conversation.id,
-        "messages": [
-            {"role": message.role, "content": message.content}
-            for message in messages
-        ],
-    }
+    return get_sofia_conversation(business_id, conversations[0].id, db=db, principal=principal)
 
 
-def sofia_chat(
-    business_id: str,
-    request: SofiaChatRequest,
-    *,
-    db: Session,
-) -> dict[str, str]:
-    """Start or continue a conversation with Sofía."""
-    business = repository.get_business(db, business_id)
-    if business is None:
-        raise ApplicationError(ErrorKind.NOT_FOUND, "Business not found")
+@rollback_on_failure
+def sofia_chat(business_id: str, request: SofiaChatRequest, *, db: Session,
+               principal: AuthenticatedPrincipal):
+    context = _authorize(db, principal, business_id, write=True)
+    profile = _profile(db, context)
+    conversation_id = request.conversation_id or str(uuid4())
+    messages = []
     if request.conversation_id:
-        conversation = repository.get_requested_conversation(
-            db,
-            business,
-            request.conversation_id,
-        )
-        if conversation is None:
-            raise ApplicationError(
-                ErrorKind.NOT_FOUND,
-                "Conversation not found for this business",
-            )
+        _conversation(db, context, conversation_id)
+        messages = _messages(db, context, conversation_id)
+    user_message = Message("user", request.message.strip())
+    messages.append(user_message)
+    # No locks, ORM instances, or pending writes survive the provider wait.
+    Transactions(db).rollback()
+    reply = _run_provider(context, "sofia_chat", lambda: adapters.chat_with_sofia(profile, messages),
+                          "Sofía could not respond. Please try again.")
+    context = _authorize(db, principal, business_id, write=True, lock=True)
+    if request.conversation_id:
+        _conversation(db, context, conversation_id, lock=True)
     else:
-        conversation = Conversation(business_id=business.id)
-        repository.add_conversation(db, conversation)
-        repository.flush(db)
-    user_message = ConversationMessage(
-        conversation_id=conversation.id,
-        role="user",
-        content=request.message.strip(),
-    )
-    repository.add_user_message(db, user_message)
-    repository.flush(db)
-    messages = repository.list_messages(db, conversation)
-    try:
-        reply = adapters.chat_with_sofia(business, messages)
-    except Exception:
-        Transactions(db).rollback()
-        logger.exception("Sofía chat generation failed")
-        raise ApplicationError(
-            ErrorKind.UPSTREAM_FAILURE,
-            "Sofía could not respond. Please try again.",
-        )
-    assistant_message = ConversationMessage(
-        conversation_id=conversation.id,
-        role="assistant",
-        content=reply,
-    )
-    repository.add_assistant_message(db, assistant_message)
+        repository.add_conversation_scoped(db, context, Conversation(id=conversation_id))
+    repository.add_message_scoped(db, context, conversation_id, role="user", content=user_message.content)
+    repository.add_message_scoped(db, context, conversation_id, role="assistant", content=reply)
     Transactions(db).commit()
-    return {"conversation_id": conversation.id, "reply": reply}
+    return {"conversation_id": conversation_id, "reply": reply}
 
 
-def generate_sofia_conversation_draft(
-    business_id: str,
-    conversation_id: str,
-    *,
-    db: Session,
-) -> Draft:
-    """Generate a pending draft using Sofía's conversation and Leo."""
-    business = repository.get_business(db, business_id)
-    if business is None:
-        raise ApplicationError(ErrorKind.NOT_FOUND, "Business not found")
-    conversation = repository.get_conversation(db, business, conversation_id)
-    if conversation is None:
-        raise ApplicationError(
-            ErrorKind.NOT_FOUND,
-            "Conversation not found for this business",
-        )
-    messages = repository.list_messages(db, conversation)
-    user_messages = [
-        message.content for message in messages if message.role == "user"
-    ]
-    if not user_messages:
-        raise ApplicationError(
-            ErrorKind.INVALID_INPUT,
-            "The conversation has no campaign instructions",
-        )
-    campaign_instructions = "\n".join(user_messages[-10:])
-    recent_drafts = repository.recent_drafts(db, business)
-    recent_posts = [
-        {
-            "title": draft.title,
-            "caption": draft.caption,
-            "platform": draft.platform,
-        }
-        for draft in recent_drafts
-    ]
-    try:
-        generated = generation_service.generate_marketing_content(
-            business,
-            recent_posts=recent_posts,
-            campaign_instructions=campaign_instructions,
-        )
-    except Exception:
-        logger.exception("Conversational draft generation failed")
-        raise ApplicationError(
-            ErrorKind.UPSTREAM_FAILURE,
-            "Sofía and Leo could not generate the draft",
-        )
-    draft = Draft(
-        video_script=generated["video_script"],
-        business_id=business.id,
-        title=generated["title"],
-        caption=generated["caption"],
-        platform=generated["platform"],
-        image_prompt=generated["image_prompt"],
-        status="pending",
-        source="ai",
-    )
-    repository.add_draft(db, draft)
-    transactions = Transactions(db)
-    transactions.commit()
-    transactions.refresh(draft)
-    return draft
+@rollback_on_failure
+def generate_sofia_conversation_draft(business_id: str, conversation_id: str, *, db: Session,
+                                      principal: AuthenticatedPrincipal) -> Draft:
+    return _generate(business_id, db=db, principal=principal, conversation_id=conversation_id)
+
+
+def _generate(business_id, *, db, principal, conversation_id=None):
+    context = _authorize(db, principal, business_id, generation=True)
+    profile = _profile(db, context)
+    kwargs = {"recent_posts": [{"title": d.title, "caption": d.caption, "platform": d.platform}
+                               for d in repository.recent_drafts_scoped(db, context)]}
+    if conversation_id:
+        _conversation(db, context, conversation_id)
+        instructions = [m.content for m in _messages(db, context, conversation_id) if m.role == "user"]
+        if not instructions:
+            raise ApplicationError(ErrorKind.INVALID_INPUT, "The conversation has no campaign instructions")
+        kwargs["campaign_instructions"] = "\n".join(instructions[-10:])
+    Transactions(db).rollback()
+    generated = _run_provider(context, "conversation_draft" if conversation_id else "generate_content",
+        lambda: generation_service.generate_marketing_content(profile, **kwargs),
+        "Sofía and Leo could not generate the draft")
+    context = _authorize(db, principal, business_id, generation=True, lock=True)
+    if conversation_id:
+        _conversation(db, context, conversation_id, lock=True)
+    # Never accept resource IDs, ownership, approval, or publication state from AI output.
+    draft = Draft(**{key: generated[key] for key in
+        ("video_script", "title", "caption", "platform", "image_prompt")}, status="pending", source="ai")
+    if not conversation_id:
+        draft.publish_destinations = ([generated["platform"]] if generated["platform"] in
+                                       ("facebook", "tiktok") else ["facebook"])
+    draft_id = repository.add_draft_scoped(db, context, draft)
+    Transactions(db).commit()
+    context = _authorize(db, principal, business_id)
+    return repository.get_draft_scoped(db, context, draft_id)
+
+
+@rollback_on_failure
+def delete_sofia_conversation(business_id: str, conversation_id: str, *, db: Session,
+                              principal: AuthenticatedPrincipal):
+    context = _authorize(db, principal, business_id, write=True, lock=True)
+    _conversation(db, context, conversation_id, lock=True)
+    repository.delete_conversation_scoped(db, context, conversation_id)
+    Transactions(db).commit()

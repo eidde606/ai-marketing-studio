@@ -5,6 +5,8 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from tests.tenancy_fixtures import grant_test_owner
+
 from app.models import Business, Conversation, ConversationMessage, Draft
 
 
@@ -14,6 +16,8 @@ def businesses(engine):
             Business(id="a", name="Negocio A"),
             Business(id="b", name="Negocio B"),
         ])
+        db.flush()
+        grant_test_owner(db, ["a", "b"])
         db.commit()
 
 

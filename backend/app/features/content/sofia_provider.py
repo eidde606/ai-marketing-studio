@@ -3,17 +3,17 @@ import json
 
 from openai import OpenAI
 
-from app.database import _ENV_FILE
-from app.models import Business, ConversationMessage
+from pathlib import Path
+from .context import BusinessProfile, Message
 from dotenv import load_dotenv
 
-load_dotenv(_ENV_FILE)
+load_dotenv(Path(__file__).resolve().parents[3] / ".env")
 
 client = OpenAI()
 
 def chat_with_sofia(
-        business: Business,
-        messages: list[ConversationMessage],
+        business: BusinessProfile,
+        messages: list[Message],
 ) -> str:
     """Generate Sofía's next response using business context and chat history."""
 

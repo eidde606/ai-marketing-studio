@@ -1,12 +1,12 @@
 """Sofía plans first; Leo then creates content using that exact strategy."""
 import json
 
-from app.models import Business
+from .context import BusinessProfile
 from . import adapters
 
 
 def generate_marketing_content(
-    business: Business,
+    business: BusinessProfile,
     recent_posts: list[dict[str, str]] | None = None,
     campaign_instructions: str | None = None,
 ) -> dict[str, str]:
