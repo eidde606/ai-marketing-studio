@@ -52,6 +52,10 @@ class HeyGenGenerationRequest(BaseModel):
     script: str = Field(min_length=1, max_length=5000)
 
 
+class ImageRevisionRequest(BaseModel):
+    instructions: str = Field(min_length=1, max_length=1000)
+
+
 class HeyGenGenerationResponse(BaseModel):
     attempt_id: str
     draft_id: str

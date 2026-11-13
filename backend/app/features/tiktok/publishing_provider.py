@@ -1,3 +1,4 @@
+"""TikTok publishing API adapter."""
 import httpx
 
 TIKTOK_API_URL = "https://open.tiktokapis.com/v2"
@@ -5,12 +6,11 @@ TIKTOK_API_URL = "https://open.tiktokapis.com/v2"
 
 async def get_creator_info(access_token: str) -> dict:
     """Retrieve TikTok's available publishing settings."""
-
     async with httpx.AsyncClient(timeout=20.0) as client:
         response = await client.post(
             f"{TIKTOK_API_URL}/post/publish/creator_info/query/",
             headers={
-                "Authorization": f"Bearer {access_token}",
+                "Authorization": f"******",
                 "Content-Type": "application/json",
             },
             json={},
@@ -18,21 +18,19 @@ async def get_creator_info(access_token: str) -> dict:
         response.raise_for_status()
 
     result = response.json()
-
     if result.get("error", {}).get("code") != "ok":
         raise ValueError("TikTok creator information request failed")
-
     return result["data"]
 
 
 async def publish_tiktok_video(
-        access_token: str,
-        video_url: str,
-        caption: str,
-        privacy_level: str,
-        disable_comment: bool = False,
-        disable_duet: bool = False,
-        disable_stitch: bool = False,
+    access_token: str,
+    video_url: str,
+    caption: str,
+    privacy_level: str,
+    disable_comment: bool = False,
+    disable_duet: bool = False,
+    disable_stitch: bool = False,
 ) -> dict:
     payload = {
         "post_info": {
@@ -52,7 +50,7 @@ async def publish_tiktok_video(
         response = await client.post(
             f"{TIKTOK_API_URL}/post/publish/video/init/",
             headers={
-                "Authorization": f"Bearer {access_token}",
+                "Authorization": f"******",
                 "Content-Type": "application/json",
             },
             json=payload,
@@ -60,21 +58,19 @@ async def publish_tiktok_video(
         response.raise_for_status()
 
     result = response.json()
-
     if result.get("error", {}).get("code") != "ok":
         raise ValueError("TikTok rejected the video publishing request")
-
     return result["data"]
 
 
 async def publish_tiktok_video_file(
-        access_token: str,
-        video_bytes: bytes,
-        caption: str,
-        privacy_level: str,
-        disable_comment: bool = False,
-        disable_duet: bool = False,
-        disable_stitch: bool = False,
+    access_token: str,
+    video_bytes: bytes,
+    caption: str,
+    privacy_level: str,
+    disable_comment: bool = False,
+    disable_duet: bool = False,
+    disable_stitch: bool = False,
 ) -> dict:
     """Directly upload one MP4 chunk (5–64 MiB) to TikTok."""
     size = len(video_bytes)
@@ -98,7 +94,7 @@ async def publish_tiktok_video_file(
     async with httpx.AsyncClient(timeout=120.0) as client:
         response = await client.post(
             f"{TIKTOK_API_URL}/post/publish/video/init/",
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Authorization": f"******"},
             json=payload,
         )
         if response.is_error:
@@ -125,11 +121,11 @@ async def publish_tiktok_video_file(
 
 
 async def publish_tiktok_photo(
-        access_token: str,
-        image_url: str,
-        caption: str,
-        privacy_level: str,
-        disable_comment: bool = False,
+    access_token: str,
+    image_url: str,
+    caption: str,
+    privacy_level: str,
+    disable_comment: bool = False,
 ) -> dict:
     payload = {
         "post_info": {
@@ -152,7 +148,7 @@ async def publish_tiktok_photo(
         response = await client.post(
             f"{TIKTOK_API_URL}/post/publish/content/init/",
             headers={
-                "Authorization": f"Bearer {access_token}",
+                "Authorization": f"******",
                 "Content-Type": "application/json",
             },
             json=payload,
@@ -160,22 +156,20 @@ async def publish_tiktok_photo(
         response.raise_for_status()
 
     result = response.json()
-
     if result.get("error", {}).get("code") != "ok":
         raise ValueError("TikTok rejected the photo publishing request")
-
     return result["data"]
 
 
 async def get_tiktok_publish_status(
-        access_token: str,
-        publish_id: str,
+    access_token: str,
+    publish_id: str,
 ) -> dict:
     async with httpx.AsyncClient(timeout=20.0) as client:
         response = await client.post(
             f"{TIKTOK_API_URL}/post/publish/status/fetch/",
             headers={
-                "Authorization": f"Bearer {access_token}",
+                "Authorization": f"******",
                 "Content-Type": "application/json",
             },
             json={"publish_id": publish_id},
@@ -183,8 +177,6 @@ async def get_tiktok_publish_status(
         response.raise_for_status()
 
     result = response.json()
-
     if result.get("error", {}).get("code") != "ok":
         raise ValueError("TikTok publication status request failed")
-
     return result["data"]

@@ -1,3 +1,43 @@
+# Backend architecture guardrail
+
+`test_architecture.py` enforces one incremental rule: HTTP route modules must
+access repositories through application services, never import them directly.
+It parses Python source with the standard-library AST parser and does not import
+application modules, connect to the database, or call providers. No dependencies
+are added.
+
+Scope is discovered automatically under `backend/app`: `routes.py`,
+`*_routes.py`, modules inside such route packages, and the legacy `app.main`
+entry point. Repository dependencies are identified by module/package components
+named `repository`, `repositories`, or ending in `_repository`. Keep these
+conventions for new modules, or extend the detector and its tests when adding a
+new naming convention. Absolute and relative imports, aliases, imported symbols,
+wildcards from repository modules, and imports inside functions or conditional
+blocks are checked. Service imports are allowed.
+
+**Current baseline exceptions: none.** The two Instagram corrections removed the
+remaining direct repository imports from feature routes. The explicit
+`ROUTE_REPOSITORY_EXCEPTIONS` mapping is empty. Any future approved legacy
+exception must specify an exact `(source_module, repository_module)` pair and a
+nonempty reason, with the same pair documented here. Directory exclusions and
+wildcard exceptions are not supported. When refactoring an excepted dependency,
+remove its mapping and documentation in the same change: stale exceptions fail.
+New dependencies outside those exact pairs also fail.
+
+This first guardrail does not enforce service-to-repository boundaries, detect
+direct SQL/ORM operations, trace dependencies through re-exports or services, or
+resolve dynamic imports (`importlib`/`__import__`). A green result does not certify
+the entire closed layered architecture.
+
+Run it from `backend` using the existing environment:
+
+```sh
+../.venv/bin/python -B -m pytest tests/test_architecture.py -q -p no:cacheprovider
+```
+
+The complete `pytest tests` suite includes both the repository scan and focused
+detector tests for prohibited imports, compliant imports, and exact/stale baselines.
+
 # Phase 0: automated testing baseline
 
 This phase adds tests and test-only setup. It intentionally preserves production

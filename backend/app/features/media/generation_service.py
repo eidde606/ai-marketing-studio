@@ -8,12 +8,11 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import httpx
-from fastapi import HTTPException
-from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.heygen_service import (
+from app.errors import ApplicationError, ErrorKind
+from .heygen_provider import (
     HeyGenConfigurationError,
     HeyGenProviderError,
     HeyGenRequestInProgress,
@@ -23,11 +22,17 @@ from app.heygen_service import (
 )
 from app.models import Draft, HeyGenGenerationAttempt, HeyGenWebhookDelivery
 from app.storage_service import upload_marketing_video
+from app.transactions import Transactions
 
 from . import repository
 from .schemas import HeyGenGenerationRequest
 
 logger = logging.getLogger(__name__)
+
+
+def _failure(kind: ErrorKind, detail: str) -> ApplicationError:
+    return ApplicationError(kind, detail)
+
 
 # Leave an hour of margin for provider/network timing within its 24-hour window.
 IDEMPOTENCY_RETRY_WINDOW = timedelta(hours=23)
@@ -121,12 +126,10 @@ def _update_attempt(
     expected_updated_at: datetime | None = None,
     expected_lease_until: datetime | None = None,
 ) -> HeyGenGenerationAttempt:
-    draft = repository.lock_draft_for_attempt(db, attempt_id)
-    attempt = db.scalar(
-        select(HeyGenGenerationAttempt)
-        .where(HeyGenGenerationAttempt.id == attempt_id)
-        .with_for_update()
-        .execution_options(populate_existing=True)
+    draft, attempt = repository.lock_attempt_for_update(
+        db,
+        attempt_id,
+        lock_draft=True,
     )
     if attempt is None:
         raise RuntimeError("Persisted HeyGen generation attempt disappeared.")
@@ -159,8 +162,9 @@ def _update_attempt(
     # Tracking may finish after a draft becomes ineligible; never restore
     # that draft's generation association or media state.
     if not can_attach:
-        db.commit()
-        db.refresh(attempt)
+        transactions = Transactions(db)
+        transactions.commit()
+        transactions.refresh(attempt)
         return attempt
     if status in ("SUBMITTING", "PROCESSING"):
         draft.media_type = "video"
@@ -183,8 +187,9 @@ def _update_attempt(
         draft.video_generation_id = None
         attempt.storage_status = "FAILED"
 
-    db.commit()
-    db.refresh(attempt)
+    transactions = Transactions(db)
+    transactions.commit()
+    transactions.refresh(attempt)
     return attempt
 
 
@@ -307,23 +312,23 @@ def submit_generation(
         draft_id=draft_id,
     )
     if draft is None:
-        raise HTTPException(status_code=404, detail="Draft not found")
+        raise _failure(ErrorKind.NOT_FOUND, "Draft not found")
     if draft.status != "pending":
-        raise HTTPException(status_code=409, detail="Only pending drafts can generate videos")
+        raise _failure(ErrorKind.CONFLICT, "Only pending drafts can generate videos")
 
     # Both image and video reservations hold the same draft row lock before
     # inspecting other media operations. Commit the reservation before HTTP I/O.
     if draft.image_status == "generating":
-        raise HTTPException(status_code=409, detail="Image generation is already active")
+        raise _failure(ErrorKind.CONFLICT, "Image generation is already active")
 
     active = repository.active_attempt_for_draft(db, draft_id, lock=True)
     if active is not None:
         if active.user_id != user_id or active.business_id != business_id:
-            raise HTTPException(status_code=404, detail="Draft not found")
+            raise _failure(ErrorKind.NOT_FOUND, "Draft not found")
         if active.request_fingerprint != fingerprint:
-            raise HTTPException(
-                status_code=409,
-                detail="A different HeyGen generation attempt is already active",
+            raise _failure(
+                ErrorKind.CONFLICT,
+                "A different HeyGen generation attempt is already active",
             )
         if active.status == "PROCESSING" or active.provider_video_id:
             return _response(active)
@@ -348,8 +353,9 @@ def submit_generation(
         active.status = "SUBMITTING"
         active.submission_lease_until = now + SUBMISSION_LEASE
         active.updated_at = now
-        db.commit()
-        db.refresh(active)
+        transactions = Transactions(db)
+        transactions.commit()
+        transactions.refresh(active)
         return _submit_provider_request(
             db,
             active,
@@ -363,7 +369,7 @@ def submit_generation(
         draft_id=draft_id,
     )
     if latest is not None and latest.status == "COMPLETED":
-        raise HTTPException(status_code=409, detail="This draft already has a generated video")
+        raise _failure(ErrorKind.CONFLICT, "This draft already has a generated video")
     if draft.video_url or draft.video_status in (
         "pending",
         "generating",
@@ -371,9 +377,9 @@ def submit_generation(
         "uploading",
         "needs_review",
     ):
-        raise HTTPException(
-            status_code=409,
-            detail="This draft already has a video or an active video operation",
+        raise _failure(
+            ErrorKind.CONFLICT,
+            "This draft already has a video or an active video operation",
         )
 
     attempt = HeyGenGenerationAttempt(
@@ -396,23 +402,23 @@ def submit_generation(
     )
     draft.media_type = "video"
     draft.video_status = "generating"
-    db.add(attempt)
+    repository.add_attempt(db, attempt)
     try:
-        db.commit()
+        Transactions(db).commit()
     except IntegrityError:
-        db.rollback()
+        Transactions(db).rollback()
         concurrent = repository.active_attempt_for_draft(db, draft_id)
         if concurrent is None:
             raise
         if concurrent.user_id != user_id or concurrent.business_id != business_id:
-            raise HTTPException(status_code=404, detail="Draft not found")
+            raise _failure(ErrorKind.NOT_FOUND, "Draft not found")
         if concurrent.request_fingerprint == fingerprint:
             return _response(concurrent)
-        raise HTTPException(
-            status_code=409,
-            detail="A different HeyGen generation attempt is already active",
+        raise _failure(
+            ErrorKind.CONFLICT,
+            "A different HeyGen generation attempt is already active",
         )
-    db.refresh(attempt)
+    Transactions(db).refresh(attempt)
     return _submit_provider_request(
         db,
         attempt,
@@ -433,7 +439,7 @@ def get_latest_generation(
         draft_id=draft_id,
     )
     if draft is None:
-        raise HTTPException(status_code=404, detail="Draft not found")
+        raise _failure(ErrorKind.NOT_FOUND, "Draft not found")
 
     attempt = repository.latest_attempt_for_draft(
         db,
@@ -442,7 +448,10 @@ def get_latest_generation(
         draft_id=draft_id,
     )
     if attempt is None:
-        raise HTTPException(status_code=404, detail="No HeyGen generation attempt found")
+        raise _failure(
+            ErrorKind.NOT_FOUND,
+            "No HeyGen generation attempt found",
+        )
     if attempt.status == "COMPLETED" and attempt.storage_status == "STORED":
         # Private storage is authoritative after completion; provider retention
         # or outages must not prevent restoring an already saved video.
@@ -457,14 +466,14 @@ def get_latest_generation(
             return _response(attempt)
         attempt = refresh_attempt_status(db, attempt)
     except CompletionProcessingError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="HeyGen video completion could not be stored; retry reconciliation",
+        raise _failure(
+            ErrorKind.UPSTREAM_FAILURE,
+            "HeyGen video completion could not be stored; retry reconciliation",
         ) from exc
     except (httpx.HTTPError, HeyGenConfigurationError, ValueError) as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="HeyGen status is temporarily unavailable; the saved attempt is unchanged",
+        raise _failure(
+            ErrorKind.UPSTREAM_FAILURE,
+            "HeyGen status is temporarily unavailable; the saved attempt is unchanged",
         ) from exc
 
     return _response(attempt)
@@ -491,12 +500,7 @@ def _set_storage_retry(
     attempt_id: str,
     lease_until: datetime,
 ) -> None:
-    attempt = db.scalar(
-        select(HeyGenGenerationAttempt)
-        .where(HeyGenGenerationAttempt.id == attempt_id)
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    )
+    _, attempt = repository.lock_attempt_for_update(db, attempt_id)
     if (
         attempt is not None
         and attempt.storage_status == "PROCESSING"
@@ -506,19 +510,17 @@ def _set_storage_retry(
         attempt.storage_status = "RETRY"
         attempt.completion_lease_until = None
         attempt.updated_at = _now()
-        db.commit()
+        Transactions(db).commit()
 
 
 def _claim_storage(
     db: Session,
     attempt_id: str,
 ) -> tuple[HeyGenGenerationAttempt, datetime] | None:
-    draft = repository.lock_draft_for_attempt(db, attempt_id)
-    attempt = db.scalar(
-        select(HeyGenGenerationAttempt)
-        .where(HeyGenGenerationAttempt.id == attempt_id)
-        .with_for_update()
-        .execution_options(populate_existing=True)
+    draft, attempt = repository.lock_attempt_for_update(
+        db,
+        attempt_id,
+        lock_draft=True,
     )
     if attempt is None or attempt.status != "COMPLETED":
         return None
@@ -528,7 +530,7 @@ def _claim_storage(
         attempt.storage_status = "FAILED"
         attempt.completion_lease_until = None
         attempt.updated_at = _now()
-        db.commit()
+        Transactions(db).commit()
         return None
     lease_until = (
         _utc(attempt.completion_lease_until)
@@ -543,8 +545,9 @@ def _claim_storage(
     attempt.storage_status = "PROCESSING"
     attempt.completion_lease_until = lease_until
     attempt.updated_at = now
-    db.commit()
-    db.refresh(attempt)
+    transactions = Transactions(db)
+    transactions.commit()
+    transactions.refresh(attempt)
     return attempt, lease_until
 
 
@@ -555,11 +558,7 @@ def _store_completed_video(
 ) -> HeyGenGenerationAttempt:
     claim = _claim_storage(db, attempt.id)
     if claim is None:
-        fresh = db.scalar(
-            select(HeyGenGenerationAttempt)
-            .where(HeyGenGenerationAttempt.id == attempt.id)
-            .execution_options(populate_existing=True)
-        )
+        fresh = repository.refreshed_attempt(db, attempt.id)
         return fresh or attempt
     claimed, lease_until = claim
     # Expired workers may still upload; isolate each claim's object so they
@@ -593,12 +592,10 @@ def _store_completed_video(
             "Unable to download or store the completed HeyGen video."
         ) from exc
 
-    draft = repository.lock_draft_for_attempt(db, claimed.id)
-    current = db.scalar(
-        select(HeyGenGenerationAttempt)
-        .where(HeyGenGenerationAttempt.id == claimed.id)
-        .with_for_update()
-        .execution_options(populate_existing=True)
+    draft, current = repository.lock_attempt_for_update(
+        db,
+        claimed.id,
+        lock_draft=True,
     )
     if (
         current is None
@@ -616,8 +613,9 @@ def _store_completed_video(
         current.storage_status = "FAILED"
         current.completion_lease_until = None
         current.updated_at = _now()
-        db.commit()
-        db.refresh(current)
+        transactions = Transactions(db)
+        transactions.commit()
+        transactions.refresh(current)
         return current
     current.storage_status = "STORED"
     current.storage_path = claim_path
@@ -627,8 +625,9 @@ def _store_completed_video(
     draft.video_url = claim_path
     draft.video_status = "completed"
     draft.video_generation_id = current.provider_video_id
-    db.commit()
-    db.refresh(current)
+    transactions = Transactions(db)
+    transactions.commit()
+    transactions.refresh(current)
     return current
 
 
@@ -721,7 +720,7 @@ def _reconcile_webhook_delivery(
     )
     if attempt.status in ("COMPLETED", "FAILED"):
         delivery.processed_at = _now()
-        db.commit()
+        Transactions(db).commit()
     return attempt
 
 
@@ -747,16 +746,16 @@ def record_webhook_delivery(
         callback_id=callback_id,
         received_at=_now(),
     )
-    db.add(delivery)
+    repository.add_webhook_delivery(db, delivery)
     try:
-        db.commit()
+        Transactions(db).commit()
     except IntegrityError:
-        db.rollback()
+        Transactions(db).rollback()
         existing = repository.webhook_delivery_by_key(db, deduplication_key)
         if existing is None:
             raise
         return existing
-    db.refresh(delivery)
+    Transactions(db).refresh(delivery)
     return delivery
 
 

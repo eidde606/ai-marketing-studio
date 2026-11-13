@@ -1,6 +1,10 @@
 """Coordinates HeyGen asset listing and preserves the legacy list responses."""
-from app.heygen_service import get_available_avatar_looks, get_available_voices
-from app.heygen_service import list_avatar_looks, list_voices
+from .heygen_provider import (
+    get_available_avatar_looks,
+    get_available_voices,
+    list_avatar_looks,
+    list_voices,
+)
 
 
 def avatar_looks(

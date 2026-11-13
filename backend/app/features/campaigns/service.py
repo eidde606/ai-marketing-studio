@@ -1,9 +1,11 @@
 """Campaign rules, response calculations and transaction boundaries."""
 from datetime import date, datetime, timezone
+from enum import Enum
 
 from sqlalchemy.orm import Session
 
 from app.models import Campaign, Draft
+from app.transactions import Transactions
 from . import repository
 from .schemas import (
     CampaignCreate,
@@ -13,30 +15,36 @@ from .schemas import (
 )
 
 
+class CampaignErrorKind(Enum):
+    NOT_FOUND = "not_found"
+    INVALID_DATES = "invalid_dates"
+    ASSOCIATION_CONFLICT = "association_conflict"
+
+
 class CampaignError(Exception):
     """An expected rejection; routes translate it into the existing HTTP response."""
 
-    def __init__(self, status_code: int, detail: str):
+    def __init__(self, kind: CampaignErrorKind, detail: str):
         super().__init__(detail)
-        self.status_code = status_code
+        self.kind = kind
         self.detail = detail
 
 
 def require_business(db: Session, business_id: str) -> None:
     if repository.find_business(db, business_id) is None:
-        raise CampaignError(404, "Negocio no encontrado.")
+        raise CampaignError(CampaignErrorKind.NOT_FOUND, "Negocio no encontrado.")
 
 
 def require_campaign(db: Session, business_id: str, campaign_id: str) -> Campaign:
     campaign = repository.find_campaign(db, business_id, campaign_id)
     if campaign is None:
-        raise CampaignError(404, "Campaña no encontrada para este negocio.")
+        raise CampaignError(CampaignErrorKind.NOT_FOUND, "Campaña no encontrada para este negocio.")
     return campaign
 
 
 def validate_dates(start_date: date | None, end_date: date | None) -> None:
     if start_date and end_date and end_date < start_date:
-        raise CampaignError(422, "La fecha final no puede ser anterior a la inicial.")
+        raise CampaignError(CampaignErrorKind.INVALID_DATES, "La fecha final no puede ser anterior a la inicial.")
 
 
 def is_published(draft: Draft) -> bool:
@@ -99,8 +107,8 @@ def create_campaign(
     validate_dates(request.start_date, request.end_date)
     campaign = Campaign(business_id=business_id, **request.model_dump())
     repository.add_campaign(db, campaign)
-    db.commit()
-    db.refresh(campaign)
+    Transactions(db).commit()
+    Transactions(db).refresh(campaign)
     return campaign_response(campaign)
 
 
@@ -119,15 +127,15 @@ def update_campaign(
     )
     for key, value in changes.items():
         setattr(campaign, key, value)
-    db.commit()
-    db.refresh(campaign)
+    Transactions(db).commit()
+    Transactions(db).refresh(campaign)
     return campaign_response(campaign)
 
 
 def delete_campaign(business_id: str, campaign_id: str, db: Session) -> dict[str, str]:
     campaign = require_campaign(db, business_id, campaign_id)
     repository.delete_campaign(db, business_id, campaign)
-    db.commit()
+    Transactions(db).commit()
     return {"message": "Campaña eliminada correctamente."}
 
 
@@ -138,15 +146,15 @@ def change_association(
     # Serialize association changes with existing draft edits and soft deletion.
     draft = repository.lock_draft(db, business_id, draft_id)
     if draft is None or (attach and draft.deleted_at is not None):
-        raise CampaignError(404, "Contenido no encontrado para este negocio.")
+        raise CampaignError(CampaignErrorKind.NOT_FOUND, "Contenido no encontrado para este negocio.")
     if attach and draft.campaign_id not in (None, campaign.id):
         raise CampaignError(
-            409, "Desvincula el contenido de su campaña actual antes de asociarlo.",
+            CampaignErrorKind.ASSOCIATION_CONFLICT, "Desvincula el contenido de su campaña actual antes de asociarlo.",
         )
     if not attach and draft.campaign_id != campaign.id:
-        raise CampaignError(404, "El contenido no pertenece a esta campaña.")
+        raise CampaignError(CampaignErrorKind.NOT_FOUND, "El contenido no pertenece a esta campaña.")
     draft.campaign_id = campaign.id if attach else None
     campaign.updated_at = datetime.now(timezone.utc)
-    db.commit()
-    db.refresh(campaign)
+    Transactions(db).commit()
+    Transactions(db).refresh(campaign)
     return campaign_response(campaign)

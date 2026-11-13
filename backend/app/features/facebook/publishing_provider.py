@@ -1,25 +1,10 @@
+"""Facebook publishing and analytics provider adapter."""
 import httpx
 import logging
-
 
 logger = logging.getLogger(__name__)
 
 GRAPH_API_URL = "https://graph.facebook.com/v26.0"
-
-
-async def get_page_info(page_id: str, access_token: str) -> dict:
-    """Get basic information about a Facebook Page."""
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        response = await client.get(
-            f"{GRAPH_API_URL}/{page_id}",
-            params={
-                "fields": "id,name",
-                "access_token": access_token,
-            },
-        )
-        response.raise_for_status()
-        return response.json()
-
 
 async def publish_text_post(
         page_id: str,

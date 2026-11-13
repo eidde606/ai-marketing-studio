@@ -3,7 +3,7 @@ import hashlib
 import logging
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlparse
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from sqlalchemy.orm import Session
@@ -133,13 +133,16 @@ def test_start_uses_instagram_configuration_and_business_page(isolated_client, m
         lambda state: f"https://meta.test/authorize?state={state}&config=instagram",
     )
 
+    before = datetime.now(timezone.utc)
     response = client.get(
         "/auth/instagram/start",
         params={"business_id": business_id},
     )
+    after = datetime.now(timezone.utc)
 
     assert response.status_code == 200
     data = response.json()
+    assert set(data) == {"authorization_url"}
     parsed = urlparse(data["authorization_url"])
     returned_state = parse_qs(parsed.query)["state"][0]
     assert parse_qs(parsed.query)["config"] == ["instagram"]
@@ -150,6 +153,94 @@ def test_start_uses_instagram_configuration_and_business_page(isolated_client, m
         assert state.state_hash == hashlib.sha256(returned_state.encode()).hexdigest()
         assert state.business_id == business_id
         assert state.facebook_page_id == "page-a"
+        assert state.user_id == "test-authorized-user"
+        expires_at = state.expires_at.replace(tzinfo=timezone.utc)
+        assert before + timedelta(minutes=10) <= expires_at <= after + timedelta(minutes=10)
+
+
+@pytest.mark.parametrize(
+    "failure, expected_status, expected_message",
+    [
+        ("missing_business", 404, "No se encontró el negocio seleccionado."),
+        ("disconnected_page", 409, "Conecta primero una página de Facebook para este negocio."),
+        ("configuration", 409, "La conexión de Instagram no está configurada en el servidor."),
+        ("value_error", 409, "Invalid authorization URL"),
+        ("business_removed", 404, "Invalid authorization URL"),
+    ],
+)
+def test_start_error_contracts_do_not_persist_state(
+    isolated_client, monkeypatch, failure, expected_status, expected_message,
+):
+    client, engine = isolated_client
+    business_id = "missing-business"
+    if failure != "missing_business":
+        business_id, page_id = create_business(engine)
+        if failure == "disconnected_page":
+            with Session(engine) as db:
+                db.get(SocialAccount, page_id).connection_status = "disconnected"
+                db.commit()
+
+    build_url = Mock()
+    if failure == "configuration":
+        build_url.side_effect = RuntimeError("Instagram OAuth is not configured")
+    elif failure in ("value_error", "business_removed"):
+        build_url.side_effect = ValueError("Invalid authorization URL")
+    if failure == "business_removed":
+        # Preserve the existing error classification if the business disappears
+        # between validation and the error-path lookup.
+        monkeypatch.setattr(
+            "app.features.instagram.repository.get_business",
+            Mock(side_effect=[Business(id=business_id, name="Business a"), None]),
+        )
+    monkeypatch.setattr("app.features.instagram.provider.build_login_url", build_url)
+
+    response = client.get(
+        "/auth/instagram/start", params={"business_id": business_id},
+    )
+
+    assert response.status_code == expected_status
+    assert response.json() == {"detail": expected_message}
+    if failure in ("missing_business", "disconnected_page"):
+        build_url.assert_not_called()
+    else:
+        build_url.assert_called_once()
+    with Session(engine) as db:
+        assert db.query(InstagramOAuthState).count() == 0
+
+
+@pytest.mark.parametrize("business_exists", [False, True])
+def test_start_service_exposes_typed_application_errors(isolated_client, business_exists):
+    from app.features.instagram import service
+
+    _, engine = isolated_client
+    with Session(engine) as db:
+        if business_exists:
+            db.add(Business(id="business-a", name="Business a"))
+            db.commit()
+        error_type = (
+            service.ConnectionStartConflictError
+            if business_exists else service.BusinessNotFoundError
+        )
+        with pytest.raises(error_type):
+            service.start_connection(db, "business-a", "test-authorized-user")
+
+
+def test_start_requires_authentication_without_creating_state(isolated_client):
+    from app.auth import verify_token
+    from app.main import app
+
+    client, engine = isolated_client
+    business_id, _ = create_business(engine)
+    app.dependency_overrides.pop(verify_token)
+
+    response = client.get(
+        "/auth/instagram/start", params={"business_id": business_id},
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Authentication required"}
+    with Session(engine) as db:
+        assert db.query(InstagramOAuthState).count() == 0
 
 
 def test_invalid_and_replayed_callbacks_never_call_meta(isolated_client, monkeypatch):
@@ -829,6 +920,77 @@ def test_token_exchange_logs_reason_without_sensitive_values(
     assert "private-state" not in caplog.text
     assert "private-code" not in caplog.text
     assert "private response" not in caplog.text
+
+
+def test_accounts_existing_business_preserves_unconnected_response(isolated_client):
+    client, engine = isolated_client
+    business_id, _ = create_business(engine)
+
+    response = client.get(
+        "/auth/instagram/accounts", params={"business_id": business_id},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "not_connected",
+        "username": None,
+        "facebook_page_id": None,
+        "facebook_page_name": None,
+        "granted_permissions": [],
+        "missing_permissions": [
+            "instagram_basic", "instagram_content_publish",
+            "pages_show_list", "pages_read_engagement",
+        ],
+        "message": None,
+    }
+
+
+def test_failed_reauthorization_preserves_authorized_connection_without_commit(
+    isolated_client, monkeypatch,
+):
+    from app.features.instagram.service import _save_status
+
+    _, engine = isolated_client
+    business_id, _ = create_business(engine)
+    with Session(engine) as db:
+        db.add(InstagramConnection(
+            business_id=business_id,
+            status="connected_and_authorized",
+            encrypted_access_token="preserved-token",
+            username="preserved-user",
+        ))
+        db.commit()
+    with Session(engine) as db:
+        monkeypatch.setattr(db, "commit", lambda: pytest.fail("No downgrade commit"))
+        _save_status(db, business_id, status="discovery_error")
+    with Session(engine) as db:
+        connection = db.get(InstagramConnection, business_id)
+        assert connection.status == "connected_and_authorized"
+        assert connection.encrypted_access_token == "preserved-token"
+        assert connection.username == "preserved-user"
+
+
+def test_accounts_missing_business_preserves_not_found_response(isolated_client):
+    client, _ = isolated_client
+
+    response = client.get(
+        "/auth/instagram/accounts", params={"business_id": "missing-business"},
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Business not found"}
+
+
+def test_connection_service_raises_typed_error_for_missing_business(isolated_client):
+    from app.features.instagram.service import (
+        BusinessNotFoundError,
+        connection_response,
+    )
+
+    _, engine = isolated_client
+    with Session(engine) as db:
+        with pytest.raises(BusinessNotFoundError):
+            connection_response(db, "missing-business")
 
 
 def test_saved_connection_is_not_ready_after_business_page_changes(isolated_client):

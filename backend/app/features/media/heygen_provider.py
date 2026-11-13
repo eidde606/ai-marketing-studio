@@ -1,3 +1,4 @@
+"""HeyGen HTTP adapter for assets and video lifecycle operations."""
 import os
 import time
 from urllib.parse import urljoin, urlparse

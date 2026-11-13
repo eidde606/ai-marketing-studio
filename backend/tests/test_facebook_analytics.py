@@ -6,7 +6,7 @@ from sqlalchemy.pool import StaticPool
 from app.auth import verify_token
 from app.database import get_db
 from app.main import app
-from app.models import Base, Business, Draft
+from app.models import Base, Business, Draft, SocialAccount
 
 from unittest.mock import AsyncMock
 
@@ -105,7 +105,7 @@ def test_published_draft_returns_facebook_analytics(monkeypatch):
         app.dependency_overrides[verify_token] = lambda: {"sub": "test-user"}
 
         monkeypatch.setattr(
-            "app.main.decrypt_token",
+            "app.features.analytics.service.decrypt_token",
             lambda token: "fake_access_token",
         )
 
@@ -120,7 +120,7 @@ def test_published_draft_returns_facebook_analytics(monkeypatch):
         )
 
         monkeypatch.setattr(
-            "app.main.get_post_insights",
+            "app.features.analytics.service.get_post_insights",
             fake_insights,
         )
 
@@ -193,7 +193,7 @@ def test_facebook_analytics_api_failure(monkeypatch):
         app.dependency_overrides[verify_token] = lambda: {"sub": "test-user"}
 
         monkeypatch.setattr(
-            "app.main.decrypt_token",
+            "app.features.analytics.service.decrypt_token",
             lambda token: "fake_access_token",
         )
 
@@ -202,7 +202,7 @@ def test_facebook_analytics_api_failure(monkeypatch):
         )
 
         monkeypatch.setattr(
-            "app.main.get_post_insights",
+            "app.features.analytics.service.get_post_insights",
             fake_insights,
         )
 
@@ -219,3 +219,114 @@ def test_facebook_analytics_api_failure(monkeypatch):
     finally:
         app.dependency_overrides.clear()
         engine.dispose()
+
+
+def test_facebook_analytics_does_not_use_another_business_account(
+    isolated_client,
+    monkeypatch,
+):
+    client, engine = isolated_client
+    with Session(engine) as db:
+        business = Business(name="Draft business")
+        other_business = Business(name="Other business")
+        db.add_all([business, other_business])
+        db.flush()
+        draft = Draft(
+            business_id=business.id,
+            title="Published Post",
+            caption="Published",
+            platform="facebook",
+            status="approved",
+            facebook_publish_status="published",
+            facebook_post_id="post-a",
+        )
+        account = SocialAccount(
+            business_id=other_business.id,
+            platform="facebook",
+            platform_account_id="page-b",
+            account_name="Other Page",
+            encrypted_access_token="fake_encrypted_token",
+            connection_status="connected",
+        )
+        db.add_all([draft, account])
+        db.commit()
+        draft_id = draft.id
+
+    insights = AsyncMock()
+    monkeypatch.setattr(
+        "app.features.analytics.service.get_post_insights",
+        insights,
+    )
+    response = client.get(f"/drafts/{draft_id}/analytics/facebook")
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": "Connect a Facebook Page to this business first",
+    }
+    insights.assert_not_awaited()
+
+
+def test_facebook_reach_returns_lifetime_unique_media_viewers(
+    isolated_client,
+    monkeypatch,
+):
+    client, engine = isolated_client
+    with Session(engine) as db:
+        business = Business(name="Test Business")
+        db.add(business)
+        db.flush()
+        draft = Draft(
+            business_id=business.id,
+            title="Published Post",
+            caption="Reach",
+            platform="facebook",
+            status="approved",
+            facebook_publish_status="published",
+            facebook_post_id="123456_789012",
+        )
+        account = SocialAccount(
+            business_id=business.id,
+            platform="facebook",
+            platform_account_id="123456",
+            account_name="Test Facebook Page",
+            encrypted_access_token="fake_encrypted_token",
+            connection_status="connected",
+        )
+        db.add_all([draft, account])
+        db.commit()
+        draft_id = draft.id
+
+    monkeypatch.setattr(
+        "app.features.analytics.service.decrypt_token",
+        lambda token: "fake-access-token",
+    )
+    reach = AsyncMock(
+        return_value={
+            "data": [
+                {
+                    "name": "post_impressions",
+                    "period": "lifetime",
+                    "values": [{"value": 500}],
+                },
+                {
+                    "name": "post_total_media_view_unique",
+                    "period": "day",
+                    "values": [{"value": 12}],
+                },
+                {
+                    "name": "post_total_media_view_unique",
+                    "period": "lifetime",
+                    "values": [{"value": 42}],
+                },
+            ],
+        }
+    )
+    monkeypatch.setattr("app.features.analytics.service.get_post_reach", reach)
+
+    response = client.get(
+        f"/drafts/{draft_id}/analytics/facebook/reach",
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"unique_media_viewers": 42}
+    reach.assert_awaited_once_with("123456_789012", "fake-access-token")

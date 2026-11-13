@@ -1,3 +1,4 @@
+"""OpenAI provider adapter for Sofía's business conversations."""
 import json
 
 from openai import OpenAI
