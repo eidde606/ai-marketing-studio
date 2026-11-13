@@ -1,28 +1,35 @@
 from datetime import datetime, timedelta, timezone
+import logging
 import os
-import httpx
-from app.facebook_service import get_page_info, publish_text_post, publish_image_post, publish_video_post
 from uuid import uuid4
-from app.facebook_service import get_post_insights, get_post_reach
 
-from app.facebook_service import get_video_status as get_facebook_video_status
-
-from app.models import Conversation, ConversationMessage
-from app.sofia_service import chat_with_sofia
-
+import httpx
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, UploadFile, File
-from app.facebook_auth_routes import router as facebook_auth_router
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
-import logging
 
 from app.campaign_routes import router as campaign_router
+from app.facebook_auth_routes import router as facebook_auth_router
+from app.facebook_service import (
+    get_page_info,
+    get_post_insights,
+    get_post_reach,
+    get_video_status as get_facebook_video_status,
+    publish_image_post,
+    publish_text_post,
+    publish_video_post,
+)
 from app.features.businesses.routes import router as business_router
+from app.features.content.routes import router as content_router
 from app.features.drafts.routes import router as draft_router
 from app.features.drafts.routes import draft_http_exception
 from app.features.drafts import service as draft_service
+from app.features.instagram.routes import (
+    InstagramCallbackAccessLogRedactionMiddleware,
+    router as instagram_auth_router,
+)
 from app.features.media.routes import router as media_router
 from app.features.media.routes import webhook_router as heygen_webhook_router
 from app.features.media.generation_service import (
@@ -32,34 +39,26 @@ from app.features.media.generation_service import (
 from app.auth import verify_token
 from app.database import get_db
 from app.models import Business, Draft, ImageRevision, SocialAccount
-from app.token_service import decrypt_token
-from app.ai_service import generate_marketing_content
 from app.image_service import (
-    generate_marketing_image,
     edit_marketing_image,
+    generate_marketing_image,
 )
 from app.storage_service import (
-    get_marketing_image_url,
     download_marketing_image,
-    upload_marketing_video,
+    get_marketing_image_url,
     get_storage_client,
+    upload_marketing_video,
 )
-
 from app.tiktok_auth_routes import router as tiktok_auth_router
-
 from app.tiktok_service import (
     get_creator_info,
+    get_tiktok_publish_status,
+    publish_tiktok_photo,
     publish_tiktok_video,
     publish_tiktok_video_file,
-    publish_tiktok_photo,
-    get_tiktok_publish_status,
 )
 from app.tiktok_oauth import refresh_tiktok_token
-from app.token_service import encrypt_token
-from app.features.instagram.routes import (
-    InstagramCallbackAccessLogRedactionMiddleware,
-    router as instagram_auth_router,
-)
+from app.token_service import decrypt_token, encrypt_token
 
 app = FastAPI()
 app.add_middleware(InstagramCallbackAccessLogRedactionMiddleware)
@@ -83,16 +82,6 @@ app.add_middleware(
 )
 
 logger = logging.getLogger(__name__)
-
-
-# --------------------------------------------------
-# Request Models
-# --------------------------------------------------
-
-
-class SofiaChatRequest(BaseModel):
-    message: str = Field(min_length=1, max_length=4000)
-    conversation_id: str | None = None
 
 
 class TikTokPublishRequest(BaseModel):
@@ -822,75 +811,6 @@ async def verify_tiktok_publication(
     }
 
 
-# --------------------------------------------------
-# AI Content Generation
-# --------------------------------------------------
-
-
-@protected.post(
-    "/businesses/{business_id}/generate-content",
-    status_code=201,
-)
-def generate_content(
-        business_id: str,
-        db: Session = Depends(get_db),
-):
-    business = db.get(Business, business_id)
-
-    if business is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Business not found",
-        )
-
-    # Retrieve the last 10 drafts for this business.
-    recent_drafts = db.scalars(
-        select(Draft)
-        .where(Draft.business_id == business.id)
-        .order_by(Draft.created_at.desc())
-        .limit(10)
-    ).all()
-
-    # Give Sofía a concise history of recent content.
-    recent_posts = [
-        {
-            "title": draft.title,
-            "caption": draft.caption,
-            "platform": draft.platform,
-        }
-        for draft in recent_drafts
-    ]
-
-    # Generate new content using the business profile
-    # and previous drafts to encourage topic variety.
-    generated = generate_marketing_content(
-        business,
-        recent_posts=recent_posts,
-    )
-
-    draft = Draft(
-        video_script=generated["video_script"],
-        business_id=business.id,
-        title=generated["title"],
-        caption=generated["caption"],
-        platform=generated["platform"],
-        publish_destinations=(
-            [generated["platform"]]
-            if generated["platform"] in ("facebook", "tiktok")
-            else ["facebook"]
-        ),
-        image_prompt=generated["image_prompt"],
-        status="pending",
-        source="ai",
-    )
-
-    db.add(draft)
-    db.commit()
-    db.refresh(draft)
-
-    return draft
-
-
 @protected.post("/drafts/{draft_id}/upload-video")
 def upload_draft_video(
         draft_id: str,
@@ -989,335 +909,6 @@ def get_draft_video_preview(
         "video_url": signed_url,
     }
 
-
-@protected.get("/businesses/{business_id}/sofia/conversations")
-def list_sofia_conversations(
-        business_id: str,
-        db: Session = Depends(get_db),
-):
-    business = db.get(Business, business_id)
-
-    if business is None:
-        raise HTTPException(status_code=404, detail="Business not found")
-
-    conversations = db.scalars(
-        select(Conversation)
-        .where(Conversation.business_id == business.id)
-        .order_by(
-            Conversation.created_at.desc(),
-            Conversation.id.desc(),
-        )
-    ).all()
-
-    results = []
-
-    for conversation in conversations:
-        first_message = db.scalar(
-            select(ConversationMessage)
-            .where(
-                ConversationMessage.conversation_id == conversation.id,
-                ConversationMessage.role == "user",
-            )
-            .order_by(
-                ConversationMessage.created_at.asc(),
-                ConversationMessage.id.asc(),
-            )
-            .limit(1)
-        )
-
-        title = (
-            first_message.content.strip()[:60]
-            if first_message
-            else "Nueva campaña"
-        )
-
-        results.append({
-            "id": conversation.id,
-            "created_at": conversation.created_at,
-            "title": title,
-        })
-
-    return results
-
-
-@protected.get(
-    "/businesses/{business_id}/sofia/conversations/{conversation_id}"
-)
-def get_sofia_conversation(
-        business_id: str,
-        conversation_id: str,
-        db: Session = Depends(get_db),
-):
-    conversation = db.scalar(
-        select(Conversation)
-        .join(Business, Conversation.business_id == Business.id)
-        .where(
-            Conversation.id == conversation_id,
-            Business.id == business_id,
-        )
-    )
-
-    if conversation is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Conversation not found for this business",
-        )
-
-    messages = db.scalars(
-        select(ConversationMessage)
-        .where(ConversationMessage.conversation_id == conversation.id)
-        .order_by(
-            ConversationMessage.created_at.asc(),
-            ConversationMessage.id.asc(),
-        )
-    ).all()
-
-    return {
-        "conversation_id": conversation.id,
-        "messages": [
-            {"role": message.role, "content": message.content}
-            for message in messages
-        ],
-    }
-
-
-@protected.get("/businesses/{business_id}/sofia/conversation/latest")
-def get_latest_sofia_conversation(
-        business_id: str,
-        db: Session = Depends(get_db),
-):
-    """Retrieve the latest Sofía conversation for a business."""
-
-    business = db.get(Business, business_id)
-
-    if business is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Business not found",
-        )
-
-    conversation = db.scalar(
-        select(Conversation)
-        .where(Conversation.business_id == business.id)
-        .order_by(
-            Conversation.created_at.desc(),
-            Conversation.id.desc(),
-        )
-        .limit(1)
-    )
-
-    if conversation is None:
-        return None
-
-    messages = db.scalars(
-        select(ConversationMessage)
-        .where(
-            ConversationMessage.conversation_id == conversation.id
-        )
-        .order_by(
-            ConversationMessage.created_at.asc(),
-            ConversationMessage.id.asc(),
-        )
-    ).all()
-
-    return {
-        "conversation_id": conversation.id,
-        "messages": [
-            {
-                "role": message.role,
-                "content": message.content,
-            }
-            for message in messages
-        ],
-    }
-
-
-@protected.post("/businesses/{business_id}/sofia/chat")
-def sofia_chat(
-        business_id: str,
-        request: SofiaChatRequest,
-        db: Session = Depends(get_db),
-):
-    """Start or continue a conversation with Sofía."""
-
-    business = db.get(Business, business_id)
-
-    if business is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Business not found",
-        )
-
-    # Continue an existing conversation or start a new one.
-    if request.conversation_id:
-        conversation = db.scalar(
-            select(Conversation).where(
-                Conversation.id == request.conversation_id,
-                Conversation.business_id == business.id,
-            )
-        )
-
-        if conversation is None:
-            raise HTTPException(
-                status_code=404,
-                detail="Conversation not found for this business",
-            )
-    else:
-        conversation = Conversation(business_id=business.id)
-        db.add(conversation)
-        db.flush()
-
-    # Save the owner's message.
-    user_message = ConversationMessage(
-        conversation_id=conversation.id,
-        role="user",
-        content=request.message.strip(),
-    )
-
-    db.add(user_message)
-    db.flush()
-
-    # Retrieve the conversation history in order.
-    messages = db.scalars(
-        select(ConversationMessage)
-        .where(
-            ConversationMessage.conversation_id == conversation.id
-        )
-        .order_by(
-            ConversationMessage.created_at.asc(),
-            ConversationMessage.id.asc(),
-        )
-    ).all()
-
-    # Ask Sofía to respond using the business profile and history.
-    try:
-        reply = chat_with_sofia(business, messages)
-    except Exception:
-        db.rollback()
-        logger.exception("Sofía chat generation failed")
-        raise HTTPException(
-            status_code=502,
-            detail="Sofía could not respond. Please try again.",
-        )
-
-    # Save Sofía's reply.
-    assistant_message = ConversationMessage(
-        conversation_id=conversation.id,
-        role="assistant",
-        content=reply,
-    )
-
-    db.add(assistant_message)
-    db.commit()
-
-    return {
-        "conversation_id": conversation.id,
-        "reply": reply,
-    }
-
-
-@protected.post(
-    "/businesses/{business_id}/sofia/conversations/{conversation_id}/generate-draft"
-)
-def generate_sofia_conversation_draft(
-        business_id: str,
-        conversation_id: str,
-        db: Session = Depends(get_db),
-):
-    """Generate a pending draft using Sofía's conversation and Leo."""
-
-    business = db.get(Business, business_id)
-
-    if business is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Business not found",
-        )
-
-    conversation = db.scalar(
-        select(Conversation).where(
-            Conversation.id == conversation_id,
-            Conversation.business_id == business.id,
-        )
-    )
-
-    if conversation is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Conversation not found for this business",
-        )
-
-    messages = db.scalars(
-        select(ConversationMessage)
-        .where(
-            ConversationMessage.conversation_id == conversation.id
-        )
-        .order_by(
-            ConversationMessage.created_at.asc(),
-            ConversationMessage.id.asc(),
-        )
-    ).all()
-
-    user_messages = [
-        message.content
-        for message in messages
-        if message.role == "user"
-    ]
-
-    if not user_messages:
-        raise HTTPException(
-            status_code=400,
-            detail="The conversation has no campaign instructions",
-        )
-
-    # Use the owner's conversation to guide Sofía and Leo.
-    campaign_instructions = "\n".join(user_messages[-10:])
-
-    recent_drafts = db.scalars(
-        select(Draft)
-        .where(Draft.business_id == business.id)
-        .order_by(Draft.created_at.desc())
-        .limit(10)
-    ).all()
-
-    recent_posts = [
-        {
-            "title": draft.title,
-            "caption": draft.caption,
-            "platform": draft.platform,
-        }
-        for draft in recent_drafts
-    ]
-
-    try:
-        generated = generate_marketing_content(
-            business,
-            recent_posts=recent_posts,
-            campaign_instructions=campaign_instructions,
-        )
-    except Exception:
-        logger.exception("Conversational draft generation failed")
-        raise HTTPException(
-            status_code=502,
-            detail="Sofía and Leo could not generate the draft",
-        )
-
-    draft = Draft(
-        video_script=generated["video_script"],
-        business_id=business.id,
-        title=generated["title"],
-        caption=generated["caption"],
-        platform=generated["platform"],
-        image_prompt=generated["image_prompt"],
-        status="pending",
-        source="ai",
-    )
-
-    db.add(draft)
-    db.commit()
-    db.refresh(draft)
-
-    return draft
 
 
 # --------------------------------------------------
@@ -1993,3 +1584,5 @@ app.include_router(facebook_auth_router)
 app.include_router(instagram_auth_router)
 
 app.include_router(tiktok_auth_router)
+
+app.include_router(content_router)

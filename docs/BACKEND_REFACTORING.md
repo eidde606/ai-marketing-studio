@@ -55,6 +55,12 @@ than redesigning concurrency or fixing product semantics during extraction.
   state-consumption commit and authorization-preservation decisions; repository
   owns only persistence. The second connection read remains after encryption to
   preserve the original ordering. No repository commits remain in these features.
+- Sofía/Leo content and conversations: extracted from `main.py` into content
+  routes, schemas, application services, repository queries, and provider
+  adapters. Existing route paths, generation prompts, response shapes, and
+  transaction ordering are retained. Characterization tests cover generated
+  platform/destination behavior, conversation persistence, business isolation,
+  provider failures, and rollback.
 
 `test_closed_layers.py` additionally rejects direct session operations in feature
 routes/services, HTTPException construction in feature services, and commits or

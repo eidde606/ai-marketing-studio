@@ -11,41 +11,11 @@ load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
-def generate_marketing_content(
-        business: Business,
-        recent_posts: list[dict] | None = None,
-        campaign_instructions: str | None = None,
-) -> dict:
-    """Sofía plans varied content; Leo creates the final post."""
-
-    profile = {
-        "name": business.name,
-        "industry": business.industry,
-        "description": business.description,
-        "products_services": business.products_services,
-        "target_audience": business.target_audience,
-        "service_area": business.service_area,
-        "brand_voice": business.brand_voice,
-        "marketing_goals": business.marketing_goals,
-        "preferred_platforms": business.preferred_platforms,
-        "posting_frequency": business.posting_frequency,
-    }
-
-    recent_posts = recent_posts or []
-
-    # Instructions from Sofía's conversation with the business owner.
-    # None means automatic content generation.
-    campaign_context = (
-        campaign_instructions.strip()
-        if campaign_instructions
-        else None
-    )
-
-    history_context = json.dumps(
-        recent_posts,
-        ensure_ascii=False,
-    )
-
+def plan_content(
+    profile: dict[str, object],
+    history_context: str,
+    campaign_context: str | None,
+) -> str:
     # Sofía: marketing strategy with content history.
     strategy = client.responses.create(
         model="gpt-4.1-mini",
@@ -119,6 +89,13 @@ def generate_marketing_content(
     if not strategy.output_text:
         raise ValueError("Sofía returned an empty strategy")
 
+    return strategy.output_text
+
+
+def write_content(
+    profile: dict[str, object],
+    strategy: str,
+) -> dict[str, str]:
     # Leo: create structured content using Sofía's strategy.
     content = client.responses.create(
         model="gpt-4.1-mini",
@@ -191,7 +168,7 @@ def generate_marketing_content(
             "Perfil del negocio:\n"
             f"{json.dumps(profile, ensure_ascii=False)}\n\n"
             "Estrategia de Sofía:\n"
-            f"{strategy.output_text}"
+            f"{strategy}"
         ),
         text={
             "format": {
@@ -248,3 +225,20 @@ def generate_marketing_content(
         "image_prompt": result["image_prompt"].strip(),
         "video_script": result["video_script"].strip(),
     }
+
+
+def generate_marketing_content(
+    business: Business,
+    recent_posts: list[dict[str, str]] | None = None,
+    campaign_instructions: str | None = None,
+) -> dict[str, str]:
+    """Compatibility entry point; application orchestration lives in its feature."""
+    from app.features.content.generation_service import (
+        generate_marketing_content as generate,
+    )
+
+    return generate(
+        business,
+        recent_posts,
+        campaign_instructions,
+    )

@@ -34,8 +34,17 @@ def test_ai_platform_is_preserved_but_destination_defaults_to_facebook(
         db.add(conversation)
         db.flush()
         db.add_all([
-            ConversationMessage(conversation_id=conversation.id, role="user", content="Promociona en TikTok"),
-            Draft(business_id=other_business.id, title="Otro negocio", caption="No compartir", platform="Facebook"),
+            ConversationMessage(
+                conversation_id=conversation.id,
+                role="user",
+                content="Promociona en TikTok",
+            ),
+            Draft(
+                business_id=other_business.id,
+                title="Otro negocio",
+                caption="No compartir",
+                platform="Facebook",
+            ),
         ])
         db.commit()
         business_id, conversation_id = business.id, conversation.id
@@ -101,7 +110,10 @@ def test_lowercase_tiktok_is_handled_differently_by_generation_routes(
         db.commit()
         business_id, conversation_id = business.id, conversation.id
     generate = Mock(return_value=generated_content("tiktok"))
-    monkeypatch.setattr("app.main.generate_marketing_content", generate)
+    monkeypatch.setattr(
+        "app.features.content.generation_service.generate_marketing_content",
+        generate,
+    )
     url = (
         f"/businesses/{business_id}/generate-content" if workflow == "automatic" else
         f"/businesses/{business_id}/sofia/conversations/{conversation_id}/generate-draft"
