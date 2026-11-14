@@ -27,6 +27,15 @@ TRUSTED_MEDIA_LOOKUPS = {
     "app.features.media.generation_service:_reconcile_webhook_delivery -> app.features.media.repository.trusted_webhook_context_for_delivery": 1,
 }
 
+INITIAL_PROVISIONING_LOOKUPS = {
+    # This offline bootstrap is allowlist-bound, manifest-checked, and refuses
+    # to run unless identity and membership tables are empty.
+    "app.features.access.provisioning_service:provision_initial_owner -> app.features.access.repository.add_initial_user_and_owner_memberships": 1,
+    "app.features.access.provisioning_service:provision_initial_owner -> app.features.access.repository.has_application_users": 1,
+    "app.features.access.provisioning_service:provision_initial_owner -> app.features.access.repository.has_business_memberships": 1,
+    "app.features.access.provisioning_service:provision_initial_owner -> app.features.access.repository.lock_all_businesses_for_initial_provisioning": 1,
+}
+
 
 def legacy_calls():
     calls = Counter()
@@ -57,7 +66,11 @@ def test_legacy_repository_call_inventory_does_not_grow():
     # Exact function/callee/count, not a blanket exemption for an entire module.
     # Remove entries as callers migrate. New edges require a deliberate review.
     actual = legacy_calls()
-    for call, count in (OAUTH_BOOTSTRAP_LOOKUPS | TRUSTED_MEDIA_LOOKUPS).items():
+    for call, count in (
+        OAUTH_BOOTSTRAP_LOOKUPS
+        | TRUSTED_MEDIA_LOOKUPS
+        | INITIAL_PROVISIONING_LOOKUPS
+    ).items():
         assert actual.pop(call, None) == count
     assert actual == json.loads(MANIFEST.read_text())
 

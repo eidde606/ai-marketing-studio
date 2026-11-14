@@ -1,5 +1,5 @@
 """Authorization queries always refresh state; no commits or policy here."""
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import Business, BusinessMembership, User
@@ -51,3 +51,44 @@ def visible_draft_business(db: Session, principal: AuthenticatedPrincipal, draft
 def lock_business_for_authorization(db: Session, business_id: str):
     # Same first lock as membership mutations; held only during short persistence.
     return db.scalar(select(Business.id).where(Business.id == business_id).with_for_update())
+
+
+def lock_all_businesses_for_initial_provisioning(db: Session) -> set[str]:
+    return set(db.scalars(
+        select(Business.id).order_by(Business.id).with_for_update()
+    ).all())
+
+
+def has_application_users(db: Session) -> bool:
+    return db.scalar(select(func.count()).select_from(User)) > 0
+
+
+def has_business_memberships(db: Session) -> bool:
+    return db.scalar(select(func.count()).select_from(BusinessMembership)) > 0
+
+
+def add_initial_user_and_owner_memberships(
+    db: Session,
+    user: User,
+    memberships: list[BusinessMembership],
+) -> None:
+    from sqlalchemy import inspect
+
+    if not inspect(user).transient or user.status != "active":
+        raise ValueError("An active, new application user is required")
+    if not memberships or any(
+        not inspect(membership).transient
+        or membership.user_id != user.id
+        or membership.role != "owner"
+        or membership.status != "active"
+        for membership in memberships
+    ):
+        raise ValueError("New active Owner memberships for this user are required")
+    business_ids = [membership.business_id for membership in memberships]
+    if len(set(business_ids)) != len(business_ids):
+        raise ValueError("Initial Owner memberships must have unique business IDs")
+
+    db.add(user)
+    db.flush()
+    db.add_all(memberships)
+    db.flush()
