@@ -26,7 +26,7 @@ class Message:
 
 @dataclass(frozen=True)
 class LanguagePreferences:
-    # Independent future preferences. None preserves current provider prompts.
+    # Effective independent preferences; None means no applicable output (e.g. chat).
     interface: str | None = None
     conversation: str | None = None
     marketing_content: str | None = None

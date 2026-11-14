@@ -59,7 +59,8 @@ def test_draft_create_and_list_contract(isolated_client):
     assert draft["platform"] == "instagram"
     assert draft["media_type"] == "text"
     assert draft["status"] == "pending"
-    assert draft["publish_destinations"] == ["facebook"]
+    assert draft["publish_destinations"] == []
+    assert draft["marketing_content_language"] == "en"
 
     assert client.get(
         "/drafts", params={"business_id": business["id"]},

@@ -144,3 +144,9 @@ def add_draft_scoped(db: Session, context: TenantAccess, record: Draft):
 
 def connected_platforms_scoped(db: Session, context: TenantAccess, platforms: list[str]) -> set[str]:
     return connected_platforms(db, tenant.business_id(context), platforms)
+
+
+def has_active_revision_scoped(db: Session, context: TenantAccess, draft_id: str) -> bool:
+    return db.scalar(tenant.selection(ImageRevision, context).where(
+        ImageRevision.draft_id == draft_id, ImageRevision.status == "generating",
+    ).exists().select())

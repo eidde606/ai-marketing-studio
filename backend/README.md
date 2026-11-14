@@ -91,6 +91,30 @@ as publication. No AI or external publishing requests are used to calculate prog
 The Campañas page reloads when opened and has an Actualizar button. Association
 changes do not approve, reject, edit, publish, or delete the underlying content.
 
+## Language preferences and HeyGen allowances
+
+Alembic revision `91f6a20d3b8e` follows `8d4c2b17a690`. It adds independent
+account and business language preferences plus nullable draft/conversation
+language snapshots. Existing text and selections are not rewritten; the new
+preference tables start empty and new preference values default to English.
+Apply the revision only to an explicitly approved environment after reviewing
+its backup and target revision. Tests use disposable PostgreSQL databases; they
+do not migrate the configured application database.
+
+New HeyGen jobs require an explicit paid-generation confirmation and an operator
+allowance in `HEYGEN_BUSINESS_ALLOWANCES`, a JSON object keyed by business ID:
+
+```json
+{"<business-id>":{"max_generations":20,"max_script_characters":2000,"max_concurrent_jobs":2}}
+```
+
+`max_generations` counts every persisted attempt for the lifetime of the
+business allowance, including failed attempts. Active jobs count against
+`max_concurrent_jobs`; no automatic reset or monetary price estimate is implied.
+An absent business entry blocks new paid generation, while recovery of an
+existing attempt and access to already-generated content remain available.
+Malformed configuration fails closed before provider I/O.
+
 ### Migration and release
 
 Revision `e7b2c6d901af` follows `c8e913a74b02`. It creates `campaigns` and adds a

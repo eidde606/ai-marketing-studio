@@ -4,6 +4,7 @@ export type GenerationRequest = {
   avatar_id: string;
   voice_id: string;
   script: string;
+  confirmed_paid_generation?: boolean;
 };
 export type Generation = {
   attempt_id: string;
@@ -54,6 +55,8 @@ async function request(
       throw new Error(
         "Este borrador no permite generar otro video. Recupera su estado antes de continuar.",
       );
+    if (response.status === 429)
+      throw new Error(body.detail || "This business has reached its HeyGen generation allowance.");
     throw new Error(
       "No se pudo consultar HeyGen. Comprueba la conexión y recupera el estado; no vuelvas a generar.",
     );

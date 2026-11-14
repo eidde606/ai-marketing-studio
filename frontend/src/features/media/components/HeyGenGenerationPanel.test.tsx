@@ -287,6 +287,7 @@ it("requires paid confirmation, sends edited script and selected assets once, an
     avatar_id: "look",
     voice_id: "voice",
     script: "Guion editado",
+    confirmed_paid_generation: true,
   });
   expect(window.confirm).toHaveBeenCalledWith(
     expect.stringContaining("consume créditos"),

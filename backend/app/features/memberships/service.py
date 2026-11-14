@@ -13,6 +13,12 @@ from app.transactions import Transactions
 from . import repository
 
 
+def list_memberships(db: Session, principal: Principal, business_id: str):
+    context = require_permission(db, principal, business_id, Permission.MANAGE_MEMBERS)
+    return [{"id": row.id, "user_id": row.user_id, "role": row.role, "status": row.status}
+            for row in repository.list_memberships_scoped(db, context)]
+
+
 def change_membership(
     db: Session, principal: Principal, business_id: str, membership_id: str,
     *, role: str, status: str,

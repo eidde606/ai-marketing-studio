@@ -37,6 +37,18 @@ INITIAL_PROVISIONING_LOOKUPS = {
 }
 
 
+# Account operations are scoped by trusted issuer/subject, not a business. Exact
+# edges only: they cannot read tenant resources except active membership metadata.
+ACCOUNT_IDENTITY_LOOKUPS = {
+    "app.features.accounts.service:_active_user -> app.features.accounts.repository.user_for_identity": 1,
+    "app.features.accounts.service:register -> app.features.accounts.repository.user_for_identity": 1,
+    "app.features.accounts.service:register -> app.features.accounts.repository.insert_identity": 1,
+    "app.features.accounts.service:account -> app.features.accounts.repository.memberships_for_identity": 1,
+    "app.features.accounts.service:language_preferences -> app.features.accounts.repository.preferences_for_identity": 1,
+    "app.features.accounts.service:update_preferences -> app.features.accounts.repository.save_preferences_for_identity": 1,
+}
+
+
 def legacy_calls():
     calls = Counter()
     for path in sorted((APP_ROOT / "features").glob("*/*service.py")):
@@ -70,6 +82,7 @@ def test_legacy_repository_call_inventory_does_not_grow():
         OAUTH_BOOTSTRAP_LOOKUPS
         | TRUSTED_MEDIA_LOOKUPS
         | INITIAL_PROVISIONING_LOOKUPS
+        | ACCOUNT_IDENTITY_LOOKUPS
     ).items():
         assert actual.pop(call, None) == count
     assert actual == json.loads(MANIFEST.read_text())

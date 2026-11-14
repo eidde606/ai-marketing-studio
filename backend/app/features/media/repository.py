@@ -1,5 +1,5 @@
 """Persistence helpers for draft-scoped HeyGen generation attempts."""
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, select, update, or_, and_
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -16,6 +16,19 @@ ACTIVE_STATUSES = ("SUBMITTING", "UNKNOWN", "PROCESSING")
 
 from app.features.access.principal import TenantAccess, TrustedTenantContext
 from app.persistence import tenant
+
+
+def generation_usage_scoped(db: Session, context: TenantAccess) -> tuple[int, int]:
+    active = or_(HeyGenGenerationAttempt.status.in_(ACTIVE_STATUSES), and_(
+        HeyGenGenerationAttempt.status == "COMPLETED",
+        HeyGenGenerationAttempt.storage_status.in_(["PENDING", "PROCESSING", "RETRY"]),
+    ))
+    # One statement gives a consistent usage snapshot. The caller holds the
+    # business lock when using this result to reserve a new generation attempt.
+    return db.execute(select(
+        func.count(HeyGenGenerationAttempt.id),
+        func.count(HeyGenGenerationAttempt.id).filter(active),
+    ).where(tenant.predicate(HeyGenGenerationAttempt, context))).one()
 
 
 def lock_draft_for_generation(

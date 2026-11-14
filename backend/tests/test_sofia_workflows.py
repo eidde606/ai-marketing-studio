@@ -39,10 +39,12 @@ def test_conversation_round_trip_history_and_business_isolation(
     assert created.json() == {
         "conversation_id": conversation_id,
         "reply": "Una estrategia",
+        "language": "en",
     }
     response = client.get(f"/businesses/a/sofia/conversations/{conversation_id}")
     expected = {
         "conversation_id": conversation_id,
+        "language": "en",
         "messages": [
             {"role": "user", "content": "Promociona café"},
             {"role": "assistant", "content": "Una estrategia"},

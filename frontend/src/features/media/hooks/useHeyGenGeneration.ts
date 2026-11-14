@@ -128,7 +128,7 @@ export function useHeyGenGeneration(
     try {
       const job =
         action === "submit"
-          ? await submitGeneration(businessId, id, payload!)
+          ? await submitGeneration(businessId, id, { ...payload!, confirmed_paid_generation: true })
           : action === "reconcile"
             ? await reconcileGeneration(businessId, id)
             : await getGeneration(businessId, id);

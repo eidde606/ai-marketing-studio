@@ -86,6 +86,19 @@ def _verify_supabase_token(
         )
 
 
+def get_registration_identity(
+    payload: dict = Depends(_verify_supabase_token),
+) -> Principal:
+    """Explicit registration only; the existing verified-token allowlist stays on.
+
+    JWT verification proves issuer/subject, not email verification. A future
+    public-registration gate requires separate approval and verification policy.
+    """
+    if payload.get("is_anonymous", False):
+        raise HTTPException(status_code=403, detail="Application access denied")
+    return Principal(issuer=payload["iss"], subject=payload["sub"])
+
+
 def get_authenticated_principal(
     payload: dict = Depends(_verify_supabase_token),
     db: Session = Depends(get_db),

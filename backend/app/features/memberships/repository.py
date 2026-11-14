@@ -2,6 +2,13 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import Business, BusinessMembership, User
+from app.features.access.principal import TenantAccess
+
+
+def list_memberships_scoped(db: Session, context: TenantAccess):
+    return db.scalars(select(BusinessMembership).where(
+        BusinessMembership.business_id == context.business_id,
+    ).order_by(BusinessMembership.id)).all()
 
 
 def lock_business(db: Session, business_id: str) -> bool:

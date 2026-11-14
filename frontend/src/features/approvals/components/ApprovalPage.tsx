@@ -141,7 +141,7 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
               >
                 {draft.status === "pending" && (
                   <div className="approval-platform-selection">
-                    <strong>Publicar en:</strong>
+                    <strong>Publishing destination (optional):</strong>
                     <label>
                       <input
                         type="checkbox"
@@ -163,6 +163,10 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                       />{" "}
                       Facebook
                     </label>
+                    <small>
+                      Leave Facebook unchecked to approve for manual use. TikTok
+                      uses download and copy; Instagram publishing is unavailable.
+                    </small>
                   </div>
                 )}
 

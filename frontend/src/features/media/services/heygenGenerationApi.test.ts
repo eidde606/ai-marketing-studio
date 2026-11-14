@@ -147,3 +147,15 @@ it("rejects foreign draft responses and unauthenticated requests", async () => {
   );
   expect(fetchMock).toHaveBeenCalledTimes(1);
 });
+
+it("explains an allowance denial without retrying the paid request", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(new Response(
+    JSON.stringify({ detail: "The business HeyGen generation allowance is exhausted" }),
+    { status: 429 },
+  ));
+  vi.stubGlobal("fetch", fetchMock);
+  await expect(submitGeneration("business/1", "draft/1", {
+    avatar_id: "look", voice_id: "voice", script: "Script", confirmed_paid_generation: true,
+  })).rejects.toThrow("allowance is exhausted");
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+});

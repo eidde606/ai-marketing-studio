@@ -1062,3 +1062,23 @@ it("retains Facebook video verification interval and cleans it up at logout", as
   act(() => authChange("SIGNED_OUT", null));
   expect(clearInterval).toHaveBeenCalledWith(intervalId);
 });
+
+it.each<{ destinations: ("facebook" | "tiktok")[] }>([
+  { destinations: [] }, { destinations: ["tiktok"] },
+])(
+  "approves manual-use content without enabling direct publication ($destinations)",
+  async ({ destinations }) => {
+    const manual = { ...editableDraft, publish_destinations: destinations };
+    mocks.getDrafts.mockResolvedValue([manual]);
+    mocks.updateDraftDestinations.mockResolvedValue({ ...manual, publish_destinations: [] });
+    mocks.approveDraft.mockResolvedValue({ ...manual, status: "approved", publish_destinations: [] });
+    await openApp();
+    fireEvent.click(screen.getByRole("button", { name: /^Aprobaciones/ }));
+    fireEvent.click(await screen.findByText("Aprobar a"));
+    await act(async () => {});
+    expect(mocks.updateDraftDestinations).toHaveBeenCalledWith("a", []);
+    expect(mocks.approveDraft).toHaveBeenCalledTimes(1);
+    expect(mocks.publishDraftToFacebook).not.toHaveBeenCalled();
+    expect(mocks.publishDraftToTikTok).not.toHaveBeenCalled();
+  },
+);

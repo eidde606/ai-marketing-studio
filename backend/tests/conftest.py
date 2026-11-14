@@ -17,6 +17,7 @@ os.environ.update({
     "ALLOWED_USER_ID": "test-authorized-user",
     "OPENAI_API_KEY": "test-only-openai-key",
     "HEYGEN_API_KEY": "test-only-heygen-key",
+    "HEYGEN_BUSINESS_ALLOWANCES": '{"business-1":{"max_generations":100,"max_script_characters":5000,"max_concurrent_jobs":10}}',
     "FRONTEND_BASE_URL": "https://studio.test.invalid",
 })
 

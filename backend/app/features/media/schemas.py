@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict, StrictBool
 
 
 AvatarType = Literal["studio_avatar", "digital_twin", "photo_avatar"]
@@ -47,9 +47,11 @@ class HeyGenVoicePage(BaseModel):
 
 
 class HeyGenGenerationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     avatar_id: str = Field(min_length=1)
     voice_id: str = Field(min_length=1)
     script: str = Field(min_length=1, max_length=5000)
+    confirmed_paid_generation: StrictBool = False
 
 
 class HeyGenAssetAssignmentRequest(BaseModel):

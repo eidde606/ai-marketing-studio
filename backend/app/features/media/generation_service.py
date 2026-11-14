@@ -30,9 +30,9 @@ from .heygen_provider import (
 )
 from app.models import Draft, HeyGenGenerationAttempt, HeyGenWebhookDelivery
 from app.storage_service import upload_marketing_video
-from app.transactions import Transactions
+from app.transactions import Transactions, rollback_on_failure
 
-from . import repository
+from . import repository, usage_service
 from .asset_access_service import require_generation_assets
 from .schemas import HeyGenGenerationRequest
 
@@ -74,7 +74,7 @@ def _utc(value: datetime) -> datetime:
 
 def _fingerprint(request: HeyGenGenerationRequest) -> str:
     payload = {
-        **request.model_dump(),
+        **request.model_dump(exclude={"confirmed_paid_generation"}),
         "aspect_ratio": GENERATION_ASPECT_RATIO,
         "resolution": GENERATION_RESOLUTION,
     }
@@ -410,6 +410,7 @@ def _submit_provider_request(
     return _response(attempt)
 
 
+@rollback_on_failure
 def submit_generation(
     db: Session,
     *,
@@ -500,6 +501,11 @@ def submit_generation(
             "This draft already has a video or an active video operation",
         )
 
+    if not request.confirmed_paid_generation:
+        raise _failure(ErrorKind.INVALID_INPUT, "Confirm paid generation before creating a HeyGen job")
+    # Asset authorization holds the business lock; count and insert are atomic
+    # across drafts/tabs. Existing attempts above retain their recovery path.
+    usage_service.require_capacity(db, context, request.script)
     attempt = HeyGenGenerationAttempt(
         id=str(uuid4()),
         user_id=principal.user_id,

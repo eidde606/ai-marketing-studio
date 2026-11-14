@@ -341,6 +341,19 @@ def submit_video_generation(
         raise http_error(exc) from exc
 
 
+@router.get("/businesses/{business_id}/heygen/usage")
+def get_heygen_usage(
+    business_id: str,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+    db: Session = Depends(get_db),
+):
+    from . import usage_service
+    try:
+        return usage_service.usage(db, principal, business_id)
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
+
+
 @router.get(
     "/businesses/{business_id}/drafts/{draft_id}/heygen-generation",
     response_model=HeyGenGenerationResponse,

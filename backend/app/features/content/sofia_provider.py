@@ -2,6 +2,7 @@
 import json
 
 from openai import OpenAI
+from .languages import language_name
 
 from pathlib import Path
 from .context import BusinessProfile, Message
@@ -14,6 +15,7 @@ client = OpenAI()
 def chat_with_sofia(
         business: BusinessProfile,
         messages: list[Message],
+        *, language: str = "en",
 ) -> str:
     """Generate Sofía's next response using business context and chat history."""
 
@@ -42,8 +44,8 @@ def chat_with_sofia(
         instructions=(
             "Eres Sofía, una estratega profesional de marketing digital "
             "y asistente conversacional de AI Marketing Studio. "
-            "Responde en español de manera natural y profesional. "
-            "Ayuda a la usuaria a planificar campañas de marketing. "
+            f"Respond naturally and professionally in {language_name(language)}. "
+            "Help the user create a post or optionally plan a campaign. "
             "Respeta el producto que la usuaria quiere promocionar. "
             "Haz preguntas solo cuando falte información importante. "
             "No inventes características, beneficios, precios, "

@@ -13,7 +13,9 @@ from app.features.access.permissions import Permission
 from app.features.access.principal import AuthenticatedPrincipal
 from . import repository, adapters, generation_service, execution
 from .context import BusinessProfile, Message, OperationContext
-from .schemas import SofiaChatRequest
+from .schemas import SofiaChatRequest, AIGenerationRequest
+from .context import LanguagePreferences
+from app.features.accounts import service as accounts
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +54,8 @@ def _messages(db, context, conversation_id):
             return result
 
 
-def _run_provider(context, operation, callback, error_message):
-    attribution = OperationContext(str(uuid4()), context.business_id, context.user_id, operation)
+def _run_provider(context, operation, callback, error_message, languages=LanguagePreferences()):
+    attribution = OperationContext(str(uuid4()), context.business_id, context.user_id, operation, languages)
     execution.before_generation(attribution)
     try:
         result = callback()
@@ -67,8 +69,8 @@ def _run_provider(context, operation, callback, error_message):
 
 
 @rollback_on_failure
-def generate_content(business_id: str, *, db: Session, principal: AuthenticatedPrincipal) -> Draft:
-    return _generate(business_id, db=db, principal=principal)
+def generate_content(business_id: str, *, db: Session, principal: AuthenticatedPrincipal, request: AIGenerationRequest | None = None) -> Draft:
+    return _generate(business_id, db=db, principal=principal, request=request)
 
 
 def list_sofia_conversations(business_id: str, *, db: Session, principal: AuthenticatedPrincipal):
@@ -79,7 +81,7 @@ def list_sofia_conversations(business_id: str, *, db: Session, principal: Authen
         for conversation in batch:
             first = repository.first_user_message_scoped(db, context, conversation.id)
             results.append({"id": conversation.id, "created_at": conversation.created_at,
-                "title": first.content.strip()[:60] if first else "Nueva campaña"})
+                "title": first.content.strip()[:60] if first else "Planning chat", "language": conversation.language})
         if len(batch) < 100:
             return results
 
@@ -87,8 +89,8 @@ def list_sofia_conversations(business_id: str, *, db: Session, principal: Authen
 def get_sofia_conversation(business_id: str, conversation_id: str, *, db: Session,
                            principal: AuthenticatedPrincipal):
     context = _authorize(db, principal, business_id)
-    _conversation(db, context, conversation_id)
-    return {"conversation_id": conversation_id,
+    conversation = _conversation(db, context, conversation_id)
+    return {"conversation_id": conversation_id, "language": conversation.language,
         "messages": [{"role": m.role, "content": m.content} for m in _messages(db, context, conversation_id)]}
 
 
@@ -106,57 +108,70 @@ def sofia_chat(business_id: str, request: SofiaChatRequest, *, db: Session,
     context = _authorize(db, principal, business_id, write=True)
     profile = _profile(db, context)
     conversation_id = request.conversation_id or str(uuid4())
+    preferences = accounts.language_preferences(db, principal)
+    conversation_language = request.conversation_language or preferences["conversation_language"]
     messages = []
     if request.conversation_id:
-        _conversation(db, context, conversation_id)
+        conversation = _conversation(db, context, conversation_id)
+        conversation_language = request.conversation_language or conversation.language or conversation_language
         messages = _messages(db, context, conversation_id)
     user_message = Message("user", request.message.strip())
     messages.append(user_message)
     # No locks, ORM instances, or pending writes survive the provider wait.
     Transactions(db).rollback()
-    reply = _run_provider(context, "sofia_chat", lambda: adapters.chat_with_sofia(profile, messages),
-                          "Sofía could not respond. Please try again.")
+    reply = _run_provider(context, "sofia_chat", lambda: adapters.chat_with_sofia(profile, messages, language=conversation_language),
+                          "Sofía could not respond. Please try again.",
+                          LanguagePreferences(preferences["interface_language"], conversation_language, None))
     context = _authorize(db, principal, business_id, write=True, lock=True)
     if request.conversation_id:
-        _conversation(db, context, conversation_id, lock=True)
+        conversation = _conversation(db, context, conversation_id, lock=True)
+        conversation.language = conversation_language
     else:
-        repository.add_conversation_scoped(db, context, Conversation(id=conversation_id))
+        repository.add_conversation_scoped(db, context, Conversation(id=conversation_id, language=conversation_language))
     repository.add_message_scoped(db, context, conversation_id, role="user", content=user_message.content)
     repository.add_message_scoped(db, context, conversation_id, role="assistant", content=reply)
     Transactions(db).commit()
-    return {"conversation_id": conversation_id, "reply": reply}
+    return {"conversation_id": conversation_id, "reply": reply, "language": conversation_language}
 
 
 @rollback_on_failure
 def generate_sofia_conversation_draft(business_id: str, conversation_id: str, *, db: Session,
-                                      principal: AuthenticatedPrincipal) -> Draft:
-    return _generate(business_id, db=db, principal=principal, conversation_id=conversation_id)
+                                      principal: AuthenticatedPrincipal, request: AIGenerationRequest | None = None) -> Draft:
+    return _generate(business_id, db=db, principal=principal, conversation_id=conversation_id, request=request)
 
 
-def _generate(business_id, *, db, principal, conversation_id=None):
+def _generate(business_id, *, db, principal, conversation_id=None, request=None):
     context = _authorize(db, principal, business_id, generation=True)
     profile = _profile(db, context)
+    request = request or AIGenerationRequest()
+    preferences = accounts.language_preferences(db, principal)
+    business_preferences = accounts.business_preferences(db, principal, business_id)
+    conversation_language = request.conversation_language or preferences["conversation_language"]
+    content_language = request.marketing_content_language or business_preferences["marketing_content_language"]
     kwargs = {"recent_posts": [{"title": d.title, "caption": d.caption, "platform": d.platform}
                                for d in repository.recent_drafts_scoped(db, context)]}
     if conversation_id:
-        _conversation(db, context, conversation_id)
+        conversation = _conversation(db, context, conversation_id)
+        conversation_language = request.conversation_language or conversation.language or conversation_language
         instructions = [m.content for m in _messages(db, context, conversation_id) if m.role == "user"]
         if not instructions:
             raise ApplicationError(ErrorKind.INVALID_INPUT, "The conversation has no campaign instructions")
         kwargs["campaign_instructions"] = "\n".join(instructions[-10:])
+    kwargs.update(conversation_language=conversation_language, marketing_content_language=content_language)
+    languages = LanguagePreferences(preferences["interface_language"], conversation_language, content_language)
     Transactions(db).rollback()
     generated = _run_provider(context, "conversation_draft" if conversation_id else "generate_content",
         lambda: generation_service.generate_marketing_content(profile, **kwargs),
-        "Sofía and Leo could not generate the draft")
+        "Sofía and Leo could not generate the draft", languages)
     context = _authorize(db, principal, business_id, generation=True, lock=True)
     if conversation_id:
         _conversation(db, context, conversation_id, lock=True)
     # Never accept resource IDs, ownership, approval, or publication state from AI output.
     draft = Draft(**{key: generated[key] for key in
-        ("video_script", "title", "caption", "platform", "image_prompt")}, status="pending", source="ai")
-    if not conversation_id:
-        draft.publish_destinations = ([generated["platform"]] if generated["platform"] in
-                                       ("facebook", "tiktok") else ["facebook"])
+        ("video_script", "title", "caption", "platform", "image_prompt")}, status="pending", source="ai", marketing_content_language=content_language)
+    destination = generated["platform"].strip().lower()
+    # Instagram is a creative target, not an implemented publishing destination.
+    draft.publish_destinations = [destination] if destination in {"facebook", "tiktok"} else []
     draft_id = repository.add_draft_scoped(db, context, draft)
     Transactions(db).commit()
     context = _authorize(db, principal, business_id)

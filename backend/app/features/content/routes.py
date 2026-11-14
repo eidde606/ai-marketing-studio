@@ -22,7 +22,7 @@ def generate_content(
     db: Session = Depends(get_db),
 ):
     try:
-        return service.generate_content(business_id=business_id, db=db, principal=principal)
+        return service.generate_content(business_id=business_id, db=db, principal=principal, request=request)
     except ApplicationError as exc:
         raise http_error(exc) from exc
 
@@ -93,6 +93,7 @@ def generate_sofia_conversation_draft(
 ):
     try:
         return service.generate_sofia_conversation_draft(
+            request=request,
             business_id=business_id,
             conversation_id=conversation_id,
             db=db, principal=principal,

@@ -56,13 +56,9 @@ export function useApprovalActions(
         destinations.push("facebook");
       }
 
-      if (selection?.tiktok ?? savedDestinations.includes("tiktok")) {
-        destinations.push("tiktok");
-      }
-
-      if (destinations.length === 0) {
-        throw new Error("Select at least one publishing platform.");
-      }
+      // The rendered TikTok flow is manual export. Approval may have no
+      // direct-publishing destination and must not require a social connection.
+      // Keep the separate direct-TikTok API handler gated from this UI.
 
       await updateDraftDestinations(id, destinations);
       const updated = await approveDraft(id);

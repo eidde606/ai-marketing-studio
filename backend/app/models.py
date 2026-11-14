@@ -52,6 +52,26 @@ class User(Base):
     )
 
 
+class UserPreferences(Base):
+    __tablename__ = "user_preferences"
+    __table_args__ = (
+        CheckConstraint("interface_language IN ('en', 'es')", name="ck_user_preferences_interface"),
+        CheckConstraint("conversation_language IN ('en', 'es')", name="ck_user_preferences_conversation"),
+    )
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("app_users.id"), primary_key=True)
+    interface_language: Mapped[str] = mapped_column(String(2), default="en", server_default="en")
+    conversation_language: Mapped[str] = mapped_column(String(2), default="en", server_default="en")
+
+
+class BusinessPreferences(Base):
+    __tablename__ = "business_preferences"
+    __table_args__ = (
+        CheckConstraint("marketing_content_language IN ('en', 'es')", name="ck_business_preferences_content"),
+    )
+    business_id: Mapped[str] = mapped_column(String(36), ForeignKey("businesses.id"), primary_key=True)
+    marketing_content_language: Mapped[str] = mapped_column(String(2), default="en", server_default="en")
+
+
 class BusinessMembership(Base):
     __tablename__ = "business_memberships"
     __table_args__ = (
@@ -147,6 +167,7 @@ class Campaign(Base):
 
 class Draft(Base):
     __tablename__ = "drafts"
+    marketing_content_language: Mapped[str | None] = mapped_column(String(2), nullable=True)
 
     id: Mapped[str] = mapped_column(
         String(36),
@@ -642,6 +663,7 @@ class Conversation(Base):
     """A conversation with Sofía for a specific business."""
 
     __tablename__ = "conversations"
+    language: Mapped[str | None] = mapped_column(String(2), nullable=True)
 
     id: Mapped[str] = mapped_column(
         String(36),

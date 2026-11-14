@@ -9,6 +9,8 @@ def generate_marketing_content(
     business: BusinessProfile,
     recent_posts: list[dict[str, str]] | None = None,
     campaign_instructions: str | None = None,
+    conversation_language: str = "en",
+    marketing_content_language: str = "en",
 ) -> dict[str, str]:
     """Sofía plans varied content; Leo creates the final post."""
 
@@ -44,5 +46,6 @@ def generate_marketing_content(
         profile,
         history_context,
         campaign_context,
+        language=conversation_language,
     )
-    return adapters.write_content(profile, strategy)
+    return adapters.write_content(profile, strategy, language=marketing_content_language)

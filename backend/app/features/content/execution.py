@@ -1,7 +1,8 @@
 """Application extension points for future tenant usage policy/attribution.
 
-No billing, quotas, persistence, or language overrides are implemented. Hooks get
-trusted request-local metadata only, never prompts, history, tokens, or output.
+These hooks do not implement billing, quotas or persistence. Hooks get effective
+language preferences and trusted request-local metadata only, never prompts,
+history, tokens, or output. HeyGen attempt limits live in media.usage_service.
 Provider success is not the same as authorization to persist the output.
 """
 from .context import OperationContext, ProviderUsage

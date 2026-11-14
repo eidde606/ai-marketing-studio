@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 GENERATION_PATH = "/businesses/business-1/drafts/draft-1/heygen-generation"
 REQUEST = {
+    "confirmed_paid_generation": True,
     "avatar_id": "selected-avatar",
     "voice_id": "selected-voice",
     "script": "Guion de prueba",

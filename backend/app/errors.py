@@ -13,6 +13,7 @@ class ErrorKind(Enum):
     UNSUPPORTED_MEDIA = "unsupported_media"
     FORBIDDEN = "forbidden"
     UNAUTHENTICATED = "unauthenticated"
+    LIMIT_EXCEEDED = "limit_exceeded"
 
 
 class ApplicationError(Exception):

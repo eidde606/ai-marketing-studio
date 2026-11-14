@@ -3,6 +3,8 @@ from datetime import datetime, timezone
 from enum import Enum
 
 from sqlalchemy.orm import Session
+from app.errors import ApplicationError, ErrorKind
+from app.features.accounts import service as accounts
 
 from app.models import Draft
 from app.features.access.principal import AuthenticatedPrincipal
@@ -77,8 +79,14 @@ def _save(db, principal, context, draft_id, values, permission):
 @rollback_on_failure
 def create_draft(request: DraftCreate, db: Session, *, principal: AuthenticatedPrincipal) -> Draft:
     context = require_permission(db, principal, request.business_id, Permission.EDIT_CONTENT)
-    draft = Draft(**request.model_dump(), publish_destinations=(
-        [request.platform] if request.platform in ("facebook", "tiktok") else ["facebook"]))
+    destination = request.platform.strip().lower()
+    if destination not in {"facebook", "tiktok", "instagram"}:
+        raise ApplicationError(ErrorKind.INVALID_INPUT, "Unsupported creative platform")
+    values = request.model_dump()
+    values["marketing_content_language"] = request.marketing_content_language or accounts.business_preferences(
+        db, principal, request.business_id,
+    )["marketing_content_language"]
+    draft = Draft(**values, publish_destinations=[destination] if destination != "instagram" else [])
     draft_id = repository.add_draft_scoped(db, context, draft)
     if draft_id is None:
         raise DraftError(DraftErrorKind.BUSINESS_NOT_FOUND)
@@ -134,6 +142,13 @@ def update_draft_destinations(draft_id: str, request: DraftDestinationsUpdate, d
 @rollback_on_failure
 def approve_draft(draft_id: str, db: Session, *, principal: AuthenticatedPrincipal) -> Draft:
     context, draft = _authorized_draft(db, principal, draft_id, Permission.APPROVE_CONTENT)
+    if (draft.image_status in {"generating", "needs_review"}
+            or draft.video_status in {"generating", "uploading", "needs_review"}
+            or repository.has_active_revision_scoped(db, context, draft_id)):
+        raise ApplicationError(ErrorKind.CONFLICT, "Resolve pending media operations before approval")
+    if (any(destination not in {"facebook", "tiktok"} for destination in draft.publish_destinations)
+            or len(draft.publish_destinations) != len(set(draft.publish_destinations))):
+        raise ApplicationError(ErrorKind.CONFLICT, "Choose supported publishing destinations before approval")
     if draft.media_type == "video" and (draft.video_status != "completed" or not draft.video_url):
         raise DraftError(DraftErrorKind.VIDEO_NOT_READY)
     return _save(db, principal, context, draft_id, {"status": "approved"}, Permission.APPROVE_CONTENT)

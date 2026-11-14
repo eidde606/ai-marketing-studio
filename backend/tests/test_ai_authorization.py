@@ -157,8 +157,8 @@ def test_full_history_pagination_and_request_local_attribution(ai_case, monkeypa
         assert not hasattr(history[0], "_sa_instance_state")
     assert [item.business_id for item in seen] == ["a", "b"]
     assert seen[0].request_id != seen[1].request_id
-    assert seen[0].languages.interface is None
-    assert seen[0].languages.conversation is None
+    assert seen[0].languages.interface == "en"
+    assert seen[0].languages.conversation == "en"
     assert seen[0].languages.marketing_content is None
 
 

@@ -4,6 +4,7 @@ import os
 
 from dotenv import load_dotenv
 from openai import OpenAI
+from .languages import language_name
 
 load_dotenv()
 
@@ -14,6 +15,7 @@ def plan_content(
     profile: dict[str, object],
     history_context: str,
     campaign_context: str | None,
+    *, language: str = "en",
 ) -> str:
     # Sofía: marketing strategy with content history.
     strategy = client.responses.create(
@@ -22,7 +24,7 @@ def plan_content(
             "Eres Sofía, una estratega experta en marketing digital. "
             "Analiza el perfil del negocio y crea una estrategia breve "
             "para UNA publicación de redes sociales. "
-            "Responde en español. "
+            f"Respond only in {language_name(language)}. "
 
             "INSTRUCCIONES DE CAMPAÑA: "
             "Si se proporcionan instrucciones específicas del propietario, "
@@ -94,6 +96,7 @@ def plan_content(
 def write_content(
     profile: dict[str, object],
     strategy: str,
+    *, language: str = "en",
 ) -> dict[str, str]:
     # Leo: create structured content using Sofía's strategy.
     content = client.responses.create(
@@ -102,13 +105,11 @@ def write_content(
             "Eres Leo, un creador profesional de contenido "
             "para redes sociales. "
             "Utiliza la estrategia de Sofía para crear una "
-            "publicación atractiva en español. "
+            f"publicación atractiva. Write all marketing text in {language_name(language)}. "
 
             "REGLAS DE CONTENIDO: "
             "Respeta el TEMA PRINCIPAL elegido por Sofía. "
-            "Si Sofía selecciona cazuela, bollo, un combo "
-            "o un tema cultural, no cambies el enfoque "
-            "automáticamente a encebollado. "
+            "Do not replace the chosen offer or topic with another product. "
             "No menciones productos que no sean relevantes "
             "para el tema seleccionado. "
             "Evita textos genéricos y repetitivos. "
@@ -135,7 +136,7 @@ def write_content(
 
             "Devuelve exclusivamente un objeto JSON válido "
             "con estas claves: title, caption, platform, image_prompt, video_script. "
-            "video_script: guion breve en español, listo para copiar en HeyGen. "
+            f"video_script: a short script in {language_name(language)}, ready for HeyGen. "
             "Debe ser natural, conversacional y adecuado para un avatar. "
             "Duración aproximada de 30 a 45 segundos. "
             "No incluyas instrucciones de cámara ni etiquetas Markdown. "

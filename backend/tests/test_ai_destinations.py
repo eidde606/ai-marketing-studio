@@ -1,4 +1,4 @@
-"""Record current platform/destination behavior, including its known mismatch."""
+"""Verify explicit supported destinations without a silent Facebook fallback."""
 import json
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -22,7 +22,7 @@ def generated_content(platform):
 
 @pytest.mark.parametrize("platform", ["Facebook", "TikTok", "Instagram"])
 @pytest.mark.parametrize("workflow", ["automatic", "conversation"])
-def test_ai_platform_is_preserved_but_destination_defaults_to_facebook(
+def test_ai_platform_maps_only_to_supported_destinations(
     isolated_client, monkeypatch, platform, workflow,
 ):
     client, engine = isolated_client
@@ -65,8 +65,8 @@ def test_ai_platform_is_preserved_but_destination_defaults_to_facebook(
     assert response.status_code == (201 if workflow == "automatic" else 200)
     body = response.json()
     assert body["platform"] == platform
-    # Characterization, not desired future behavior: title-case TikTok still defaults to Facebook.
-    assert body["publish_destinations"] == ["facebook"]
+    expected = {"Facebook": ["facebook"], "TikTok": ["tiktok"], "Instagram": []}[platform]
+    assert body["publish_destinations"] == expected
     assert body["status"] == "pending"
     assert body["source"] == "ai"
     assert body["business_id"] == business_id
@@ -83,7 +83,7 @@ def test_ai_platform_is_preserved_but_destination_defaults_to_facebook(
     with Session(engine) as db:
         saved = db.get(Draft, body["id"])
         assert saved.platform == platform
-        assert saved.publish_destinations == ["facebook"]
+        assert saved.publish_destinations == expected
         assert saved.title == body["title"] == "Publicación de prueba"
         assert saved.caption == body["caption"] == "Texto en español"
         assert saved.image_prompt == body["image_prompt"] == "Una imagen de prueba"
@@ -94,9 +94,9 @@ def test_ai_platform_is_preserved_but_destination_defaults_to_facebook(
 
 
 @pytest.mark.parametrize("workflow,expected", [
-    ("automatic", ["tiktok"]), ("conversation", ["facebook"]),
+    ("automatic", ["tiktok"]), ("conversation", ["tiktok"]),
 ])
-def test_lowercase_tiktok_is_handled_differently_by_generation_routes(
+def test_lowercase_tiktok_is_consistent_across_generation_routes(
     isolated_client, monkeypatch, workflow, expected,
 ):
     """Synthetic boundary case: lowercase is not in the current AI output enum."""

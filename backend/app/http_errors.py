@@ -15,6 +15,7 @@ _STATUS = {
     ErrorKind.UNSUPPORTED_MEDIA: 415,
     ErrorKind.FORBIDDEN: 403,
     ErrorKind.UNAUTHENTICATED: 401,
+    ErrorKind.LIMIT_EXCEEDED: 429,
 }
 
 
