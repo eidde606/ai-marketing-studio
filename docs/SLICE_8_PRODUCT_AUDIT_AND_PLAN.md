@@ -1,158 +1,300 @@
-# Slice 8 — product audit and proposed implementation plan
+# AI Marketing Studio — system, product, and UX audit
 
-Status: the baseline audit and roadmap remain proposed; Slice 8 Phase 1 implementation is in progress. Phase 2 has not started.
+**Audit baseline:** `feature/multi-tenant-foundation` at `9b3c3405b751a6ba85f2d2936e5824c1a45b76c6` (Slice 8 Phase 1 committed).
+**Status:** Audit and revised plan approved. Slice 8 Phase 2 frontend foundation is complete locally at `ef4bddf9ed6e3d5205e3cc6f2cc2938ff03d13e9`; no backend, database, billing, or deployment changes were made.
 
 ## Scope and evidence
 
-The findings below describe the pre-Phase-1 baseline from React screens, hooks, services and CSS; backend routes, schemas, application services, authorization, provider workflows and tests on `feature/multi-tenant-foundation`. Current code takes precedence over older phase documentation. This is a source-based product/UX audit with automated regression/build validation, not an authenticated browser usability study or a live provider certification. Responsive findings below distinguish implementation risks from visually reproduced defects. Render was not queried or modified.
+This audit follows the current React/TypeScript/Vite application, FastAPI feature routes and services, SQLAlchemy models, Alembic graph, provider adapters, and current API contracts. Current source takes precedence over older phase notes. The local Alembic graph has one head, `91f6a20d3b8e`; this audit did not connect to any database, call external APIs, run the app in a browser, or perform a penetration test. Responsive and usability observations are therefore code-based risks, not reproduced user-study findings. The repository has no applicable `AGENTS.md`.
 
-## Product recommendation
+The working tree was already dirty before this documentation change: `frontend/tsconfig.tsbuildinfo` was modified, and `facebook_tiktok_review.txt` and `main_diff.txt` were untracked. They are outside this audit and must remain untouched. No implementation code, database, credentials, or provider was changed.
 
-Make **Create a post → Review → Approve → Publish → See results** the primary journey. Campaigns are optional groups of related posts. Preserve Sofía and Leo as helpful collaborators within that journey. Present measured Facebook results honestly; do not present Mía as an operational AI analyst until an analysis workflow exists.
+## Executive assessment
 
-The application has substantial working content, media and tenant-authorization foundations. It is not yet a self-service SaaS: the single-user allowlist remains enforced, registration cannot provision application access, team administration has no HTTP interface, language settings are not wired through providers, and there are no enforced spending budgets. Those gaps cannot be completed solely in React.
+The product has a credible small-business problem to solve: turn limited business information into usable, brand-aware social content, then help the owner review, distribute, and learn from it. Its strongest potential is a **closed-loop content workflow**, not the number of named AI agents.
 
-## Audit findings
+The technical foundation is stronger than the current user journey. The backend is a feature-based modular monolith with explicit tenant authorization, scoped repositories, durable publishing/media records, and provider boundaries. The frontend has useful feature hooks and account/business lifetime guards. But the current experience still feels like several tools: a one-click generator, a separate Sofía chat, a draft/history library, an approval-and-media workbench, campaign CRUD, and a Facebook metrics page.
 
-| Area | What works in code/tests | Confusion or missing capability | Recommended change |
-| --- | --- | --- | --- |
-| Campaigns | CRUD, dates/status, tenant-scoped association, nullable campaign on drafts, publication-based progress, preservation of content on deletion | Conversations use “New campaign” terminology even when no campaign record exists. Campaign completion is a publication ratio, not business success. | Keep campaigns optional; default to “No campaign.” Rename conversations “Planning chats.” Label progress “Posts published.” Explain archiving versus deletion. |
-| Sofía and Leo | Business-scoped conversation history; Sofía strategy passed to Leo; generated drafts remain pending; authorization before provider work and before persistence | Users see agent activity inferred from draft existence, not actual workflow events. Conversation generation passes recent user instructions, not a persisted, explicitly accepted brief. Prompts force Spanish and contain restaurant-specific examples. | One planning panel with an editable brief and explicit “Create draft.” Show real request stages; persist a brief/version if presenting it as approved. Generalize industry examples. |
-| Mía | Facebook post metrics can be fetched and summarized by the UI | `App.tsx` marks Mía available based on Facebook connection. No Mía analysis service exists; Sofía's prompt correctly says analysis is future work. | Remove the operational agent claim. Keep Results as measured data. Introduce Mía later with cited metrics, time coverage and uncertainty. |
-| Creation/editing | Manual draft API; AI quick generation; title/caption editing; image generation/revisions; video upload and HeyGen scripts | Creation/editing is spread across dashboard, AI Team and Approvals. Content is largely a history browser. General draft PATCH edits only title/caption. Approved/rejected content cannot simply be revised through the pending-only edit path. | A single composer with manual and AI entry points, media, preview and optional campaign. Clearly separate script editing for a generation request from saving a draft script. Add revision/resubmission contracts before showing those actions. |
-| Destinations | Backend explicitly checks selected connected destinations; publishing checks authorized business/resource access | AI schema returns `Facebook`/`TikTok`/`Instagram`, but automatic destination mapping recognizes lowercase and otherwise defaults to Facebook; conversation drafts also inherit Facebook default. Instagram creative targeting does not mean Instagram publishing exists. | Normalize supported destinations on the server; distinguish creative platform from publishing destination; never silently select Facebook for TikTok/Instagram content. Ask the user to choose a supported destination at review. |
-| Approval/publishing | Separate approval and publication; Facebook confirmation/recovery; durable provider IDs and uncertain states; generated media does not approve or publish | Review queue doubles as editor and media studio. Current frontend saves connected destinations before approval, blocking the natural “approve now, connect later” journey. Rejection is terminal in existing edit APIs. | Separate composer, review queue and publication dialog. Explicitly design draft/review/revision transitions. Approval is for an immutable content/media/destination revision; edits invalidate approval. Never auto-publish. |
-| HeyGen | Explicit paid confirmation; tenant asset access; bounded scripts; persisted attempts, fingerprints, leases, idempotency, reconciliation and storage readiness | Generic cost warning is not a budget. No per-business allowance, rate/concurrency policy, durable usage ledger or spend history. Provider completion and stored playable video are distinct states. | Add server-enforced allowances and reservations before widening access; show estimated/unknown cost honestly. Show “Generating,” “Saving video,” “Ready,” and “Check status.” Never create a fresh paid job to resolve an uncertain job. |
-| Social integrations | Facebook, TikTok and Instagram OAuth/status paths; Facebook publishing; TikTok publishing/creator-info APIs | Current rendered TikTok workflow is download/copy for manual posting. Instagram has connection endpoints, not publishing/analytics endpoints. Connected does not mean publishing-ready. | Capability labels: Facebook direct publishing; TikTok manual export until the approved Direct Post experience is ready; Instagram connection only. Show account/page identity, reconnect requirements and per-action readiness. |
-| Analytics | Real Facebook reactions/comments/shares; explicit missing-data handling; only confirmed publication IDs counted | No cross-network analytics, historical trend series, attribution to sales or AI recommendations. UI fans out one metrics request per published draft; deleted published content coverage differs from campaign totals. | Label source, coverage and refresh time; show unknown as unknown. Define whether archived/deleted publication history is included consistently. Bound requests and add caching/aggregate endpoints before scale. |
-| Signup/onboarding | Login, password recovery, display-name update; business creation atomically adds the authenticated creator as Owner | No signup flow, app-user registration, invitations, resumable onboarding or tutorial. One long form asks for many profile fields. New Supabase users still fail the allowlist/app-user checks. | Add a separately gated registration path and short onboarding; do not reuse initial-owner bootstrap. Start with business name, offer, audience and goal; make detailed brand setup optional. |
-| Business/account management | Membership-filtered business list, account-specific remembered selection, business visit guards, last-owner protection in membership service | Business response has no role/capabilities. No membership routes, business profile PATCH, ownership UI, account deletion/export or usage/billing interface. Many controls cannot reflect role accurately. | Add verified account/capability contracts and role-aware navigation. Separate personal preferences from business settings. Hide unimplemented account/team actions until supported. |
-| Language | Backend has separate language preference placeholders in immutable context | UI, navigation identifiers, date formatting and prompts are Spanish; context preferences are not supplied to providers | English first render; explicit Spanish selector before authentication; independent UI, AI conversation and marketing output settings, persisted at appropriate scopes. |
-| Responsive/accessibility | Mobile drawer, breakpoint rules, wrapping, focus states and reduced-motion rules; keyboard navigation tests | Large repeated CSS cascade; 16rem desktop sidebar begins at 768px, leaving narrow tablet workspace. Topbar wrapping is limited to 768–960px. Mobile login shows a large marketing block before the form. Drawer test emits a ref warning. Nested chat scrolling and long localized labels need real-device QA. | Consolidate shell styles; responsive compact navigation; compact mobile auth; flexible controls; keyboard-safe composer/dialogs; fix ref forwarding. Treat these as source-observed risks until browser reproduction. |
-| Small-business usability | Familiar business profile, AI draft creation and human approval concepts | Seven peer navigation destinations expose implementation structure; generic technical errors and provider status names burden users; limited guidance from empty states | Use task-based navigation, one primary next action, contextual examples and short recovery instructions. Keep advanced controls in progressive disclosure. |
+**Conclusion:** continue with Slice 8 as an incremental product workflow redesign, not a rewrite. A private, single-allowlisted-user pilot is materially closer than a self-service SaaS launch. Do not remove `ALLOWED_USER_ID` or present disabled capabilities as available until the admission, spend, role-aware UI, language, and end-to-end release gates below are met and separately approved.
 
-Key evidence: `frontend/src/App.tsx`, `components/AuthPage.tsx`, `components/BusinessForm.tsx`, `components/SofiaChat.tsx`, `components/AnalyticsPage.tsx`, `features/approvals/components/ApprovalPage.tsx`, `features/media/hooks/useHeyGenGeneration.ts`, `app/useBusinessSelection.ts`, `styles.css`; `backend/app/auth.py`, `features/access/permissions.py`, `features/businesses/routes.py`, `features/content/{service,context,execution,openai_provider,sofia_provider}.py`, `features/drafts/{schemas,service}.py`, `features/media/generation_service.py`, and the platform route modules.
+## A. Current system assessment — verified source behavior
 
-## Proposed customer journey
+### Frontend and application shell
 
-1. **Arrival:** English login/signup page with a visible “English / Español” selector. A Spanish browser does not silently change the initial UI. Remember an explicit selection. Keep the form prominent on mobile.
-2. **Account:** Sign up, verify email, then establish application access using verified issuer/subject. Resume safely after refresh or duplicate callback. Until registration is enabled, show the actual private-access state instead of a functional-looking signup button.
-3. **Business setup:** “What is your business?”, “What do you offer?”, “Who do you want to reach?”, “What would you like this post to achieve?” Save short steps. Advanced voice, location, website and preferences remain optional. Existing invited users enter the invited business rather than creating another.
-4. **Language setup:** Explicit independent selectors for “App language,” “AI conversation language” and “Marketing content language.” Default new choices to English. Explain that a Spanish interface can produce English posts, and vice versa. Do not rewrite historical content when preferences change.
-5. **Welcome/tutorial:** Offer “Show me around” and “Skip.” A brief interactive walkthrough highlights business switching, Create, editing a draft, Review, and Publish. Advance through safe UI interactions with a local example; never spend credits, connect accounts or publish as a tutorial side effect. Replay from Help; keep completion/version per user, and reset example state on account/business change.
-6. **First post:** “Write it myself” or “Help me create it.” Ask for goal/topic, creative platform and output language; campaign defaults to none. Sofía clarifies a brief; Leo drafts. Show an editable preview and a clear saved/unsaved indicator.
-7. **Media:** Optional image, uploaded video or HeyGen. Review script, authorized avatar/voice, language and spend allowance before generating. Wait for stored playable media before review eligibility. Provide recovery without duplicate spending.
-8. **Review:** Members prepare/submit; Owners/Admins approve or request changes. A solo Owner can review their own post. Approval and publishing are distinct actions. Any content/media/destination revision requires renewed approval.
-9. **Publish:** Display business, exact social account, platform preview and approved revision. Explicit “Publish now” confirmation. Show processing and uncertain outcomes truthfully; offer status checks before retry. TikTok manual export stays marked unverified, never “published.”
-10. **Return:** Home shows drafts to finish, reviews awaiting action and confirmed publications. Results shows actual Facebook metrics. Offer an optional campaign when the user wants to organize several posts, not during mandatory onboarding.
+- `frontend/src/main.tsx` mounts a React 18 SPA. `App.tsx` owns authentication state, the selected business, section navigation, and composition of draft, approval, media, and publishing hooks. Sections are stored as Spanish display strings in local storage; there is no route/deep-link layer or browser-history workflow.
+- The root screen is a branded login page rather than a separate public landing page. `useAuthSession.ts` uses Supabase email/password sign-in, session events, sign-out, password recovery, and profile-name update. `AuthPage.tsx` renders login, reset-link, and new-password flows; it has no signup or locale-selection UI.
+- `useBusinessSelection.ts` loads the server-filtered business list and remembers a valid selection per Supabase user. `BusinessForm.tsx` asks for many optional business-profile fields in one form. Business creation is supported, but profile editing and resumable onboarding are not.
+- The shell exposes seven peer sections: Resumen, Campañas, Contenido, Equipo IA, Aprobaciones, Analíticas, and Configuración. The dashboard has both a one-click “Crear contenido” action and shortcuts to review, campaigns, and the AI team. `ContentPage` is a searchable/filterable library and preview/metrics surface, not a composer.
+- The UI is predominantly hard-coded Spanish, including navigation, errors, date formatting, and forms. The package has no localization or routing library. English-first UI and Spanish as an explicit choice are not implemented.
+- `SettingsPage.tsx` edits the display name and shows social integrations. It does not expose interface, conversation, or marketing-content language, role/team management, usage, or account lifecycle controls.
 
-## Screen and navigation structure
+### Backend, persistence, authorization, and integrations
 
-| Screen / proposed route | Main content and behavior |
-| --- | --- |
-| `/login`, `/signup`, `/verify-email`, `/password-recovery` | Public locale selector, accessible forms, clear verification/recovery states. Signup remains gated until its backend contract exists. |
-| `/onboarding` | Resumable short setup, independent language choices, optional social connection and tutorial. Handle no-access and invited-business branches. |
-| `/b/:businessId/home` | One “Create a post” CTA, actionable review/draft counts, setup checklist, genuine recent activity. |
-| `/b/:businessId/content` | Search/filter by status/platform/campaign; Drafts, In review, Approved, Published, Archived views only when supported by real states. |
-| `/b/:businessId/content/new` and `/content/:draftId` | One composer: text, media, preview, language and campaign selector. Desktop split editor/preview; mobile stacked or tabs with persistent save action. |
-| `/b/:businessId/review` | Review queue with preview, change request, approval and permission explanations. Member view shows own/shared submissions without approval controls. |
-| `/b/:businessId/campaigns` and `/campaigns/:campaignId` | Optional goal/date grouping, associated content, actual publication progress. Dates do not promise scheduling. |
-| `/b/:businessId/assistant` | Business-shared Sofía planning chats and explicit handoff to draft creation. Clearly identify shared history. Leo is part of creation, not a pretend separate chat service. |
-| `/b/:businessId/results` | Facebook results, coverage, unavailable data and refresh timestamp. No invented trends or Mía narrative. |
-| `/b/:businessId/settings` | Business profile, connections, team and usage tabs gated by actual capabilities and supported endpoints. |
-| `/account`, `/help` | Personal display name, language, password/account functions actually supported; tutorial replay and concise contextual help. |
+- FastAPI is a modular monolith. Feature routes translate HTTP into application-service calls; services enforce policy and coordinate repositories, transactions, and providers. The reviewed modules include accounts, access, memberships, businesses, campaigns, content, drafts, media, Facebook, Instagram, TikTok, and analytics.
+- Supabase JWT verification validates signature, issuer, audience, required claims, and the configured `ALLOWED_USER_ID`. Protected access also requires an active `app_users` identity. Business operations use the existing Owner/Admin/Member policy and tenant-scoped persistence. Membership changes recheck authority and preserve an active Owner.
+- An `/account/register` endpoint exists, but it only provisions the already-allowlisted, authenticated identity. Its registration dependency rejects anonymous tokens but does not itself enforce an email-confirmed claim; this is not public admission today, but verified-email policy must be explicit before it is opened. `/account` returns per-business roles/capabilities and feature flags; the response declares public registration, TikTok direct publishing, Instagram publishing, Mía analysis, and scheduling unavailable. The frontend does not consume this capability response.
+- Business membership list/change endpoints exist at `/businesses/{business_id}/memberships`; there is no invitation/acceptance workflow or corresponding team UI. The `/businesses` list contract does not include role/capability data. Existing initial ownership is provisioned separately, not inferred.
+- User interface/conversation language preferences and business marketing-content language are stored independently. The content service snapshots effective language on conversations/drafts and passes language into Sofía/Leo provider calls. Defaults are English. This backend contract exists, but the frontend neither loads nor updates it; current Spanish users can receive English assistant/content output by default.
+- `POST /businesses/{business_id}/generate-content` and Sofía conversation generation both use the same `_generate` application path. It reads the authorized business profile and recent drafts, calls Sofía for a strategy, calls Leo for strict structured content, and saves a pending `Draft`. The generated platform is separate from the selected publish destinations; current code does not silently default unsupported creative platforms to Facebook.
+- `POST /drafts` supports backend manual draft creation, but the frontend has no manual-draft API/form. Its “Crear contenido” button calls automatic AI generation without a topic/brief. Drafts have optional campaign linkage and language snapshots; `DraftCreate` currently does not accept a campaign association.
+- Campaign CRUD and draft association are tenant-scoped. Campaigns are optional in the data model. Their progress is a count/ratio of drafts with confirmed provider publication IDs; dates and statuses do not schedule posts or measure sales/business outcomes.
+- Facebook supports direct text/image/video publishing and Facebook post metrics. TikTok has backend direct-publishing routes/services, but the account capability is false and the rendered approval workflow exposes manual completed-video download and caption copy, not direct posting. Instagram has connection/authorization status, not a publishing flow.
+- Media uses business-prefixed private storage paths and tenant-validated signed URLs. Image generation/revisions and video upload are draft-scoped. HeyGen platform stock assets require explicit trusted designation to be shared; private assets are business-assigned, and generated video remains business-scoped. HeyGen generation has persisted attempts, idempotency/recovery, authenticated webhook processing, explicit paid confirmation, and operator-configured per-business lifetime/concurrency/script-length allowances. The allowance/usage endpoint is not exposed in the UI and is not a monetary budget.
+- HeyGen webhook deliveries are persisted and signature-checked, then processed through an in-process FastAPI background task. Reconciliation can recover persisted work, but there is no always-on queue/worker or scheduled sweep; unrevisited jobs may require an explicit client/operator recovery call.
+- OpenAI content/chat/image/revision provider attribution hooks are no-ops; no server-enforced OpenAI allowance or durable usage ledger is present. The quick-create and chat actions can start provider work without a usage/cost notice. A generated post uses two model calls (Sofía strategy and Leo output); chat and image actions can incur additional calls.
+- Analytics currently exposes Facebook reactions, comments, shares, and a lifetime unique-media-viewer value where Facebook supplies it. The page requests each published draft separately and aggregates available values in the browser. There is no historical trend store, cross-platform report, conversion attribution, or operational Mía analyst.
+- Local migration files include the additive language-preference migration and have exactly one Alembic head. No migration was run as part of this audit.
 
-Primary navigation: Home, Content, Review, Results. Campaigns and AI Assistant remain accessible as secondary workspaces. Settings/Help live in the utility area. The business switcher is always visible; display the current role. Desktop uses a sidebar; tablet uses a compact shell; mobile uses a short header and accessible drawer. Routes use stable untranslated identifiers; labels are localized.
+### Architecture evaluation
 
-Every screen needs loading, empty, partial-data, permission-denied, stale-session and retry states. No generic “this section is ready” placeholder. Unsupported actions are omitted or clearly labeled unavailable with a factual explanation.
+**Keep:** React + TypeScript + Vite, Supabase authentication, PostgreSQL, SQLAlchemy/Alembic, the closed route → application service → repository → database boundary, provider adapters, feature-oriented backend modules, and the existing per-feature frontend hooks. These choices fit the product and do not justify a rewrite or microservices.
 
-## Language design
+**Improve incrementally:** `App.tsx` remains a large workflow coordinator; navigation is not URL-backed; `apiClient.ts` is used by campaigns while several other services duplicate session lookup, fetch, and error parsing; capabilities and preferences are available in backend contracts but are not consumed by the app. Consolidate only as feature work reaches those boundaries. A new global state framework is not justified.
 
-| Preference | Scope and precedence | Must affect |
-| --- | --- | --- |
-| Interface | Explicit authenticated user preference; otherwise explicit pre-auth device selection; otherwise `en`. Authenticated preference is applied only for that account and cleared from active state at logout. | Navigation, dialogs, tooltips, accessibility labels, validation, errors, dates/numbers, status labels, tutorial and document language. |
-| AI conversation | Explicit conversation override; otherwise user preference; otherwise `en`. Snapshot on the conversation/request. | Sofía replies and user-visible planning explanations. A business-shared conversation displays its language and changing it does not translate history. |
-| Marketing content | Explicit draft/request override; otherwise business default; otherwise `en`. Persist the effective language on the draft. | Title, caption, hashtags, CTA, video script and relevant media-generation instructions. Voice compatibility is validated separately. |
+## B. Existing workflow and data-flow map
 
-Use typed `en`/`es` message catalogs with English fallback, pluralization and `Intl` formatting. Stable status/error codes are translated in React; do not expose raw provider exceptions. Brand names and user-authored text are not translated automatically. UI language never silently controls generated content. Preserve existing business content-language intent through explicit confirmation of legacy preferences; the English UI default does not rewrite Spanish drafts.
+```text
+Supabase login/recovery
+  -> user-keyed React workspace
+  -> GET /businesses -> selected authorized business
 
-Wire effective conversation/output languages through request schemas, immutable operation context and provider adapters. Existing `LanguagePreferences` is only an extension point. Add explicit prompt rules and tests for all eight UI/conversation/content combinations. Persist the requested language and render it near the generated result; language detection may warn but must not silently regenerate paid content.
+Dashboard "Crear contenido"
+  -> POST /businesses/{business_id}/generate-content
+  -> fresh tenant/role checks + business profile/recent drafts
+  -> Sofía strategy -> Leo structured output
+  -> pending Draft (no campaign) -> Aprobaciones
 
-## Architecture and API fit
+Equipo IA / Sofía
+  -> business-scoped conversation and shared message history
+  -> Sofía reply saved as messages
+  -> "Crear borrador con Leo"
+  -> last ten user messages become generation instructions
+  -> same Sofía -> Leo pipeline -> pending Draft -> Aprobaciones
 
-Retain React/TypeScript/Vite, Supabase authentication, existing feature folders, feature hooks, shared UI primitives and the modular-monolith backend. This is an incremental product redesign, not a framework replacement.
+Contenido (library)                    Campañas
+  -> list/filter/preview/FB metrics      -> independent CRUD
+  -> no create/edit composer             -> optionally associate existing draft
 
-Frontend flow: route/page → feature workflow hook → typed API service → shared authenticated client. Backend flow: route → application service → authorization and scoped repository/provider → transaction boundary. No direct browser database writes for tenant resources; no provider secrets in React. Providers receive immutable business inputs rather than ORM entities.
+Pending Draft -> edit title/caption, media, approve/reject
+  -> approved content is not editable through pending-only APIs
+  -> explicit Facebook confirmation -> publish/verify/recover
+  -> TikTok current UI: download completed video + copy caption for manual posting
+  -> Instagram: connection state only
 
-Keep user-keyed workspace lifetime and business-visit guards. Separate account preferences from tenant state. Cache keys include user, business, resource and relevant locale; clear cached media and data on logout/revocation. Cancel obsolete reads and ignore late results, including A → B → A and media callbacks. Durable jobs remain server-owned across navigation. Do not abort a server mutation and assume it was undone. Keep mutation retries explicit; consolidate duplicated HTTP clients without introducing automatic paid-operation retries.
+Confirmed Facebook publication
+  -> per-draft metrics requests -> browser totals/details
+  -> no durable historical series or campaign ROI
+```
 
-Add route-based navigation/deep links and lazy-loaded feature pages. Preserve browser Back and unsaved-change handling. Centralize design tokens, responsive shell, forms, status components, toasts and accessible confirmation dialogs. Avoid migrating all state into a new global store; shared workflow locks and server attempt records already have defined owners.
+Conversation history and drafts are business-shared according to the existing authorization model; the UI should say so rather than imply a private personal chat.
 
-| Capability | Existing API reuse | Required addition or decision |
-| --- | --- | --- |
-| Business selection/creation | `GET/POST /businesses` | Verified `/me` or equivalent account bootstrap response with membership role/capabilities; business profile read/edit and preference persistence. |
-| Registration | Supabase signup/verification primitives; existing JWT verification | New explicit verified-identity registration service, deduplication and rollback; controlled removal of single-user allowlist only after isolation acceptance. Initial-owner provisioning must remain offline. |
-| Team/account | Existing membership policy and last-owner service | Tenant-scoped list/change/invite/accept routes, expiring single-use invitations, account lifecycle policy and audit events. Account disabling must preserve an active Owner in every business. |
-| Drafts | `POST/GET /drafts`, draft PATCH, approve/reject/destinations, soft delete | Structured create brief/language, persisted script edits where offered, review submission/change-request/revision semantics and revision-aware approval. Do not invent states in React. |
-| AI planning | Business generate-content and Sofía conversation/chat/draft endpoints | Independent language inputs; explicit reusable brief if exposed; platform normalization; generalized prompts and bounded usage. |
-| Campaigns | Existing business-scoped CRUD and draft association routes | Reuse without mandatory assignment. Creating a draft and associating it are currently separate operations: preserve the draft and offer association retry if step two fails. |
-| Media | Draft image/revision/upload/preview endpoints; business-scoped HeyGen generation/status/reconcile; asset catalog/assignment | Usage/budget API and policy, reservations, provider attribution and spend visibility. No browser-only limit. |
-| Publishing | Facebook publish/verify/recovery; TikTok creator-info/publish/verify | Revision checks; TikTok required UX and operational readiness before exposing direct posting. Instagram publication and scheduling are separate future capabilities. |
-| Results | Per-draft Facebook analytics/reach routes | Cache/aggregate/paginated contract for scale; historical snapshots needed before trends; Mía requires a real analysis workflow. |
+## C. Problems, opportunities, and risk
 
-Proposed new endpoint names and schemas must be frozen in Slice 8.0 before implementation; they are not claims about existing APIs. Keep unsupported sections gated during incremental rollout. Public registration, team administration and spend policy are part of the proposed SaaS completion scope and require backend work alongside the frontend.
+| Priority | Verified issue | Customer impact / recommendation |
+|---|---|---|
+| Critical before public admission | `ALLOWED_USER_ID` still intentionally limits access. Registration is not public; the API flag is false and the UI has no signup. | Do not describe the current app as open self-service. Design and separately approve identity verification, admission, deduplication, abuse controls, and onboarding before any allowlist change. |
+| Critical before public admission | OpenAI work has no server-side usage limit/ledger; quick create/chat do not show a cost/usage notice and extension hooks are no-ops. HeyGen has attempt allowances, but they are lifetime counts, not price tracking. | Add enforceable per-business limits/reservations for paid OpenAI work and show usage state before expanding admission. Never infer provider cost from text length. |
+| Important for first customer | The dashboard’s “Create Content” is automatic generation, not quick manual creation. Sofía is a separate tab and its resulting draft goes to Aprobaciones, not a shared composer. | Provide one composer with manual/AI entry points; use Sofía for guidance and pass a confirmed brief into the same generation/draft contract. |
+| Important for first customer | Backend capability/language APIs are not used in React. The UI shows approval and integration actions without role-aware presentation. | Load account/business capabilities, hide or explain unavailable actions, and retain server-side authorization as the actual security boundary. |
+| Important for first customer | `App` displays Mía as “Disponible” when Facebook is connected, while `/account` says `mia_analysis: false` and Sofía's prompt says analysis is not available. | Remove the operational analyst claim. Label Results as Facebook data; add Mía only with a real, evidence-linked analysis workflow. |
+| Important for first customer | UI is Spanish-only, while new language preferences default to English and are not configurable in UI. | Implement English-first chrome, pre-auth explicit locale selection, and independent interface/chat/content settings; make defaults visible and do not translate history. |
+| Important for first customer | Content, approval, and media are spread across Dashboard, Contenido, Equipo IA, and Aprobaciones. The approval screen is also the primary editor/media workspace. | Make Draft the shared work item and composer/review/publish states distinct; avoid duplicating editor controls across pages. |
+| Important for first customer | Members see some approval/connection controls they cannot use; the frontend does not consume `/account` capabilities. | Make navigation/actions capability-aware to reduce failed actions and role confusion. This is a UX gap, not evidence that backend authorization is bypassed. |
+| Important for first customer | Campaigns are optional in the data model, but the dashboard presents “Planifica → Campañas” as step one and promotes campaign creation in the empty state. | Make “Create a post” primary and campaign assignment explicitly optional. Explain that progress means published posts, not campaign success. |
+| Scale/reliability | Analytics makes one request per published draft using unbounded `Promise.allSettled`; no aggregate/cache endpoint exists. | Add bounded aggregation and coverage/refresh metadata before histories become large; never turn missing data into zero. |
+| Scale/reliability | Multiple frontend services independently implement token retrieval, fetch and error parsing; section changes are not URL state. | Standardize request/error behavior as files are touched; add route/deep-link behavior if user testing confirms it improves navigation. |
+| Validation gap | Responsive rules and accessibility affordances exist in CSS/components, but this audit did not render the app at target sizes or use assistive technology. | Treat responsive claims as unverified. Run browser-based keyboard, screen-reader, zoom, touch, and viewport acceptance before release. |
 
-## Authorization and spending requirements
+### Security and reliability assessment
 
-Preserve current role policy: Members read, create/edit pending content, manage campaigns, use AI/media and submit; Admins additionally approve/publish, manage connections/assets, edit business settings and manage Members; Owners additionally manage Admins/Owners. Do not infer a Viewer role that the backend does not have. Last-owner protection remains enforced in services. Show capability-driven controls while the backend independently authorizes every request, resource and post-provider persistence step.
+**Positive controls observed:** strict allowlist and JWT validation; active application-user and tenant authorization; role policy enforced in services; tenant-scoped repository operations; reauthorization around long-running provider work; OAuth state and webhook protections; publishing claims/idempotency/recovery; media ownership and signed-URL path checks; private provider credentials; explicit human approval and publish confirmation; HeyGen generation recovery that avoids starting a second paid job.
 
-For HeyGen and other paid generation, add tenant/user attribution, an atomic allowance reservation, per-operation/concurrent-job limits and configurable business limits. Reserve before calling the provider; reconcile actual usage when known. Keep uncertain jobs reserved pending reconciliation. Record provider work even if authorization revocation prevents attaching its output. Use durable operation IDs and current duplicate protections across tabs/reloads. Return a stable limit-exceeded response with an actionable UI message. Price estimates must carry source/time and an uncertainty label; never present a text-length guess as a provider charge. If a reliable monetary upper bound is unavailable, enforce conservative operation/duration allowances and disclose the limitation.
+**Release gates, not findings of a current cross-tenant exploit:** keep the allowlist until admission is intentionally approved; define verified-email admission before public signup; require UI capability wiring without trusting it for authorization; implement paid OpenAI limits before widening user access; audit provider-error logging and request logs for redaction. Source review found no basis to claim a tenant bypass, but this was not adversarial testing. In particular, membership revocation must continue to be checked by the service at persistence boundaries.
 
-API spending is separate from HeyGen web subscription credits; do not suggest a web subscription covers backend generation. See [HeyGen API pricing](https://www.heygen.com/api-pricing). TikTok Direct Post requires platform configuration, user authorization and an audit to lift visibility restrictions; existing routes alone do not establish release readiness. See [TikTok Direct Post documentation](https://developers.tiktok.com/docs/en/content-posting-api-get-started?enter_method=left_navigation). No paid/live validation was performed in this audit.
+**Lower-risk hygiene:** `businessesApi.ts` logs the JWT header algorithm (not the token) to the browser console; `FacebookConnection.tsx` logs only whether a handoff hash is present. Remove unnecessary diagnostics during the API-client cleanup. Keep any provider error logging structured and redacted.
 
-## Prioritized implementation sequence
+## D. Recommended product and technical architecture
 
-| Order | Work package | Dependencies and acceptance gate |
-| --- | --- | --- |
-| P0 / 8.0 | Freeze screen/state/API contracts and capability matrix. Define registration rollout, review revisions, language scopes and usage policy. Capture browser baseline screenshots and reproduce responsive issues. | Approve this plan. Resolve backend contracts before rendering unsupported controls. |
-| P0 / 8.1 | Backend SaaS prerequisites: verified registration, account/capability response, preferences, business editing, language propagation and destination normalization. Add usage enforcement before expanding paid access. | Preserve closed layers, isolation and offline bootstrap boundary. New users cannot acquire existing businesses by client-supplied ownership. |
-| P0 / 8.2 | English-first localization, public selector, routing, shared API/error handling, role-aware responsive shell and state lifecycle. Lazy-load pages. | English first paint; Spanish explicit; no stale tenant data, raw technical errors or unsupported “working” features. |
-| P1 / 8.3 | Signup/verification, resumable onboarding and interactive skip/replay tutorial; personal/business settings. Add team routes/UI with invitation and last-owner tests. | New user completes a real supported flow; duplicate callbacks are safe; tutorial causes no paid/external action. Keep allowlist cutover separately controlled. |
-| P1 / 8.4 | Unified manual/AI composer, optional campaigns, brief-to-draft handoff, script/media controls and revision-aware review workflow. | First post needs no campaign; Member cannot approve; editing approved material requires reapproval; all outputs obey independent language choices. |
-| P1 / 8.5 | Media/job recovery, cost/allowance display, explicit publishing confirmation and honest connection capabilities. | Double click/reload/concurrency cannot duplicate jobs or posts. Unknown provider outcomes lead to reconciliation. TikTok manual export remains unverified. |
-| P1 / 8.6 | Results coverage/caching, account/team finishing, responsive/accessibility remediation, browser E2E and release acceptance. | Critical journeys pass at mobile/tablet/desktop sizes in both languages; no invented metrics or agent activity. |
-| P2 / later | Mía insights with evidence; scheduling with timezone/reapproval rules; Instagram publishing; TikTok public Direct Post rollout; billing/payment integration; richer historical analytics. | Separate backend/provider readiness. Do not expose these as functional in Slice 8 before implementation and validation. |
+### Product structure
 
-Registration/capabilities and language contracts are release blockers, not optional polish. If Slice 8 is limited to frontend work, describe the deliverable as a redesigned private workspace and keep signup/team/usage controls unavailable; that narrower scope would not satisfy complete SaaS onboarding.
+Organize around the customer's job, not the agent roster:
 
-## Responsive and accessibility acceptance
+1. **Home:** next action, drafts to finish, reviews awaiting the current user's role, confirmed recent publications, and connection/setup gaps.
+2. **Content:** searchable work queue/library; one composer for manual and AI-assisted creation.
+3. **Review:** pending items with preview, destination, media readiness, and role-appropriate approve/request-change actions.
+4. **Results:** only sourced metrics, with platform, date/coverage, refresh time, and explicit unavailable states.
+5. **Campaigns:** optional planning/grouping workspace, not a prerequisite for one post.
+6. **Settings/Help:** separate personal preferences from business profile, integrations, team, and usage; show only capabilities actually implemented.
 
-Validate at 320, 375, 390, 768, 1024 and 1440 CSS pixels, landscape mobile and 200% zoom, using long business names and Spanish labels. No page-level horizontal overflow; media fits its container; dialogs remain usable with the software keyboard; sticky actions never cover fields or content. Use consistent flexible grids and a single coherent breakpoint policy rather than appended selector overrides. The sidebar must collapse based on available workspace width, not merely a desktop label.
+Keep stable route identifiers separate from localized labels. Use the existing account capability response as the UI contract, not hard-coded role or provider assumptions. Treat the server as authoritative for every operation.
 
-Require keyboard-complete navigation, visible focus, focus trapping/restoration, meaningful labels, announced asynchronous status, errors associated with fields, usable contrast, reduced motion and approximately 44px primary touch targets. Validate drawer/dialog ref handling in a real browser. Tutorial highlights must be keyboard operable and must skip inaccessible/role-forbidden targets. Verify editor unsaved content survives language changes and is handled deliberately on business switching.
+### Draft-centered workflow
 
-## End-to-end testing strategy
+Keep one business-owned `Draft` as the shared work item: brief/request → text and media → optional campaign → pending review → approved immutable version → publication states/results. A manual draft and a generated draft should arrive at the same editor, review and publishing surfaces. Sofía should help define intent; Leo remains the existing generation capability, not a separate fake chat product. Campaigns attach to drafts but do not own them or gate creation.
 
-Use isolated local databases and deterministic fake provider/auth responses for browser tests; seed at least two businesses, two Owners, an Admin, a Member and a revoked identity. Keep test auth mechanisms out of deployable production paths. Run the actual React application against actual backend routes for the core E2E suite, with providers replaced at their boundaries. Existing component tests remain useful but are not browser E2E evidence.
+For the first release, keep approved drafts immutable. Provide a copy/revise action that creates a new pending draft for customers who want to revise approved/rejected content. This preserves current server invariants without adding an unnecessary revision-history schema. If later product design requires formal change requests, versioned approvals, or audit history, define that lifecycle first and add an additive migration.
 
-| Journey / risk | Required checks |
-| --- | --- |
-| First arrival and languages | English without browser-language auto-selection; Spanish selected before signup; selection survives verification/recovery; all eight UI/chat/output combinations; correct locale formatting; no untranslated application chrome; old drafts/history unchanged. |
-| Registration/onboarding | Email verification, duplicate callbacks, refresh/resume, interrupted setup, zero-business state, invitation acceptance/expiry/reuse, no ownership inference. |
-| Tutorial | First visit, skip, replay, language change, keyboard/mobile operation, role-specific steps; assert zero provider/publish calls. |
-| Simple creation | Manual and AI post with no campaign; edit/save/reload; requested platform and output language; optional campaign assignment and partial-failure recovery. |
-| Collaboration/review | Sofía context scoped to business; Leo handoff; no fictitious Mía activity; Member submit and denied approval; Owner/Admin approval; edit invalidates approval; rejected content revision; unsupported state transitions rejected server-side. |
-| Tenant isolation | Foreign draft/campaign/conversation/asset/account IDs in URL and payload; A → B → A during reads, media, OAuth, generation and publication; logout/login as another user; multiple tabs; revocation mid-request; stale signed media URLs/state cleanup. |
-| Cost and generation | Cancel confirmation means zero calls; exhausted limit, concurrent reservations, duplicate click/tab/reload, timeout/unknown submission, reconciliation, storage failure, duplicate/out-of-order webhook, revoked asset access, attribution when output is discarded. |
-| Publishing | Explicit approval and publish consent; selected account identity; media not ready; disconnect/expiry; duplicate submission; ambiguous response; recovery; partial per-platform success; download/copy never counts as publication. |
-| Account/roles | Role capabilities match backend, stale capabilities cannot bypass it; Admin cannot promote to Owner; concurrent last-owner changes; account disable across multiple businesses; personal versus business preference boundaries. |
-| Analytics | Confirmed IDs only, no data versus zero, partial failure, bounded refresh, accurate coverage labels, missing source/trend capability not rendered. |
-| Responsive/accessibility | Browser screenshots and interaction tests at target sizes in English/Spanish; long labels; keyboard, zoom, drawer/dialog focus, software keyboard and reduced motion; manual screen-reader review for critical flow. |
+Language precedence should remain explicit: interface language is a user preference (or explicit pre-auth choice, then English); conversation language is a user default with a conversation/request override and a persisted conversation snapshot; marketing-content language is a business default with a request/draft override and a persisted draft snapshot. Changing a preference must affect new work only.
 
-Retain full backend regression and architecture tests; run disposable PostgreSQL concurrency tests for ownership, spending, approval and publication invariants. Add API contract tests for every new response/error and preference default. Run frontend component/unit tests, TypeScript/build and lint, plus Chromium/Firefox/WebKit browser journeys. Provider mocks cannot prove real OAuth scopes, public posting eligibility, paid generation or mobile platform behavior: later run explicitly authorized staging smoke checks with dedicated accounts and a strict spend cap.
+### Backend shape
 
-Release gates: no cross-tenant leakage or role bypass; no unapproved publication; no repeat paid submission on recovery; complete independent-language flows; no functional-looking unavailable features; critical browser journeys and accessibility checks pass. Measure onboarding completion, time to first saved/approved/published post, failed/uncertain operations and spend per successful output without logging tokens or private prompts. Do not promise a quantitative improvement before collecting a baseline.
+Retain the modular monolith and closed layers. Reuse:
 
-## Approval boundary
+- `/account` for identity, feature flags, role/capability bootstrap; `/account/preferences` and `/businesses/{id}/preferences` for existing language persistence.
+- `/businesses/{id}/memberships` for existing list/change operations; add invitations separately if team onboarding is in launch scope.
+- `POST /drafts` for manual drafts, `POST /businesses/{id}/generate-content` for AI drafts, and existing Sofía conversation endpoints. Extend request schemas only for an agreed structured brief; do not make a client-supplied role, resource ID, campaign ownership, approval state, or destination authoritative.
+- Existing campaign association, media attempts, storage ownership, publishing recovery, and analytics services.
 
-Approve the proposed scope and dependencies before implementation. This document does not authorize a public multi-user cutover, provider purchases, publishing, migration, deployment or merge. No Slice 8 code is included.
+Add a database migration only where durable state is actually required. Candidate changes are a provider-usage reservation/ledger and, if team invitations are included, an expiring single-use invitation table. Any such change must be additive, have one Alembic head, be tested from the deployed revision against disposable PostgreSQL with representative existing rows, and prove row preservation. No migration to Render is authorized by this plan.
+
+## E. Improved customer journey
+
+1. **Arrival:** Provide a public product landing page or a deliberate sign-in entry, with English as the first-render default. Provide an explicit English/Español choice before signup; do not infer a permanent choice from browser language.
+2. **Account:** login, verified signup, email confirmation, and recovery have distinct success, retry, and access-denied states. Signup remains disabled until its admission policy and backend gate are approved.
+3. **Business setup:** ask for business name, offer, audience, and goal first. Save a resumable short flow. Make detailed profile, brand voice, website, location, and frequency optional and editable later.
+4. **Language:** independently choose interface, Sofía conversation, and marketing output languages. Explain that these can differ. Show the effective output language on the composer and saved draft.
+5. **First post:** offer “Write it myself” and “Help me shape the idea.” Campaign defaults to none. Ask for the post goal/topic and intended creative platform; preview a concise brief before paid generation.
+6. **Creation:** Sofía asks only for missing information, summarizes the brief, and offers an explicit create action. Leo generates through the existing pipeline. Manual and AI work land in the same composer with saved/unsaved feedback.
+7. **Media:** optional image, uploaded video, or HeyGen. Show whether an action uses provider credits, current allowance, and recovery state before it starts. Show “Generating,” “Saving,” “Ready,” or “Needs attention,” not invented percentages.
+8. **Review:** preview exact text/media/destination. Members can prepare/submit; Owners/Admins approve. A draft can be approved for manual use without connecting a social account. Approved content is immutable; a revision produces a new pending draft.
+9. **Publish/export:** state the business, destination account, action, and outcome. Facebook is direct publishing with explicit confirmation and reconciliation. TikTok remains clearly marked manual export in the current UI; a download/copy is not a publication. Instagram is connection-only.
+10. **Results:** show confirmed Facebook metrics with source, coverage, last refresh, and missing-data reasons. Offer a new campaign only when the customer wants to coordinate multiple posts.
+11. **Return/team:** Home resumes incomplete work. Business switching preserves only valid business-scoped state. Settings show role-aware business controls and personal language separately. Tutorial is skippable, replayable, and has no provider/publishing side effects.
+
+Every step needs loading, empty, retry, permission-denied, stale-session, and partial-provider-data feedback. Avoid raw provider errors and unsupported “ready” placeholders.
+
+## F. Create Content versus Sofía, Leo, and Mía
+
+### Recommendation
+
+Adopt the proposed distinction, with one important adjustment: **Create Content is not yet a fast known-intent composer in source; it is a one-click automatic generator.** Do not merely rename the current button and assume the proposed behavior exists.
+
+- **Create Content:** the fast path for a customer who knows the topic, audience/offer, desired outcome, creative platform, and output language. Let them type/paste a short brief or choose a manual draft. No campaign required.
+- **Sofía:** the guided path for customers who want help deciding what to say or why. Keep the business-shared chat, but identify it as shared. Ask for missing information, summarize the proposed brief, and let the customer edit/accept it before creation.
+- **Leo:** retain the current shared content-generation capability. Both entry paths must call the same application generation service and save the same pending `Draft` contract.
+- **Unified Composer:** display editable text, media, language, platform/actual publishing destination, optional campaign, save state, and preview. Use one editor and one path into review.
+- **Mía:** do not present as operational. Results are currently Facebook data, not an AI analyst. Reintroduce Mía only when a real service can cite the exact metrics/time period used, explain gaps, and avoid unsupported causal claims.
+
+Sofía already passes context to Leo: the guided draft endpoint uses the last ten user messages as instructions, then invokes the same Sofía strategy and Leo structured-output sequence. The business profile/recent posts are reused and both entry paths create the same kind of pending draft. What is missing is a typed, customer-confirmed brief and one shared editing journey; the current handoff is a string assembled from user messages, not a versioned brief, and no campaign record is created from chat.
+
+## G. Campaign recommendation
+
+Keep campaigns optional and focused on coordinating multiple related posts around a goal, audience, time window, and supported destinations. They currently provide CRUD, status/dates, draft association, and publication-count progress. They do not schedule posts, create the campaign's drafts, provide cross-platform reporting, or prove business success.
+
+Recommended changes:
+
+- Remove campaign creation from mandatory onboarding and stop presenting it as step one for every customer.
+- Rename campaign-oriented Sofía chat labels to “Planning chat” unless the user explicitly creates a campaign record.
+- Let a composer draft save first; associate it to a campaign as an optional step. If association fails, preserve the draft and make retry easy.
+- Label progress as “posts published,” not “campaign success” or ROI. Explain that a post published to multiple platforms counts once in campaign progress.
+- Keep date fields informational until scheduling, timezone, approval-at-schedule, disconnect, and recovery policies are designed.
+- Add campaign-level metrics only after historical source data and attribution semantics exist. Do not turn publishing counts into performance claims.
+
+## H. Frontend and backend change inventory
+
+| Work | Existing surfaces to reuse | Required work |
+|---|---|---|
+| Shell, language, capabilities | `App.tsx`, `AppShell.tsx`, `Sidebar.tsx`, `/account`, language preference APIs | English-first message catalogs; explicit locale selector; independent preference controls; load capability/role response; role-aware navigation; stable URL identifiers. |
+| Onboarding/account | `AuthPage.tsx`, `BusinessForm.tsx`, `useBusinessSelection.ts`, `/account/register`, `/businesses` | Signup and verification UI only after admission approval; access-denied/resume states; shorter resumable business setup; business-profile edit endpoint/UI. Existing registration endpoint is allowlist-gated and is not public signup. |
+| Team collaboration | `memberships/routes.py`, service, permissions, `/account` | Role-aware team screen using existing list/change APIs. If invitations are in scope, add invite/accept/revoke endpoints, token-safe single-use expiry rules, and an additive migration. |
+| Composer/AI | `useDraftActions.ts`, `SofiaChat.tsx`, `services/sofiaApi.ts`, `draftsApi.ts`, content routes/services | Add manual draft client/form; add a typed brief to the generation request after contract review; unify editor, media, campaign selection, language, and preview. Retain the single generation application service. |
+| Review/publishing | Approval page/actions, draft service, Facebook/TikTok routes | Consume capability flags; clarify manual-use approval vs direct publication; preserve immutable approved content, confirmation, claims, verification, and no automatic retry. Keep TikTok direct posting feature-gated. |
+| Media/usage | Media feature/hooks, `usage_service.py`, HeyGen usage endpoint, execution hooks | Show HeyGen allowance/active jobs; add server-side OpenAI limits/attribution and user-facing usage state before multi-user admission. Add persistence only for durable reservations/ledger. |
+| Campaigns/results | Campaign API/page, analytics page/service/repository | Make campaign entry optional; relabel publication ratio; add bounded/batched metrics contract and source/coverage/refresh labels before scale. No Mía narrative until implemented. |
+| Accessibility/reliability | Shared UI, feature hooks, current component tests | Browser E2E for real backend routes with provider fakes; responsive/keyboard/screen-reader/zoom/mobile checks; stale-result and business-switch tests; consistent API errors. |
+
+### Migration decision
+
+No schema change is needed merely to wire the already-existing language tables/columns, account capability response, membership read/change APIs, or campaign/draft relationship into React. A durable OpenAI usage/reservation ledger and invitation records would require additive Alembic migrations. A formal draft revision/change-request model would also require a migration if adopted; it is intentionally deferred in favor of immutable approved drafts and a new pending draft. All new migrations must be tested from `91f6a20d3b8e` (or the then-current approved source head) on disposable PostgreSQL with existing business, membership, draft, campaign, social, conversation, and media records, and must verify exact preservation. Never apply them to Render without separate explicit approval.
+
+## I. Prioritized roadmap and recommendation tradeoffs
+
+Complexity is relative engineering effort, not a schedule estimate.
+
+| Priority / recommendation | Customer problem → solution and expected benefit | Complexity | Main risk / mitigation |
+|---|---|---:|---|
+| Critical: public admission and capability policy | A login does not currently make this a public SaaS. Keep allowlist; define verified admission and use `/account` capabilities so users see what they can do. Benefit: safe, understandable onboarding. | High | Accidentally granting access or initial ownership. Keep allowlist and initial-owner provisioning separate until tested and approved. |
+| Critical: paid-operation controls | OpenAI work has no durable tenant limits. Add atomic server-side reservations/limits and show usage before enabling more users. Benefit: predictable exposure and safer retries. | High | Usage/cost may be unknown or provider-reported late. Track attempts/reservations separately from money; fail closed and reconcile unknown jobs. |
+| Critical: English-first independent language UX | Spanish-only UI and English-default AI are inconsistent. Add separate UI/chat/content choices backed by existing preference APIs. Benefit: clear, predictable results for bilingual owners. | Medium | Translating content/history or coupling UI and output languages. Persist effective language per new operation; never rewrite history. |
+| Important: one composer and explicit brief | The current quick action generates without a user brief, while chat lives elsewhere. Create manual/AI entry paths into one draft/editor. Benefit: fewer repeated steps and more controllable output. | Medium | Overbuilding a generalized studio. Start with one caption/title/media preview and preserve the existing generation pipeline. |
+| Important: role-aware review and truthful capabilities | Members see controls the server rejects; Mía appears available without an analysis service. Consume capability flags and label actual network actions. Benefit: trust and fewer dead ends. | Low–Medium | Frontend accidentally becomes the security boundary. Keep all service authorization and test forbidden requests independently. |
+| Important: campaigns as optional organization | A one-post customer is nudged toward a campaign and progress can be mistaken for success. Default no campaign, allow later association, label publication counts literally. Benefit: quicker first value and clearer reports. | Low | Breaking existing associations. Preserve current nullable association and test deletion/reattachment behavior. |
+| Important: accessible navigation and feedback | Seven equal sections, Spanish identifiers, generic errors, and no URL state increase cognitive load. Use task-based navigation, stable routes, actionable feedback, and browser validation. Benefit: less training and better mobile use. | Medium | Broad visual rewrite. Change one journey at a time and retain tested feature hooks. |
+| Post-launch: evidence-backed Mía and advanced analytics | Owners want to know what worked, but current data cannot prove sales impact. First add sourced historical data/coverage; only then add explanations tied to those facts. Benefit: actionable learning without fabricated metrics. | High | Overclaiming causality or collecting unsupported data. Show provenance, time windows, uncertainty, and missing coverage. |
+
+### Critical before any public launch
+
+1. Keep `ALLOWED_USER_ID` enforced until separately approved admission is implemented and isolation-tested.
+2. Define verified registration and first-business ownership; prevent client-selected user/tenant/role grants.
+3. Add server-side OpenAI usage/abuse limits before widening paid endpoints; connect HeyGen's existing usage endpoint to customer-visible state.
+4. Deliver English-first interface plus separate UI/conversation/content preferences.
+5. Use role/capability responses in the UI, while retaining server authorization.
+6. Remove false operational claims (especially Mía) and clearly label Facebook direct, TikTok manual export, and Instagram connection-only.
+7. Pass isolated PostgreSQL authorization/concurrency/migration tests and browser journeys before any public rollout.
+
+### Important for a useful first customer release
+
+- Shared manual/AI composer; optional campaign association; clear media and approval states.
+- Business profile editing and short onboarding.
+- Team invitations if collaborative use is part of the launch promise; otherwise do not market team access yet.
+- Accessible responsive UI, robust empty/retry states, first-post guidance, and no paid action as a tutorial side effect.
+- Aggregated, bounded Facebook analytics with provenance and missing-data explanation.
+
+### Post-launch or separately gated
+
+- Mía's AI analysis, until sourced metric workflows exist.
+- Scheduling, Instagram publishing, public TikTok Direct Post, billing automation, cross-network attribution, advanced campaign ROI, and additional agent personas.
+- These features require independent provider/product readiness; do not expose them as working merely because a provider endpoint or data model exists.
+
+## J. Revised Slice 8 implementation plan
+
+Each phase is independently testable. The Phase 2 frontend foundation is complete; subsequent workflow and server-side entitlement work remains gated by its dependencies below.
+
+| Phase | Scope and dependencies | Acceptance criteria |
+|---|---|---|
+| **8.0 — product/API decisions** | Confirm launch audience (private pilot vs public SaaS), admission policy, supported platform capabilities, role UX, language fallback, brief fields, approved-draft immutability, usage units, and whether invitations are launch-critical. No implementation. | Approved screen/state/API contracts; no claim that public signup, Mía, scheduling, TikTok direct publishing, or Instagram publishing is available unless its gate is met. |
+| **8.1 — English-first SaaS foundation (Phase 2, complete)** | Add the responsive application shell, explicit pre-auth English/Spanish selection, persistent interface and AI conversation preferences, business-scoped marketing-content language, `/account` capability-aware navigation, business switching, and reusable status/usage UI. Reuse existing APIs; do not activate signup, trials, or billing. Implemented locally in `ef4bddf9ed6e3d5205e3cc6f2cc2938ff03d13e9`; no backend or migration changes. | All 208 frontend tests pass; TypeScript production build and ESLint pass. English is the default, Spanish is explicit, language scopes are independent, tenant state is cleared/scoped on business changes, and server authorization remains authoritative. Stable URL identifiers, resumable onboarding, and a unified composer remain later work. |
+| **8.2 — onboarding and business profile** | Short, resumable setup; expose accurate access-denied/invited/no-business states; business profile edit service/route/UI. Keep `/account/register` allowlist-gated until separately authorized public admission. | Refresh/interruption resumes safely; duplicate registration cannot duplicate identity or create ownership; existing businesses remain unchanged; a new business is owned only by its authenticated creator; public feature flag remains false unless explicitly approved. |
+| **8.3 — collaboration and invitations** | Frontend for existing membership list/change contracts. If invitations are approved, add single-use expiring tenant-bound invite service, routes, email-delivery boundary, additive migration, and revoke/accept lifecycle. | Owner/Admin/Member matrix matches server; no Admin privilege escalation; invite replay/expiry/foreign-business tests pass; last active Owner cannot be removed; disposable PostgreSQL concurrency tests pass; migration preserves existing records. |
+| **8.4 — unified creation and composer** | Add manual draft UI/client; fast brief form; Sofía guided brief/summary/confirmation; Leo generation via the existing service; shared editor/preview/language/platform and optional campaign. | Manual and both AI paths create compatible tenant-owned pending drafts; no campaign is required; brief and output language are explicit; Sofía context is not silently discarded or repeated; provider failures preserve retryable UI state without duplicate unintended generation. |
+| **8.5 — review, approval, and destination UX** | Separate composing from review and publication; use capability flags; clearly distinguish approval for manual use from direct publishing; preserve approved immutability and recovery. No new revision schema unless the product chooses formal change requests. | Member cannot approve/publish; Owners/Admins can; approval never publishes; edits after approval are blocked or create a new pending draft; Facebook confirmation/recovery remains idempotent; TikTok export is never marked published; Instagram remains connection-only. |
+| **8.6 — media usage and recovery UX** | Surface HeyGen configured allowance, attempts, active jobs, and recovery. Add atomic server-side limits/attribution for OpenAI content/chat/images/revisions. Add an additive usage migration only if required for durable reservations/events. | Cancel means no paid call; concurrent requests cannot exceed limits; ambiguous jobs are reconciled without a new paid request; absent/invalid allowance fails closed; no fabricated prices; membership revocation blocks persistence; PostgreSQL race tests pass. |
+| **8.7 — campaigns and results** | Reposition optional campaign grouping; clarify progress semantics; add bounded aggregate analytics and source/coverage/refresh metadata. Defer Mía. | Create one post without a campaign; association failure does not lose the draft; campaign progress matches confirmed publication IDs; missing metric is not zero; API work is bounded and partial failures are visible. |
+| **8.8 — release acceptance** | Browser E2E with isolated DB and fake auth/providers; responsive, keyboard, screen-reader, zoom, and mobile checks; API/migration/security review. No production migration/deploy in this phase without separate approval. | Critical journeys pass for Owner/Admin/Member and multiple tenants in English/Spanish; no cross-tenant leakage, unapproved publish, duplicate paid generation, false capability, or data loss; full backend/frontend checks pass; release risks documented. |
+
+### Trial and subscription dependencies (not activated in Phase 2)
+
+The approved direction is a 14-day trial with no card required, limited AI usage, a subscription requirement after expiration, preservation of existing customer content, and protected operator access. Phase 2 adds only reusable presentation patterns; there is no trial clock, entitlement decision, billing integration, or subscription enforcement.
+
+Before any trial or paid subscription is activated:
+
+- Define the trial subject (account versus business), eligibility and one-time-use rules, authoritative start/expiry timestamps, timezone behavior, and server-side state transitions.
+- Define entitlement and usage contracts with server-enforced AI limits, atomic reservations/concurrency behavior, retry and ambiguous-outcome recovery, and a clear no-allowance policy. Frontend indicators must display only server-provided values.
+- Specify post-expiration read/export/recovery behavior so existing drafts, media, and business records remain available and no existing content is deleted or silently rewritten.
+- Define subscription/payment provider, price and tax terms, cancellation/refund behavior, webhook authentication/idempotency, billing-state reconciliation, and failure handling before promising paid access.
+- Define operator access separately from customer entitlements and audit its authorization; do not let an operator bypass tenant checks.
+- Add disposable-PostgreSQL tests for eligibility races, expiry boundaries, concurrent quota reservations, revocation, provider retries, and data preservation; require security review and a separate activation approval.
+- Keep `ALLOWED_USER_ID` enforced and public registration disabled until admission and abuse controls are independently implemented, tested, and approved.
+
+## Product questions answered
+
+1. **Does it solve a clear problem?** Yes in principle: help an owner produce and distribute consistent social content. Current implementation only partially packages that value into a simple customer journey.
+2. **Does the end-to-end flow make sense?** The backend path does; the navigation and UI split the work across unrelated sections and do not guide a first-time owner through one post.
+3. **Are features connected?** Partially. AI creates the same pending draft shape used by review/media; campaign association and analytics are adjacent but not integrated into a guided creation workflow.
+4. **Do Create Content, Sofía, Leo, and campaigns work together?** Sofía-to-Leo is technically connected and uses business context; the direct Create action shares the generation service. Campaigns remain separate, and neither path provides a shared composer/confirmed brief.
+5. **What is redundant?** Approval shortcuts on Home and the full approval queue overlap; the agent status board duplicates little operational value and overstates Mía. The library and approval queue show different tasks but need a common draft detail/editor.
+6. **What should be simplified?** Make first post creation primary; reduce onboarding questions; move advanced business configuration to settings; group navigation by customer tasks; remove fake agent availability and unsupported provider actions.
+7. **What should be combined?** Manual drafting, direct AI generation, Sofía-guided creation, editing, and preview should converge on one Draft composer and review path. Do not combine platform capability states or language preferences.
+8. **What should be redesigned?** Auth/onboarding, Create Content, AI Team presentation, review/editor boundaries, role-aware settings, campaign empty states, language controls, and result coverage.
+9. **What is missing for a viable first launch?** Product admission decision, English/Spanish experience, visible server capabilities and roles, user-safe paid limits, reliable first-post onboarding, business profile editing, and browser-validated core flows.
+10. **What should wait?** Mía, advanced AI recommendations, post scheduling, cross-platform analytics/ROI, Instagram publishing, public TikTok Direct Post, billing automation, and more agents.
+11. **Highest customer value?** A fast first successful post that uses the actual business profile, can be edited in the customer's chosen language, is human-approved, reaches a clearly supported destination, and returns truthful results.
+12. **What differentiates it from disconnected AI tools?** A trustworthy closed loop: reusable business context → one controlled brief → platform-aware draft/media → role-appropriate approval → verified publication/export → sourced performance feedback. The product should optimize that loop, not increase agent or feature count.
+
+The pricing and payment model is not established by this source audit. Full billing automation is not required for a controlled private pilot, but pricing, provider-cost responsibility, and any paid-plan/usage promises must be decided before a commercial paid launch.
+
+## Validation and approval boundary
+
+The audit itself was source-based and did not connect to a database or call external providers. Phase 2 validation after the audit ran the complete frontend suite (208 tests), TypeScript production build, ESLint, and formatting checks for the new app foundation files; the full-repository Prettier check still reports formatting drift in existing source files. No backend tests were needed because Phase 2 made no backend changes. No database queries, migrations, live provider calls, or paid calls were made during Phase 2.
+
+The approved plan does not authorize public registration, removal of `ALLOWED_USER_ID`, activating trials or billing, paid provider usage, Render/database changes, live publishing, deployment, merge, or push. Phase 3 and trial/subscription activation require their own approval.
