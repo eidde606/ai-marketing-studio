@@ -14,7 +14,13 @@ from app.features.entitlements import repository as entitlement_repository
 from app.features.entitlements import service as entitlement_service
 from app.features.media import usage_service as heygen_usage_service
 from app.features.onboarding import service as onboarding_service
-from app.models import Business, CustomerEntitlement, CustomerOrganization
+from app.features.onboarding.schemas import OnboardingActivation
+from app.models import (
+    Business,
+    CustomerEntitlement,
+    CustomerOrganization,
+    OnboardingProgress,
+)
 from tests.tenancy_fixtures import grant_test_owner
 
 
@@ -66,6 +72,42 @@ def test_trial_starts_on_first_workspace_and_prevents_another_business(isolated_
         with pytest.raises(ApplicationError) as repeated_trial:
             entitlement_service.activate_trial(db, organization.id)
         assert repeated_trial.value.kind is ErrorKind.CONFLICT
+
+
+def test_customer_onboarding_activates_one_trial_and_is_idempotent(
+    isolated_client, monkeypatch,
+):
+    _, engine = isolated_client
+    monkeypatch.setenv("TRIALS_ENABLED", "true")
+    with Session(engine) as db:
+        principal = grant_test_owner(db, subject="new-onboarding-customer")
+        db.commit()
+    request = OnboardingActivation(
+        current_step=6,
+        business_profile={"name": "Onboarded customer"},
+        interface_language="es",
+        conversation_language="en",
+        marketing_content_language="es",
+        social_accounts_skipped=True,
+    )
+
+    with Session(engine) as db:
+        first = onboarding_service.activate_workspace(db, principal, request)
+    with Session(engine) as db:
+        second = onboarding_service.activate_workspace(db, principal, request)
+        assert second.id == first.id
+        organization = db.get(CustomerOrganization, first.customer_organization_id)
+        entitlement = entitlement_repository.entitlement_for_organization(
+            db, organization.id,
+        )
+        assert entitlement.status == "trialing"
+        assert entitlement.trial_expires_at - entitlement.trial_started_at == timedelta(days=14)
+        assert db.scalar(select(func.count()).select_from(CustomerEntitlement)) == 1
+        progress = db.get(OnboardingProgress, principal.user_id)
+        assert progress.completed_at is not None
+        assert progress.business_id == first.id
+        assert progress.data["social_accounts_skipped"] is True
+        assert progress.data["interface_language"] == "es"
 
 
 def test_expired_trial_preserves_reads_and_business_settings_but_blocks_mutations(isolated_client, monkeypatch):

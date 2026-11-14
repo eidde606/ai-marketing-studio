@@ -207,30 +207,45 @@ body {
   color: #b42318;
 }
 
-.tutorial-backdrop {
+.product-guide {
   position: fixed;
-  z-index: 100;
-  inset: 0;
-  display: grid;
-  place-items: center;
+  z-index: 1000;
+  right: 1rem;
+  bottom: 1rem;
+  width: min(30rem, calc(100vw - 2rem));
+  max-height: min(48vh, 24rem);
   overflow-y: auto;
-  padding: 1rem;
-  background: rgb(17 24 39 / 65%);
+  padding: clamp(1.1rem, 3vw, 1.75rem);
+  border: 1px solid #e4def5;
+  box-shadow: 0 1.25rem 3.5rem rgb(26 18 51 / 22%);
 }
 
-.tutorial-dialog {
-  width: min(100%, 40rem);
-  padding: clamp(1.25rem, 4vw, 2.5rem);
-}
-
-.tutorial-dialog h2 {
+.product-guide h2 {
   margin-block: 0.7rem;
   color: #111827;
-  font-size: clamp(1.5rem, 4vw, 2.2rem);
+  font-size: clamp(1.25rem, 3vw, 1.65rem);
 }
 
 .tutorial-actions {
-  margin-top: 2rem;
+  margin-top: 1.4rem;
+}
+
+.product-guide-highlight {
+  position: relative;
+  z-index: 999;
+  outline: 3px solid #8b5cf6;
+  outline-offset: 4px;
+  box-shadow: 0 0 0 8px rgb(139 92 246 / 14%);
+  border-radius: 0.75rem;
+}
+
+@media (max-width: 640px) {
+  .product-guide {
+    right: 0.5rem;
+    bottom: 0.5rem;
+    width: calc(100vw - 1rem);
+    max-height: 48vh;
+  }
 }
 
 .settings-business-profile {
@@ -255,6 +270,10 @@ h1 {
   font-weight: 700;
   letter-spacing: -0.03em;
   text-align: center;
+}
+
+.auth-hero-title {
+  color: #fff;
 }
 
 .app-shell {

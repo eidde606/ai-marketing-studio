@@ -48,3 +48,11 @@ class AccountResponse(BaseModel):
     preferences: AccountPreferences
     businesses: list[BusinessAccess]
     features: FeatureAvailability
+
+
+class PublicConfigResponse(BaseModel):
+    public_registration: bool
+    google_sign_in: bool
+    facebook_sign_in: bool
+    apple_sign_in: bool
+    trial_available: bool

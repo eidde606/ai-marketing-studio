@@ -93,7 +93,7 @@ export default function AnalyticsPage({ drafts, loading, error }: Props) {
 
   if (loading) {
     return (
-      <div className="analytics-workspace">
+      <div className="analytics-workspace" data-guide-target="mia-analytics">
         <p className="workspace-state" role="status">
           {t("analytics.loading")}
         </p>
@@ -102,14 +102,14 @@ export default function AnalyticsPage({ drafts, loading, error }: Props) {
   }
   if (error) {
     return (
-      <div className="analytics-workspace">
+      <div className="analytics-workspace" data-guide-target="mia-analytics">
         <p className="workspace-state workspace-state--error" role="alert">{error}</p>
       </div>
     );
   }
 
   return (
-    <div className="analytics-workspace">
+    <div className="analytics-workspace" data-guide-target="mia-analytics">
       <section className="page-intro">
         <div>
           <span className="eyebrow">{t("analytics.eyebrow")}</span>
@@ -131,7 +131,10 @@ export default function AnalyticsPage({ drafts, loading, error }: Props) {
         </button>
       </section>
 
-      <section className="analytics-source-note" role="note">
+      <section
+        className="analytics-source-note"
+        role="note"
+      >
         <span className="analytics-source-note__icon">
           <BarChart3 size={18} aria-hidden="true" />
         </span>

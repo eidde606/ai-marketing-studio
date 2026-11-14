@@ -5,11 +5,13 @@ import {
   render,
   screen,
   within,
+  waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Session, AuthChangeEvent } from "@supabase/supabase-js";
 import type { ComponentProps } from "react";
 import App from "./App";
+import { ApiError } from "./lib/apiClient";
 import type ApprovalPage from "./components/ApprovalPage";
 import type DashboardOverview from "./components/DashboardOverview";
 import type { Business } from "./services/businessesApi";
@@ -21,6 +23,8 @@ const mocks = vi.hoisted(() => ({
   unsubscribe: vi.fn(),
   onAuthStateChange: vi.fn(),
   getAccount: vi.fn(),
+  getPublicConfig: vi.fn(),
+  registerAccount: vi.fn(),
   updateAccountPreferences: vi.fn(),
   getBusinessPreferences: vi.fn(),
   updateBusinessPreferences: vi.fn(),
@@ -57,6 +61,8 @@ vi.mock("./services/businessesApi", () => ({
 vi.mock("./services/accountApi", async (original) => ({
   ...(await original<object>()),
   getAccount: mocks.getAccount,
+  getPublicConfig: mocks.getPublicConfig,
+  registerAccount: mocks.registerAccount,
   updateAccountPreferences: mocks.updateAccountPreferences,
   getBusinessPreferences: mocks.getBusinessPreferences,
   updateBusinessPreferences: mocks.updateBusinessPreferences,
@@ -313,6 +319,14 @@ beforeEach(() => {
       scheduling: false,
     },
   });
+  mocks.getPublicConfig.mockResolvedValue({
+    public_registration: false,
+    google_sign_in: false,
+    facebook_sign_in: false,
+    apple_sign_in: false,
+    trial_available: false,
+  });
+  mocks.registerAccount.mockResolvedValue({});
   mocks.updateAccountPreferences.mockResolvedValue({
     interface_language: "es",
     conversation_language: "en",
@@ -352,6 +366,11 @@ beforeEach(() => {
     social_accounts_skipped: false,
     completed: false,
     tutorial_completed: false,
+    tutorial_step: 0,
+  });
+  mocks.updateTutorialCompletion.mockResolvedValue({
+    completed: false,
+    current_step: 0,
   });
   mocks.getBusinesses.mockResolvedValue([business("a"), business("b")]);
   mocks.getDrafts.mockResolvedValue([]);
@@ -373,6 +392,86 @@ it("waits for authentication and unsubscribes", async () => {
   expect(screen.getByText("Iniciar sesión")).toBeTruthy();
   view.unmount();
   expect(mocks.unsubscribe).toHaveBeenCalledTimes(1);
+});
+it("automatically launches an unfinished guide and persists completion", async () => {
+  mocks.getOnboarding.mockResolvedValue({
+    current_step: 6,
+    business_profile: {},
+    interface_language: "en",
+    conversation_language: "en",
+    marketing_content_language: "en",
+    social_accounts_skipped: true,
+    completed: true,
+    tutorial_completed: false,
+    tutorial_step: 0,
+  });
+  await openApp();
+
+  expect(
+    await screen.findByRole("complementary", { name: "Guía del producto" }),
+  ).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Omitir guía" }));
+  await waitFor(() => {
+    expect(mocks.updateTutorialCompletion).toHaveBeenCalledWith(true, 0);
+  });
+});
+it("provisions a verified OAuth session only when the server gate allows it", async () => {
+  const account = {
+    user_id: "user-1",
+    preferences: { interface_language: "en", conversation_language: "en" },
+    businesses: ["a", "b"].map((id) => ({
+      id,
+      name: `Negocio ${id}`,
+      membership_id: `membership-${id}`,
+      role: "owner",
+      capabilities: ["publish"],
+    })),
+    features: {
+      public_registration: true,
+      facebook_publishing: true,
+      tiktok_direct_publishing: false,
+      tiktok_manual_export: true,
+      instagram_publishing: false,
+      instagram_connection: true,
+      mia_analysis: false,
+      scheduling: false,
+    },
+  };
+  mocks.getAccount
+    .mockRejectedValueOnce(new ApiError("not provisioned", 403))
+    .mockResolvedValue(account);
+  mocks.getPublicConfig.mockResolvedValue({
+    public_registration: true,
+    google_sign_in: true,
+    facebook_sign_in: false,
+    apple_sign_in: false,
+    trial_available: true,
+  });
+  await openApp();
+
+  expect(mocks.registerAccount).toHaveBeenCalledOnce();
+  expect(mocks.getBusinesses).toHaveBeenCalled();
+});
+it("replays the product guide from Settings at its first step", async () => {
+  mocks.getOnboarding.mockResolvedValue({
+    current_step: 6,
+    business_profile: {},
+    interface_language: "en",
+    conversation_language: "en",
+    marketing_content_language: "en",
+    social_accounts_skipped: true,
+    completed: true,
+    tutorial_completed: true,
+    tutorial_step: 8,
+  });
+  await openApp();
+
+  fireEvent.click(screen.getByRole("button", { name: "Configuración" }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Volver a ver la guía" }),
+  );
+  expect(await screen.findByText("El panel y la navegación")).toBeTruthy();
+  expect(mocks.updateTutorialCompletion).toHaveBeenCalledWith(false, 0);
 });
 it("handles session initialization failure", async () => {
   mocks.getSession.mockRejectedValue(new Error("offline"));

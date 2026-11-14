@@ -38,3 +38,4 @@ class TutorialUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     completed: bool
+    current_step: int | None = Field(default=None, ge=0, le=9)

@@ -209,6 +209,7 @@ export default function CampaignsPage({ businessId }: { businessId: string }) {
         <button
           type="button"
           className="primary-button"
+          data-guide-target="campaign-create"
           disabled={busy || loading}
           onClick={() => {
             setEditingId(null);

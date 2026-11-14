@@ -110,7 +110,9 @@ def test_delete_enforces_real_authorization(drafts_client, monkeypatch):
     del app.dependency_overrides[get_authenticated_principal]
     assert client.delete(f"/drafts/{ids[0]}").status_code == 401
     monkeypatch.setattr(auth.jwks_client, "get_signing_key_from_jwt", lambda token: SimpleNamespace(key="fake"))
-    monkeypatch.setattr(auth.jwt, "decode", lambda *args, **kwargs: {"sub": "unauthorized"})
+    monkeypatch.setattr(auth.jwt, "decode", lambda *args, **kwargs: {
+        "sub": "unauthorized", "iss": auth.SUPABASE_ISSUER,
+    })
     assert client.delete(f"/drafts/{ids[0]}", headers={"Authorization": "Bearer fake"}).status_code == 403
     with Session(engine) as db:
         assert db.get(Draft, ids[0]).deleted_at is None

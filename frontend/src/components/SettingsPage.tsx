@@ -307,7 +307,7 @@ export default function SettingsPage({
             <p className="settings-note" role="note">
               {t("settings.profileNote")}
             </p>
-            {languagePreferences}
+            <div data-guide-target="trial-settings">{languagePreferences}</div>
             {business && (
               <section
                 className="settings-business-profile"

@@ -9,11 +9,20 @@ import pytest
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
+from app import auth
 from app.auth import SUPABASE_ISSUER, ALLOWED_USER_ID
 from app.features.access.principal import Principal
 from app.features.accounts import service as accounts
 from app.features.content import openai_provider, sofia_provider
-from app.models import Business, BusinessMembership, User, UserPreferences, BusinessPreferences, Draft
+from app.models import (
+    Business,
+    BusinessMembership,
+    CustomerOrganization,
+    User,
+    UserPreferences,
+    BusinessPreferences,
+    Draft,
+)
 from tests.test_authentication_integration import auth_client, signed_token, signing_keys, headers, add_user
 from tests.test_tenant_foundation_postgres import postgres_database
 from tests.tenancy_fixtures import grant_test_owner
@@ -46,6 +55,7 @@ def test_registration_is_explicit_idempotent_and_never_claims_legacy_businesses(
     with Session(engine) as db:
         assert db.scalar(select(func.count()).select_from(User)) == 1
         assert db.scalar(select(func.count()).select_from(BusinessMembership)) == 0
+        assert db.scalar(select(func.count()).select_from(CustomerOrganization)) == 0
         assert db.get(Business, "legacy").name == "Existing business"
 
 
@@ -57,15 +67,47 @@ def test_registration_retains_allowlist_and_denies_anonymous(auth_client, signed
         assert db.scalar(select(User.id)) is None
 
 
+def test_existing_customer_access_survives_closed_registration_gate(
+    auth_client, signed_token, monkeypatch,
+):
+    client, engine = auth_client
+    from app.features.entitlements import service as entitlement_service
+
+    monkeypatch.setattr(entitlement_service, "public_registration_enabled", lambda: False)
+    add_user(engine, subject="existing-customer")
+    token = headers(signed_token(changes={"sub": "existing-customer"}))
+
+    assert client.get("/account", headers=token).status_code == 200
+    assert client.post("/account/register", json={}, headers=token).status_code == 403
+
+
 def test_enabled_registration_gate_requires_verified_email(auth_client, signed_token, monkeypatch):
     client, engine = auth_client
     from app.features.entitlements import service as entitlement_service
 
     monkeypatch.setattr(entitlement_service, "public_registration_enabled", lambda: True)
+    monkeypatch.setenv("SUPABASE_PUBLISHABLE_KEY", "test-publishable-key")
+    unverified_user = Mock(status_code=200)
+    unverified_user.json.return_value = {
+        "id": "new-customer",
+        "email": "not-an-identity-key@example.invalid",
+        "email_confirmed_at": None,
+    }
+    verified_user = Mock(status_code=200)
+    verified_user.json.return_value = {
+        "id": "new-customer",
+        "email": "not-an-identity-key@example.invalid",
+        "email_confirmed_at": "2026-01-01T00:00:00Z",
+    }
+    monkeypatch.setattr(
+        auth.httpx,
+        "get",
+        Mock(side_effect=[unverified_user, verified_user]),
+    )
     unverified = client.post(
         "/account/register",
         json={},
-        headers=headers(signed_token(changes={"email_verified": False})),
+        headers=headers(signed_token(changes={"sub": "new-customer", "email_verified": False})),
     )
     assert unverified.status_code == 403
     with Session(engine) as db:
@@ -74,9 +116,167 @@ def test_enabled_registration_gate_requires_verified_email(auth_client, signed_t
     verified = client.post(
         "/account/register",
         json={},
-        headers=headers(signed_token(changes={"email_verified": True})),
+        headers=headers(signed_token(changes={"sub": "new-customer", "email_verified": True})),
     )
     assert verified.status_code == 200
+
+
+def test_registration_checks_email_confirmation_with_supabase_user_endpoint(
+    auth_client, signed_token, monkeypatch,
+):
+    client, engine = auth_client
+    from app.features.entitlements import service as entitlement_service
+
+    monkeypatch.setattr(entitlement_service, "public_registration_enabled", lambda: True)
+    monkeypatch.setenv("SUPABASE_PUBLISHABLE_KEY", "test-publishable-key")
+    response = Mock(status_code=200)
+    response.json.return_value = {
+        "id": "new-customer",
+        "email": "customer@example.invalid",
+        "email_confirmed_at": "2026-01-01T00:00:00Z",
+    }
+    request = Mock(return_value=response)
+    monkeypatch.setattr(auth.httpx, "get", request)
+
+    token = signed_token(changes={"sub": "new-customer"})
+    created = client.post("/account/register", json={}, headers=headers(token))
+
+    assert created.status_code == 200
+    request.assert_called_once_with(
+        f"{auth.SUPABASE_URL}/auth/v1/user",
+        headers={
+            "apikey": "test-publishable-key",
+            "Authorization": f"Bearer {token}",
+        },
+        timeout=5.0,
+    )
+    with Session(engine) as db:
+        assert db.scalar(select(func.count()).select_from(User)) == 1
+
+
+def test_registration_denies_unverified_supabase_email_without_provisioning(
+    auth_client, signed_token, monkeypatch,
+):
+    client, engine = auth_client
+    from app.features.entitlements import service as entitlement_service
+
+    monkeypatch.setattr(entitlement_service, "public_registration_enabled", lambda: True)
+    monkeypatch.setenv("SUPABASE_PUBLISHABLE_KEY", "test-publishable-key")
+    response = Mock(status_code=200)
+    response.json.return_value = {
+        "id": "new-customer",
+        "email": "customer@example.invalid",
+        "email_confirmed_at": None,
+    }
+    monkeypatch.setattr(auth.httpx, "get", Mock(return_value=response))
+
+    created = client.post(
+        "/account/register",
+        json={},
+        headers=headers(signed_token(changes={"sub": "new-customer"})),
+    )
+
+    assert created.status_code == 403
+    with Session(engine) as db:
+        assert db.scalar(select(func.count()).select_from(User)) == 0
+
+
+def test_registration_fails_closed_when_email_verification_is_unavailable(
+    auth_client, signed_token, monkeypatch,
+):
+    client, engine = auth_client
+    from app.features.entitlements import service as entitlement_service
+
+    monkeypatch.setattr(entitlement_service, "public_registration_enabled", lambda: True)
+    monkeypatch.delenv("SUPABASE_PUBLISHABLE_KEY", raising=False)
+    monkeypatch.delenv("SUPABASE_ANON_KEY", raising=False)
+
+    created = client.post(
+        "/account/register",
+        json={},
+        headers=headers(signed_token(changes={"sub": "new-customer"})),
+    )
+
+    assert created.status_code == 503
+    with Session(engine) as db:
+        assert db.scalar(select(func.count()).select_from(User)) == 0
+
+
+def test_registration_fails_closed_when_supabase_verification_is_unreachable(
+    auth_client, signed_token, monkeypatch,
+):
+    client, engine = auth_client
+    from app.features.entitlements import service as entitlement_service
+
+    monkeypatch.setattr(entitlement_service, "public_registration_enabled", lambda: True)
+    monkeypatch.setenv("SUPABASE_PUBLISHABLE_KEY", "test-publishable-key")
+    monkeypatch.setattr(
+        auth.httpx,
+        "get",
+        Mock(side_effect=auth.httpx.ConnectError("offline")),
+    )
+
+    created = client.post(
+        "/account/register",
+        json={},
+        headers=headers(signed_token(changes={"sub": "new-customer"})),
+    )
+
+    assert created.status_code == 503
+    with Session(engine) as db:
+        assert db.scalar(select(func.count()).select_from(User)) == 0
+
+
+def test_registration_rejects_auth_user_endpoint_subject_mismatch(
+    auth_client, signed_token, monkeypatch,
+):
+    client, engine = auth_client
+    from app.features.entitlements import service as entitlement_service
+
+    monkeypatch.setattr(entitlement_service, "public_registration_enabled", lambda: True)
+    monkeypatch.setenv("SUPABASE_PUBLISHABLE_KEY", "test-publishable-key")
+    response = Mock(status_code=200)
+    response.json.return_value = {
+        "id": "different-user",
+        "email": "customer@example.invalid",
+        "email_confirmed_at": "2026-01-01T00:00:00Z",
+    }
+    monkeypatch.setattr(auth.httpx, "get", Mock(return_value=response))
+
+    created = client.post(
+        "/account/register",
+        json={},
+        headers=headers(signed_token(changes={"sub": "new-customer"})),
+    )
+
+    assert created.status_code == 401
+    with Session(engine) as db:
+        assert db.scalar(select(func.count()).select_from(User)) == 0
+
+
+def test_enabled_registration_admits_only_verified_unprovisioned_identities(
+    auth_client, signed_token, monkeypatch,
+):
+    client, engine = auth_client
+    from app.features.entitlements import service as entitlement_service
+
+    monkeypatch.setattr(entitlement_service, "public_registration_enabled", lambda: True)
+    monkeypatch.setattr(auth, "_has_verified_email", lambda *_: True)
+    token = headers(signed_token(changes={
+        "sub": "new-customer",
+        "email_verified": True,
+    }))
+    assert client.get("/account", headers=token).status_code == 403
+    response = client.post("/account/register", json={}, headers=token)
+    assert response.status_code == 200
+    assert response.json()["businesses"] == []
+    assert client.get("/account", headers=token).status_code == 200
+    assert client.post("/account/register", json={}, headers=token).json() == response.json()
+
+    with Session(engine) as db:
+        assert db.scalar(select(func.count()).select_from(User)) == 1
+        assert db.scalar(select(func.count()).select_from(BusinessMembership)) == 0
+        assert db.scalar(select(func.count()).select_from(CustomerOrganization)) == 1
 
 
 def test_registration_cannot_reactivate_disabled_user_or_accept_ownership(auth_client, signed_token):

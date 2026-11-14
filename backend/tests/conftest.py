@@ -15,6 +15,8 @@ os.environ.update({
     "SUPABASE_SECRET_KEY": "test-only-secret",
     "SUPABASE_STORAGE_BUCKET": "test-only-bucket",
     "ALLOWED_USER_ID": "test-authorized-user",
+    "PUBLIC_REGISTRATION_ENABLED": "false",
+    "SUPABASE_GOOGLE_SIGN_IN_ENABLED": "false",
     "OPENAI_API_KEY": "test-only-openai-key",
     "HEYGEN_API_KEY": "test-only-heygen-key",
     "HEYGEN_BUSINESS_ALLOWANCES": '{"business-1":{"max_generations":100,"max_script_characters":5000,"max_concurrent_jobs":10}}',

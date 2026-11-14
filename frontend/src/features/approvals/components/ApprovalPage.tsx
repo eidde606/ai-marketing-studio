@@ -72,7 +72,7 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
           : status;
 
   return (
-    <section className="approval-page">
+    <section className="approval-page" data-guide-target="approval-queue">
       <div className="panel-heading">
         <div>
           <span className="eyebrow">{t("approval.eyebrow")}</span>
@@ -87,7 +87,10 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
         </span>
       </div>
 
-      <div className="approval-page-list">
+      <div
+        className="approval-page-list"
+        data-guide-target="publish-options"
+      >
         {draftMessages}
 
         {!loadingDrafts &&

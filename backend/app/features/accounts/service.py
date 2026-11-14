@@ -20,7 +20,7 @@ def _active_user(db: Session, identity: Principal, *, lock=False):
 
 @rollback_on_failure
 def register(db: Session, identity: Principal):
-    # The route supplies only the verified, still-allowlisted JWT identity.
+    # The route supplies only the verified operator or gated customer identity.
     # No email matching, membership inference, or disabled-account resurrection.
     user = repository.user_for_identity(db, identity, lock=True)
     if user is None:
@@ -32,7 +32,8 @@ def register(db: Session, identity: Principal):
             user = _active_user(db, identity)
     elif user.status != "active":
         raise ApplicationError(ErrorKind.FORBIDDEN, "Application access denied")
-    entitlement_service.ensure_customer_organization(db, user.id)
+    if not entitlement_service.is_operator_subject(identity.subject):
+        entitlement_service.ensure_customer_organization(db, user.id)
     Transactions(db).commit()
     return account(db, resolve_principal(db, identity))
 

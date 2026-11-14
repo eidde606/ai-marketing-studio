@@ -39,6 +39,7 @@ const savedState = {
   social_accounts_skipped: false,
   completed: false,
   tutorial_completed: false,
+  tutorial_step: 0,
 };
 
 describe("OnboardingWizard", () => {

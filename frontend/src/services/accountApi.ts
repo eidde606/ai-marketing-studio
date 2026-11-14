@@ -7,10 +7,20 @@ const API_BASE_URL =
 
 export async function getPublicConfig(): Promise<{
   public_registration: boolean;
+  google_sign_in: boolean;
+  facebook_sign_in: boolean;
+  apple_sign_in: boolean;
+  trial_available: boolean;
 }> {
   const response = await fetch(`${API_BASE_URL}/public/config`);
   if (!response.ok) throw new Error("Public configuration is unavailable.");
-  return (await response.json()) as { public_registration: boolean };
+  return (await response.json()) as {
+    public_registration: boolean;
+    google_sign_in: boolean;
+    facebook_sign_in: boolean;
+    apple_sign_in: boolean;
+    trial_available: boolean;
+  };
 }
 
 export function registerAccount(): Promise<AccountResponse> {

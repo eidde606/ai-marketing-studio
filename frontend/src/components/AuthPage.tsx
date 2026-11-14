@@ -1,10 +1,49 @@
 import { Eye, EyeOff, LockKeyhole, Mail, Sparkles } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { useLocalization } from "../app/localization";
-import { getPublicConfig, registerAccount } from "../services/accountApi";
+import { getPublicConfig } from "../services/accountApi";
 import { supabase } from "../services/supabaseClient";
 
 type AuthMode = "login" | "register" | "forgot" | "reset";
+type RegistrationState = "loading" | "enabled" | "disabled" | "unavailable";
+type OAuthProvider = "google" | "facebook" | "apple";
+type OAuthTranslation =
+  | "auth.continueWithGoogle"
+  | "auth.continueWithFacebook"
+  | "auth.continueWithApple";
+
+const oauthProviders: {
+  id: OAuthProvider;
+  configKey: "google_sign_in" | "facebook_sign_in" | "apple_sign_in";
+  label: string;
+  translation: OAuthTranslation;
+}[] = [
+  {
+    id: "google",
+    configKey: "google_sign_in",
+    label: "Google",
+    translation: "auth.continueWithGoogle",
+  },
+  {
+    id: "facebook",
+    configKey: "facebook_sign_in",
+    label: "Facebook",
+    translation: "auth.continueWithFacebook",
+  },
+  {
+    id: "apple",
+    configKey: "apple_sign_in",
+    label: "Apple",
+    translation: "auth.continueWithApple",
+  },
+];
+
+const hasOAuthCallbackError = (url: URL) => {
+  const fragment = new URLSearchParams(url.hash.replace(/^#/, ""));
+  return [url.searchParams, fragment].some((params) =>
+    ["error", "error_description", "error_code"].some((key) => params.has(key)),
+  );
+};
 
 type AuthPageProps = {
   recoveryMode?: boolean;
@@ -21,9 +60,21 @@ export default function AuthPage({
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [registrationAvailable, setRegistrationAvailable] = useState(false);
+  const [loadingProvider, setLoadingProvider] = useState<OAuthProvider | null>(
+    null,
+  );
+  const [registrationState, setRegistrationState] =
+    useState<RegistrationState>("loading");
+  const [trialAvailable, setTrialAvailable] = useState(false);
+  const [oauthAvailability, setOAuthAvailability] = useState<
+    Record<OAuthProvider, boolean>
+  >({ google: false, facebook: false, apple: false });
   const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
+  const [error, setError] = useState(() =>
+    hasOAuthCallbackError(new URL(window.location.href))
+      ? t("auth.oauthCallbackError")
+      : "",
+  );
 
   const currentMode = recoveryMode ? "reset" : mode;
 
@@ -31,14 +82,50 @@ export default function AuthPage({
     let active = true;
     getPublicConfig()
       .then((config) => {
-        if (active) setRegistrationAvailable(config.public_registration);
+        if (active) {
+          setRegistrationState(
+            config.public_registration ? "enabled" : "disabled",
+          );
+          setTrialAvailable(config.trial_available);
+          setOAuthAvailability({
+            google: config.google_sign_in,
+            facebook: config.facebook_sign_in,
+            apple: config.apple_sign_in,
+          });
+        }
       })
       .catch(() => {
-        if (active) setRegistrationAvailable(false);
+        if (active) {
+          setRegistrationState("unavailable");
+          setTrialAvailable(false);
+          setOAuthAvailability({
+            google: false,
+            facebook: false,
+            apple: false,
+          });
+        }
       });
     return () => {
       active = false;
     };
+  }, []);
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const query = url.searchParams;
+    const fragment = new URLSearchParams(url.hash.replace(/^#/, ""));
+    if (!hasOAuthCallbackError(url)) return;
+
+    for (const key of ["error", "error_description", "error_code"]) {
+      query.delete(key);
+      fragment.delete(key);
+    }
+    url.hash = fragment.toString();
+    window.history.replaceState(
+      window.history.state,
+      "",
+      `${url.pathname}${url.search}${url.hash}`,
+    );
   }, []);
 
   const switchMode = (nextMode: AuthMode) => {
@@ -50,6 +137,10 @@ export default function AuthPage({
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (currentMode === "register" && registrationState !== "enabled") {
+      setError(t("auth.registrationUnavailable"));
+      return;
+    }
     setLoading(true);
     setError("");
     setMessage("");
@@ -85,26 +176,21 @@ export default function AuthPage({
           options: { emailRedirectTo: window.location.origin },
         });
         if (error) throw error;
-        if (data.session) {
-          await registerAccount();
-          setMessage(t("auth.accountCreated"));
-        } else {
-          setMessage(t("auth.verifyEmail"));
-        }
+        setMessage(
+          data.session ? t("auth.accountCreated") : t("auth.verifyEmail"),
+        );
       } else {
-        const { data, error } = await supabase.auth.signInWithPassword({
+        const { error } = await supabase.auth.signInWithPassword({
           email,
           password,
         });
 
         if (error) throw error;
-        if (registrationAvailable && data.session) await registerAccount();
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : "";
       setError(
-        message === t("auth.passwordMin")
-          ? message
+        err instanceof Error && err.message === t("auth.passwordMin")
+          ? err.message
           : currentMode === "login"
             ? t("auth.signInError")
             : currentMode === "register"
@@ -113,6 +199,42 @@ export default function AuthPage({
       );
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleOAuthSignIn = async (provider: OAuthProvider) => {
+    if (
+      !oauthAvailability[provider] ||
+      (currentMode === "register" && registrationState !== "enabled")
+    ) {
+      setError(t("auth.providerUnavailable"));
+      return;
+    }
+    setLoading(true);
+    setLoadingProvider(provider);
+    setError("");
+    setMessage("");
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider,
+        options: {
+          redirectTo: window.location.origin,
+          ...(provider === "google"
+            ? { queryParams: { prompt: "select_account" } }
+            : {}),
+        },
+      });
+      if (error) throw error;
+    } catch {
+      const providerLabel =
+        provider === "google"
+          ? "Google"
+          : provider === "facebook"
+            ? "Facebook"
+            : "Apple";
+      setError(t("auth.oauthSignInError", { provider: providerLabel }));
+      setLoading(false);
+      setLoadingProvider(null);
     }
   };
 
@@ -155,7 +277,7 @@ export default function AuthPage({
           <p className="mb-5 text-sm font-semibold uppercase tracking-[0.25em] text-violet-200">
             {t("auth.creativeSpace")}
           </p>
-          <h1 className="whitespace-pre-line text-5xl font-bold leading-tight">
+          <h1 className="auth-hero-title whitespace-pre-line text-5xl font-bold leading-tight">
             {t("auth.heroHeadline")}
           </h1>
           <p className="mt-6 text-lg leading-8 text-violet-100">
@@ -193,7 +315,9 @@ export default function AuthPage({
               {currentMode === "login"
                 ? t("auth.continue")
                 : currentMode === "register"
-                  ? t("auth.createAccountHelp")
+                  ? trialAvailable
+                    ? t("auth.registerTrialHelp")
+                    : t("auth.createAccountHelp")
                   : currentMode === "forgot"
                     ? t("auth.recoverHelp")
                     : t("auth.newPasswordHelp")}
@@ -325,14 +449,53 @@ export default function AuthPage({
             </button>
           </form>
 
-          {currentMode === "login" && registrationAvailable && (
-            <button
-              type="button"
-              onClick={() => switchMode("register")}
-              className="mt-7 w-full text-center text-sm font-semibold text-violet-700 hover:underline"
+          {currentMode === "login" && (
+            <section
+              className="mt-6 rounded-2xl border border-violet-200 bg-violet-50/80 p-4 shadow-sm sm:p-5"
+              aria-labelledby="registration-prompt-title"
             >
-              {t("auth.noAccount")} {t("auth.createAccount")}
-            </button>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p
+                  id="registration-prompt-title"
+                  className="font-semibold text-slate-800"
+                >
+                  {t("auth.noAccount")}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => switchMode("register")}
+                  disabled={registrationState !== "enabled"}
+                  className="inline-flex min-h-11 items-center justify-center rounded-xl bg-violet-700 px-5 py-3 text-sm font-semibold text-white shadow-md shadow-violet-700/15 transition hover:bg-violet-800 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-violet-300 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600 disabled:shadow-none"
+                  aria-describedby="registration-availability"
+                >
+                  {t("auth.createAccount")}
+                </button>
+              </div>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                {trialAvailable
+                  ? t("auth.trialAvailable")
+                  : t("auth.trialUnavailable")}
+              </p>
+              <p
+                id="registration-availability"
+                className={`mt-2 text-sm ${
+                  registrationState === "enabled"
+                    ? "text-violet-800"
+                    : "text-slate-600"
+                }`}
+                role={registrationState === "enabled" ? undefined : "status"}
+              >
+                {registrationState === "loading"
+                  ? t("auth.registrationChecking")
+                  : registrationState === "enabled"
+                    ? trialAvailable
+                      ? t("auth.registrationOpen")
+                      : t("auth.registrationOpenNoTrial")
+                    : registrationState === "disabled"
+                      ? t("auth.registrationUnavailable")
+                      : t("auth.registrationCheckFailed")}
+              </p>
+            </section>
           )}
           {currentMode === "register" && (
             <button
@@ -352,6 +515,56 @@ export default function AuthPage({
             >
               {t("auth.backToSignIn")}
             </button>
+          )}
+
+          {(currentMode === "login" || currentMode === "register") && (
+            <section className="mt-6" aria-label={t("auth.socialSignIn")}>
+              <p className="mb-3 text-center text-sm text-slate-500">
+                {t("auth.socialSignIn")}
+              </p>
+              <div className="grid gap-2 sm:grid-cols-3">
+                {oauthProviders.map((provider) => {
+                  const providerAvailable =
+                    oauthAvailability[provider.id] &&
+                    (currentMode !== "register" ||
+                      registrationState === "enabled");
+                  return (
+                    <button
+                      key={provider.id}
+                      type="button"
+                      onClick={() => void handleOAuthSignIn(provider.id)}
+                      disabled={loading || !providerAvailable}
+                      aria-label={t(provider.translation)}
+                      aria-describedby={
+                        registrationState !== "loading" && !providerAvailable
+                          ? "oauth-unavailable"
+                          : undefined
+                      }
+                      className="min-h-11 rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm font-semibold text-slate-800 transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-violet-200 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {loadingProvider === provider.id
+                        ? t("auth.connecting")
+                        : provider.label}
+                    </button>
+                  );
+                })}
+              </div>
+              {registrationState !== "loading" &&
+                oauthProviders.some(
+                  (provider) =>
+                    !oauthAvailability[provider.id] ||
+                    (currentMode === "register" &&
+                      registrationState !== "enabled"),
+                ) && (
+                  <p
+                    id="oauth-unavailable"
+                    className="mt-2 text-center text-xs text-slate-500"
+                    role="status"
+                  >
+                    {t("auth.providerUnavailable")}
+                  </p>
+                )}
+            </section>
           )}
 
           <p className="mt-12 text-center text-xs text-slate-400">

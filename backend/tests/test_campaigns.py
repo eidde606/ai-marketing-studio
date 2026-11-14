@@ -281,7 +281,9 @@ def test_all_campaign_endpoints_require_auth(campaign_client, monkeypatch):
         ("DELETE", f'{detail}/drafts/{drafts[0]}', None),
     ]
     monkeypatch.setattr(auth.jwks_client, "get_signing_key_from_jwt", lambda token: SimpleNamespace(key="fake"))
-    monkeypatch.setattr(auth.jwt, "decode", lambda *args, **kwargs: {"sub": "unauthorized"})
+    monkeypatch.setattr(auth.jwt, "decode", lambda *args, **kwargs: {
+        "sub": "unauthorized", "iss": auth.SUPABASE_ISSUER,
+    })
     for method, url, body in operations:
         assert client.request(method, url, json=body).status_code == 401
         assert client.request(method, url, json=body, headers={"Authorization": "Bearer fake"}).status_code == 403

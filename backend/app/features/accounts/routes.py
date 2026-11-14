@@ -8,14 +8,21 @@ from app.features.access.principal import Principal, AuthenticatedPrincipal
 from app.features.entitlements import service as entitlement_service
 from . import service
 from .schemas import (RegistrationRequest, AccountPreferencesUpdate, BusinessPreferencesUpdate,
-                      AccountResponse, AccountPreferences)
+                      AccountResponse, AccountPreferences, PublicConfigResponse)
 
 router = APIRouter()
 
 
-@router.get("/public/config")
+@router.get("/public/config", response_model=PublicConfigResponse)
 def public_config():
-    return {"public_registration": entitlement_service.public_registration_enabled()}
+    registration_enabled = entitlement_service.public_registration_enabled()
+    return {
+        "public_registration": registration_enabled,
+        "google_sign_in": entitlement_service.google_sign_in_enabled(),
+        "facebook_sign_in": entitlement_service.facebook_sign_in_enabled(),
+        "apple_sign_in": entitlement_service.apple_sign_in_enabled(),
+        "trial_available": registration_enabled and entitlement_service.trials_enabled(),
+    }
 
 
 @router.post("/account/register", response_model=AccountResponse)

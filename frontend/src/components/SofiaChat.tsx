@@ -290,7 +290,7 @@ export default function SofiaChat({
       : t("sofia.newConversationTitle");
 
   return (
-    <section className="sofia-chat">
+    <section className="sofia-chat" data-guide-target="leo-generation">
       <header>
         <h2>{t("sofia.title")}</h2>
         <p>{t("sofia.description")}</p>
@@ -456,6 +456,7 @@ export default function SofiaChat({
       )}
 
       <form
+        data-guide-target="sofia-guided"
         onSubmit={(event) => {
           event.preventDefault();
           void handleSend();

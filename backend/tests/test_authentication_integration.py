@@ -187,17 +187,23 @@ def test_unknown_and_disabled_users_cannot_read_existing_businesses(auth_client,
         assert db.scalar(select(func.count()).select_from(BusinessMembership)) == 0
 
 
-def test_allowlist_still_denies_other_active_owner(auth_client, signed_token):
+def test_active_customer_does_not_inherit_operator_memberships(auth_client, signed_token):
     client, engine = auth_client
-    add_user(engine, subject="other-subject")
+    add_user(engine)
     with Session(engine) as db:
+        db.add(User(
+            id="customer-user",
+            auth_issuer=auth.SUPABASE_ISSUER,
+            auth_subject="other-subject",
+            status="active",
+        ))
         db.add(Business(id="a", name="Other business"))
         db.flush()
         db.add(BusinessMembership(business_id="a", user_id="application-user", role="owner"))
         db.commit()
     response = client.get("/businesses", headers=headers(signed_token(changes={"sub": "other-subject"})))
-    assert response.status_code == 403
-    assert response.json()["detail"] == "You are not authorized to access this application"
+    assert response.status_code == 200
+    assert response.json() == []
 
 
 def test_existing_business_response_contract(auth_client, signed_token):

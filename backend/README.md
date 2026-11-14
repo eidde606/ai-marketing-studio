@@ -56,12 +56,28 @@ A healthy response is:
 {"status":"healthy"}
 ```
 
+## Customer registration and OAuth
+
+`PUBLIC_REGISTRATION_ENABLED` and `TRIALS_ENABLED` are fail-closed and default
+to `false`. Enable them only in an isolated local environment with a local
+database; do not enable public registration in production or Render. Registration
+requires `SUPABASE_PUBLISHABLE_KEY` (or the legacy `SUPABASE_ANON_KEY`) so the
+backend can verify the Supabase user's confirmed email through Auth. Never use a
+service-role key for this check.
+
+OAuth providers are independently disabled by default. Enable a provider with
+`SUPABASE_GOOGLE_SIGN_IN_ENABLED`, `SUPABASE_FACEBOOK_SIGN_IN_ENABLED`, or
+`SUPABASE_APPLE_SIGN_IN_ENABLED` only after configuring that provider and the
+local callback URL in the Supabase dashboard. The application uses Supabase
+Auth for provider redirects and session handling; it does not store passwords
+or link accounts based on matching email addresses.
+
 ## Campaign management
 
-Campaign endpoints use the existing Supabase authentication and authorized-user
-restriction. Every route is scoped to a business; draft associations must belong
-to that same business. This preserves the existing single-authorized-user model;
-it does not add multi-user business memberships.
+Campaign endpoints require a verified Supabase identity with an active
+application account and an authorized membership in the selected business.
+Every route is scoped to a business; draft associations must belong to that same
+business.
 
 Base path: `/businesses/{business_id}/campaigns`
 

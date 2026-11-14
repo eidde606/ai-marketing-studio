@@ -27,20 +27,32 @@ _USAGE_LIMITS = {
 
 
 def public_registration_enabled() -> bool:
-    allowlisted_user = os.getenv("ALLOWED_USER_ID", "").strip()
-    return (
-        not allowlisted_user
-        and os.getenv("PUBLIC_REGISTRATION_ENABLED", "").strip().lower() == "true"
-    )
+    return os.getenv("PUBLIC_REGISTRATION_ENABLED", "").strip().lower() == "true"
+
+
+def google_sign_in_enabled() -> bool:
+    return os.getenv("SUPABASE_GOOGLE_SIGN_IN_ENABLED", "").strip().lower() == "true"
+
+
+def facebook_sign_in_enabled() -> bool:
+    return os.getenv("SUPABASE_FACEBOOK_SIGN_IN_ENABLED", "").strip().lower() == "true"
+
+
+def apple_sign_in_enabled() -> bool:
+    return os.getenv("SUPABASE_APPLE_SIGN_IN_ENABLED", "").strip().lower() == "true"
 
 
 def trials_enabled() -> bool:
     return os.getenv("TRIALS_ENABLED", "").strip().lower() == "true"
 
 
-def is_operator(principal: AuthenticatedPrincipal) -> bool:
+def is_operator_subject(subject: str) -> bool:
     allowed_user_id = os.getenv("ALLOWED_USER_ID", "").strip()
-    return bool(allowed_user_id and principal.subject == allowed_user_id)
+    return bool(allowed_user_id and subject == allowed_user_id)
+
+
+def is_operator(principal: AuthenticatedPrincipal) -> bool:
+    return is_operator_subject(principal.subject)
 
 
 def trial_limits() -> dict[str, int]:

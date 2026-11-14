@@ -4,9 +4,34 @@ from sqlalchemy.orm import Session
 from app.models import Business, BusinessMembership, OnboardingProgress
 
 
-def test_public_registration_remains_closed(isolated_client):
+def test_public_registration_remains_closed(isolated_client, monkeypatch):
     client, _ = isolated_client
-    assert client.get("/public/config").json() == {"public_registration": False}
+    monkeypatch.setenv("SUPABASE_GOOGLE_SIGN_IN_ENABLED", "false")
+    assert client.get("/public/config").json() == {
+        "public_registration": False,
+        "google_sign_in": False,
+        "facebook_sign_in": False,
+        "apple_sign_in": False,
+        "trial_available": False,
+    }
+
+
+def test_public_config_exposes_trial_only_when_both_gates_are_enabled(
+    isolated_client, monkeypatch,
+):
+    client, _ = isolated_client
+    monkeypatch.setenv("PUBLIC_REGISTRATION_ENABLED", "true")
+    monkeypatch.setenv("TRIALS_ENABLED", "true")
+    monkeypatch.setenv("SUPABASE_GOOGLE_SIGN_IN_ENABLED", "true")
+    monkeypatch.setenv("SUPABASE_FACEBOOK_SIGN_IN_ENABLED", "true")
+    monkeypatch.setenv("SUPABASE_APPLE_SIGN_IN_ENABLED", "true")
+    assert client.get("/public/config").json() == {
+        "public_registration": True,
+        "google_sign_in": True,
+        "facebook_sign_in": True,
+        "apple_sign_in": True,
+        "trial_available": True,
+    }
 
 
 def test_onboarding_saves_resumes_and_activates_idempotently(isolated_client):
@@ -20,6 +45,7 @@ def test_onboarding_saves_resumes_and_activates_idempotently(isolated_client):
         "social_accounts_skipped": False,
         "completed": False,
         "tutorial_completed": False,
+        "tutorial_step": 0,
     }
 
     progress = {
@@ -64,8 +90,35 @@ def test_onboarding_saves_resumes_and_activates_idempotently(isolated_client):
 
     tutorial = client.patch("/account/onboarding/tutorial", json={"completed": True})
     assert tutorial.status_code == 200
-    assert tutorial.json() == {"completed": True}
-    assert client.get("/account/onboarding").json()["tutorial_completed"] is True
+    assert tutorial.json() == {"completed": True, "current_step": 0}
+    state = client.get("/account/onboarding").json()
+    assert state["tutorial_completed"] is True
+    assert state["tutorial_step"] == 0
+
+    replay = client.patch(
+        "/account/onboarding/tutorial",
+        json={"completed": False, "current_step": 0},
+    )
+    assert replay.status_code == 200
+    assert replay.json() == {"completed": False, "current_step": 0}
+    assert client.get("/account/onboarding").json()["tutorial_completed"] is False
+
+    saved_step = client.patch(
+        "/account/onboarding/tutorial",
+        json={"completed": False, "current_step": 7},
+    )
+    assert saved_step.status_code == 200
+    assert saved_step.json()["current_step"] == 7
+    assert client.get("/account/onboarding").json()["tutorial_step"] == 7
+
+
+def test_tutorial_progress_rejects_out_of_range_steps(isolated_client):
+    client, _ = isolated_client
+    response = client.patch(
+        "/account/onboarding/tutorial",
+        json={"completed": False, "current_step": 10},
+    )
+    assert response.status_code == 422
 
 
 def test_onboarding_activation_requires_a_business_name(isolated_client):

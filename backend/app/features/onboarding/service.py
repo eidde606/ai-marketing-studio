@@ -44,8 +44,12 @@ def get_progress(db: Session, principal: AuthenticatedPrincipal):
             "social_accounts_skipped": False,
             "completed": False,
             "tutorial_completed": False,
+            "tutorial_step": 0,
         }
     data = progress.data or {}
+    tutorial_step = data.get("tutorial_step", 0)
+    if type(tutorial_step) is not int or not 0 <= tutorial_step <= 9:
+        tutorial_step = 0
     return {
         "current_step": progress.current_step,
         "business_profile": data.get("business_profile", {}),
@@ -55,6 +59,7 @@ def get_progress(db: Session, principal: AuthenticatedPrincipal):
         "social_accounts_skipped": data.get("social_accounts_skipped", False),
         "completed": progress.completed_at is not None,
         "tutorial_completed": progress.tutorial_completed_at is not None,
+        "tutorial_step": tutorial_step,
     }
 
 
@@ -114,13 +119,24 @@ def update_tutorial_status(
     db: Session,
     principal: AuthenticatedPrincipal,
     completed: bool,
+    *,
+    current_step: int | None = None,
 ):
     user = _lock_user(db, principal)
     progress = _progress(db, user.id, create=True)
+    data = dict(progress.data or {})
+    if current_step is not None:
+        data["tutorial_step"] = current_step
+        progress.data = data
+        if current_step == 0 and not completed:
+            progress.tutorial_completed_at = None
     if completed and progress.tutorial_completed_at is None:
         progress.tutorial_completed_at = datetime.now(timezone.utc)
     Transactions(db).commit()
-    return {"completed": progress.tutorial_completed_at is not None}
+    return {
+        "completed": progress.tutorial_completed_at is not None,
+        "current_step": data.get("tutorial_step", 0),
+    }
 
 
 def entitlement_status(db: Session, principal: AuthenticatedPrincipal, business_id: str):

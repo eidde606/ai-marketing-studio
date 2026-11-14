@@ -11,6 +11,7 @@ export type OnboardingState = {
   social_accounts_skipped: boolean;
   completed: boolean;
   tutorial_completed: boolean;
+  tutorial_step: number;
 };
 
 export type OnboardingInput = {
@@ -35,9 +36,7 @@ export type BusinessEntitlement = {
   trial_started_at: string | null;
   trial_expires_at: string | null;
   days_remaining: number | null;
-  usage:
-    | Record<string, { used: number; limit: number }>
-    | null;
+  usage: Record<string, { used: number; limit: number }> | null;
   features: Record<string, boolean>;
   subscription_management: "unavailable";
 };
@@ -66,14 +65,21 @@ export function activateOnboarding(
   });
 }
 
-export function updateTutorialCompletion(completed: boolean): Promise<{
+export function updateTutorialCompletion(
+  completed: boolean,
+  currentStep?: number,
+): Promise<{
   completed: boolean;
+  current_step: number;
 }> {
-  return apiRequest<{ completed: boolean }>("/account/onboarding/tutorial", {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ completed }),
-  });
+  return apiRequest<{ completed: boolean; current_step: number }>(
+    "/account/onboarding/tutorial",
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ completed, current_step: currentStep }),
+    },
+  );
 }
 
 export function getBusinessEntitlement(

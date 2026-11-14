@@ -1,5 +1,5 @@
 import type { Session } from "@supabase/supabase-js";
-import { useEffect, useState, type FC } from "react";
+import { useEffect, useRef, useState, type FC } from "react";
 import AnalyticsPage from "./components/AnalyticsPage";
 import ApprovalPage from "./components/ApprovalPage";
 import AuthPage from "./components/AuthPage";
@@ -35,7 +35,11 @@ import { useBusinessSelection } from "./app/useBusinessSelection";
 import SofiaChat from "./components/SofiaChat";
 import { LocalizationProvider, useLocalization } from "./app/localization";
 import { ApiError } from "./lib/apiClient";
-import { updateTutorialCompletion } from "./services/onboardingApi";
+import {
+  getOnboarding,
+  updateTutorialCompletion,
+} from "./services/onboardingApi";
+import { getPublicConfig, registerAccount } from "./services/accountApi";
 
 function formatDraftDate(value: string, locale: "en" | "es"): string {
   if (!value)
@@ -72,11 +76,98 @@ const App: FC = () => {
 };
 
 function AppWorkspace({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
-  const { t } = useLocalization();
+  const { accountError, accountLoading, refreshAccount, t } = useLocalization();
+  const [provisioning, setProvisioning] = useState<
+    "idle" | "pending" | "failed"
+  >("idle");
+  const [provisioningRetry, setProvisioningRetry] = useState(0);
+  const provisioningAttempt = useRef<string | null>(null);
+  const [verificationRequired, setVerificationRequired] = useState(false);
+  const unprovisioned =
+    accountError instanceof ApiError && accountError.status === 403;
+
+  useEffect(() => {
+    const userId = auth.session?.user.id;
+    if (!userId || accountLoading || !unprovisioned) {
+      if (!userId) provisioningAttempt.current = null;
+      return;
+    }
+    if (provisioningAttempt.current === userId) return;
+    provisioningAttempt.current = userId;
+    let active = true;
+    setVerificationRequired(false);
+    setProvisioning("pending");
+    void (async () => {
+      try {
+        const config = await getPublicConfig();
+        if (!config.public_registration) {
+          if (active) setProvisioning("idle");
+          return;
+        }
+        await registerAccount();
+        await refreshAccount();
+        if (active) setProvisioning("idle");
+      } catch (error) {
+        if (active) {
+          setVerificationRequired(
+            error instanceof ApiError && error.status === 403,
+          );
+          setProvisioning("failed");
+        }
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [
+    accountLoading,
+    auth.session?.user.id,
+    provisioningRetry,
+    refreshAccount,
+    unprovisioned,
+  ]);
+
   if (auth.checkingAuth) {
     return <div className="auth-loading">{t("common.loading")}</div>;
   }
   if (!auth.session) return <AuthPage />;
+  if (provisioning === "pending") {
+    return (
+      <main className="workspace-access-state">
+        <p role="status">{t("registration.provisioning")}</p>
+      </main>
+    );
+  }
+  if (provisioning === "failed") {
+    return (
+      <main className="workspace-access-state">
+        <section className="panel" role="alert">
+          <h1>{t("registration.provisioningFailed")}</h1>
+          <p>
+            {verificationRequired
+              ? t("registration.verifyEmail")
+              : t("registration.provisioningHelp")}
+          </p>
+          <div className="workspace-access-state__actions">
+            <button
+              type="button"
+              onClick={() => {
+                provisioningAttempt.current = null;
+                setVerificationRequired(false);
+                setProvisioning("idle");
+                setProvisioningRetry((value) => value + 1);
+              }}
+            >
+              {t("common.retry")}
+            </button>
+            <button type="button" onClick={() => void auth.signOut()}>
+              {t("shell.signOut")}
+            </button>
+          </div>
+        </section>
+      </main>
+    );
+  }
   return (
     <AuthenticatedApp
       key={auth.session.user.id}
@@ -181,6 +272,28 @@ function AuthenticatedApp({
   }, [activeSection]);
   const [showBusinessForm, setShowBusinessForm] = useState(false);
   const [tutorialOpen, setTutorialOpen] = useState(false);
+  const [tutorialStep, setTutorialStep] = useState(0);
+  const [tutorialLoadError, setTutorialLoadError] = useState(false);
+  const [tutorialRetry, setTutorialRetry] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    void getOnboarding()
+      .then((progress) => {
+        if (!active) return;
+        setTutorialStep(progress.tutorial_step);
+        if (progress.completed && !progress.tutorial_completed) {
+          setTutorialOpen(true);
+        }
+        setTutorialLoadError(false);
+      })
+      .catch(() => {
+        if (active) setTutorialLoadError(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [selectedBusinessId, tutorialRetry]);
 
   // These hooks share one collection and lock owner for the authenticated workspace.
   // Keep them above the recovery return so pending work and edits survive recovery.
@@ -316,7 +429,18 @@ function AuthenticatedApp({
   const handleOnboardingComplete = (business: Business) => {
     addBusiness(business);
     void refreshAccount();
+    setTutorialStep(0);
     setTutorialOpen(true);
+  };
+  const replayTutorial = async () => {
+    try {
+      const progress = await updateTutorialCompletion(false, 0);
+      setTutorialStep(progress.current_step);
+      setTutorialLoadError(false);
+      setTutorialOpen(true);
+    } catch {
+      setTutorialLoadError(true);
+    }
   };
   const draftMessages = (
     <>
@@ -414,6 +538,21 @@ function AuthenticatedApp({
       userDisplayName={userDisplayName}
       userEmail={session.user.email ?? ""}
     >
+      {tutorialLoadError && (
+        <p className="workspace-message--error" role="alert">
+          {t("tutorial.loadError")}{" "}
+          <button
+            type="button"
+            className="text-button"
+            onClick={() => {
+              setTutorialLoadError(false);
+              setTutorialRetry((value) => value + 1);
+            }}
+          >
+            {t("common.retry")}
+          </button>
+        </p>
+      )}
       {showBusinessForm ? (
         <BusinessForm
           onCreated={handleBusinessCreated}
@@ -522,7 +661,11 @@ function AuthenticatedApp({
               <p>{t("team.description")}</p>
             </div>
           </section>
-          <section className="ai-team-roles" aria-label={t("team.roles")}>
+          <section
+            className="ai-team-roles"
+            data-guide-target="sofia-overview"
+            aria-label={t("team.roles")}
+          >
             {agents.map((agent) => (
               <article className="ai-team-role" key={agent.name}>
                 <span className="ai-team-role__avatar" aria-hidden="true">
@@ -592,15 +735,15 @@ function AuthenticatedApp({
             await updateBusiness(selectedBusinessId, values);
             await refreshBusinesses();
           }}
-          onReplayTutorial={() => setTutorialOpen(true)}
+          onReplayTutorial={() => void replayTutorial()}
           canManageConnections={canManageConnections}
           features={account?.features}
           languagePreferences={
-            <>
+            <div data-guide-target="trial-settings">
               <LanguagePreferences businessId={selectedBusinessId} />
               <TrialStatus businessId={selectedBusinessId} />
               <UsageIndicator businessId={selectedBusinessId} />
-            </>
+            </div>
           }
           facebookConnection={
             <FacebookConnection businessId={selectedBusinessId} />
@@ -631,8 +774,16 @@ function AuthenticatedApp({
       )}
       {tutorialOpen && (
         <ProductTutorial
-          onComplete={async () => {
-            await updateTutorialCompletion(true);
+          activeSection={activeSection}
+          initialStep={tutorialStep}
+          onNavigate={handleSectionChange}
+          onStepChange={async (step) => {
+            const progress = await updateTutorialCompletion(false, step);
+            setTutorialStep(progress.current_step);
+          }}
+          onComplete={async (step) => {
+            const progress = await updateTutorialCompletion(true, step);
+            setTutorialStep(progress.current_step);
             setTutorialOpen(false);
           }}
         />

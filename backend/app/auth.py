@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 import jwt
+import httpx
 from dotenv import load_dotenv
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -58,13 +59,8 @@ def _verify_supabase_token(
             options={"require": ["exp", "iat", "iss", "aud", "sub"]},
         )
 
-        # Only Ángela's Supabase account is authorized.
-        if payload.get("sub") != ALLOWED_USER_ID:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You are not authorized to access this application",
-            )
-
+        # Application admission is resolved against an active local identity;
+        # registration availability is enforced only by the provisioning route.
         return payload
 
     except HTTPException:
@@ -89,20 +85,85 @@ def _verify_supabase_token(
 
 def get_registration_identity(
     payload: dict = Depends(_verify_supabase_token),
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
 ) -> Principal:
-    """Provision from a verified identity; public admission stays gated and email-verified."""
+    """Provision a verified operator or gated, email-verified customer identity."""
     if payload.get("is_anonymous", False):
         raise HTTPException(status_code=403, detail="Application access denied")
-    if entitlement_service.public_registration_enabled() and payload.get("email_verified") is not True:
-        raise HTTPException(status_code=403, detail="Verify your email address before creating an account")
+    if payload.get("sub") != ALLOWED_USER_ID and not entitlement_service.public_registration_enabled():
+        raise HTTPException(status_code=403, detail="Customer registration is not enabled")
+    if payload.get("sub") != ALLOWED_USER_ID and not _has_verified_email(
+        payload,
+        credentials.credentials if credentials else "",
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Verify your email address before creating an account",
+        )
     return Principal(issuer=payload["iss"], subject=payload["sub"])
+
+
+def _has_verified_email(payload: dict, access_token: str) -> bool:
+    publishable_key = (
+        os.getenv("SUPABASE_PUBLISHABLE_KEY", "").strip()
+        or os.getenv("SUPABASE_ANON_KEY", "").strip()
+    )
+    if not publishable_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Email verification is unavailable",
+        )
+
+    try:
+        response = httpx.get(
+            f"{SUPABASE_URL}/auth/v1/user",
+            headers={
+                "apikey": publishable_key,
+                "Authorization": f"Bearer {access_token}",
+            },
+            timeout=5.0,
+        )
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Unable to verify email address",
+        ) from exc
+
+    if response.status_code in {401, 403}:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired access token",
+        )
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Unable to verify email address",
+        )
+    try:
+        user = response.json()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Unable to verify email address",
+        ) from exc
+    if not isinstance(user, dict):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Unable to verify email address",
+        )
+    if user.get("id") != payload.get("sub"):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired access token",
+        )
+    return bool(user.get("email") and user.get("email_confirmed_at"))
 
 
 def get_authenticated_principal(
     payload: dict = Depends(_verify_supabase_token),
     db: Session = Depends(get_db),
 ) -> AuthenticatedPrincipal:
-    """HTTP boundary: verified, allowlisted JWT -> active application identity.
+    """HTTP boundary: verified, admitted JWT -> active application identity.
 
     No request-selected user IDs and no implicit user or membership creation.
     FastAPI caches this dependency only for the current request.
@@ -123,7 +184,8 @@ def verify_token(
 
     Both dependencies share the same cached JWT verification. The principal
     dependency gates every legacy protected route on an active application user.
-    New integrations should receive get_authenticated_principal and authorize the
-    business in their application service. The single-user allowlist stays on.
+    Registration admission is enforced only by get_registration_identity. New
+    integrations should receive get_authenticated_principal and authorize the
+    business in their application service.
     """
     return payload

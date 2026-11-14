@@ -55,7 +55,9 @@ def update_tutorial(
     db: Session = Depends(get_db),
 ):
     try:
-        return service.update_tutorial_status(db, principal, request.completed)
+        return service.update_tutorial_status(
+            db, principal, request.completed, current_step=request.current_step,
+        )
     except ApplicationError as exc:
         raise http_error(exc) from exc
 

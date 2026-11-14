@@ -190,7 +190,7 @@ const DashboardOverview: FC<DashboardOverviewProps> = ({
     .slice(0, 3);
 
   return (
-    <div className="dashboard-page">
+    <div className="dashboard-page" data-guide-target="dashboard-overview">
       <section className="dashboard-hero">
         <div className="dashboard-hero__copy">
           <span className="dashboard-kicker">
@@ -202,6 +202,7 @@ const DashboardOverview: FC<DashboardOverviewProps> = ({
         </div>
         <button
           className="dashboard-hero__action"
+          data-guide-target="quick-create"
           type="button"
           onClick={() => void handleGenerateContent()}
           disabled={!selectedBusinessId || generating}
