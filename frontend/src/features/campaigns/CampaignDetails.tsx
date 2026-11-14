@@ -1,6 +1,11 @@
 import type { ReactNode } from "react";
 import type { Campaign } from "../../services/campaignsApi";
-import { statusLabels, draftLabels, dateLabel } from "./campaignLabels";
+import { useLocalization } from "../../app/localization";
+import {
+  draftTranslationKeys,
+  formatCampaignDate,
+  statusTranslationKeys,
+} from "./campaignLabels";
 
 type Props = {
   campaign: Campaign;
@@ -17,11 +22,14 @@ export default function CampaignDetails({
   onDetach,
   children,
 }: Props) {
+  const { locale, t } = useLocalization();
   return (
     <section className="panel campaign-detail">
       <div className="panel-heading">
         <div>
-          <span className="eyebrow">{statusLabels[campaign.status]}</span>
+          <span className="eyebrow">
+            {t(statusTranslationKeys[campaign.status])}
+          </span>
           <h2>{campaign.name}</h2>
         </div>
         <button
@@ -30,32 +38,33 @@ export default function CampaignDetails({
           disabled={busy}
           onClick={onEdit}
         >
-          Editar campaña
+          {t("campaigns.edit")}
         </button>
       </div>
       <p className="campaign-objective">{campaign.objective}</p>
       <p>
-        {dateLabel(campaign.start_date)} → {dateLabel(campaign.end_date)}
+        {formatCampaignDate(campaign.start_date, locale) ??
+          t("campaigns.dateUnavailable")}{" "}
+        →{" "}
+        {formatCampaignDate(campaign.end_date, locale) ??
+          t("campaigns.dateUnavailable")}
       </p>
       <progress
         max={100}
         value={campaign.progress}
-        aria-label="Progreso de publicación"
+        aria-label={t("campaigns.publishProgress")}
       />
       <p>
-        <strong>{campaign.progress}%</strong> · {campaign.published_count}{" "}
-        publicados · {campaign.pending_count} pendientes de publicación ·{" "}
-        {campaign.rejected_count} rechazados
+        <strong>{campaign.progress}%</strong> ·{" "}
+        {t("campaigns.publishedCount", { count: campaign.published_count })} ·{" "}
+        {t("campaigns.pendingCount", { count: campaign.pending_count })} ·{" "}
+        {t("campaigns.rejectedCount", { count: campaign.rejected_count })}
       </p>
-      <p className="campaign-note">
-        Solo cuentan las publicaciones confirmadas en Facebook o TikTok, una vez
-        por contenido. Aprobar, descargar o copiar no cuenta como publicar. Los
-        rechazados siguen pendientes; los eliminados sin publicar se excluyen.
-      </p>
+      <p className="campaign-note">{t("campaigns.confirmedProgress")}</p>
       {children}
-      <h3>Contenido asociado</h3>
+      <h3>{t("campaigns.associatedContent")}</h3>
       {!campaign.drafts.length && (
-        <p>Esta campaña no tiene contenido contabilizable todavía.</p>
+        <p>{t("campaigns.noCountableContent")}</p>
       )}
       <ul className="campaign-contents">
         {campaign.drafts.map((draft) => (
@@ -63,27 +72,41 @@ export default function CampaignDetails({
             <div>
               <strong>{draft.title}</strong>
               <span>
-                {draft.published ? "Publicado" : "Pendiente de publicación"} ·{" "}
-                {draftLabels[draft.status] ?? draft.status}
-                {draft.deleted_at ? " · Eliminado (historial conservado)" : ""}
+                {t(
+                  draft.published
+                    ? "campaigns.postStatus.published"
+                    : "campaigns.postStatus.pending",
+                )}{" "}
+                ·{" "}
+                {draftTranslationKeys[
+                  draft.status as keyof typeof draftTranslationKeys
+                ]
+                  ? t(
+                      draftTranslationKeys[
+                        draft.status as keyof typeof draftTranslationKeys
+                      ],
+                    )
+                  : draft.status}
+                {draft.deleted_at
+                  ? ` · ${t("campaigns.deletedHistory")}`
+                  : ""}
               </span>
             </div>
             <button
               className="outline-button"
               type="button"
               disabled={busy}
-              aria-label={`Desvincular ${draft.title}`}
+              aria-label={t("campaigns.detachDraft", {
+                title: draft.title,
+              })}
               onClick={() => void onDetach(draft.id)}
             >
-              Desvincular
+              {t("campaigns.detach")}
             </button>
           </li>
         ))}
       </ul>
-      <p className="campaign-note">
-        Gestiona las aprobaciones y publicaciones desde Aprobaciones. Para
-        archivar esta campaña, cambia su estado en Editar campaña.
-      </p>
+      <p className="campaign-note">{t("campaigns.approvalLocation")}</p>
     </section>
   );
 }

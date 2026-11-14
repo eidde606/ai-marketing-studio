@@ -9,13 +9,14 @@ import {
   type SofiaGeneratedDraft,
   type SofiaMessage,
 } from "../services/sofiaApi";
+import { useLocalization } from "../app/localization";
 
 type SofiaChatProps = {
   businessId: string;
   onDraftCreated: (draft: SofiaGeneratedDraft) => void;
 };
 
-function formatConversationDate(value: string): string {
+function formatConversationDate(value: string, locale: string): string {
   const normalized = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value)
     ? value
     : `${value}Z`;
@@ -23,28 +24,36 @@ function formatConversationDate(value: string): string {
   const date = new Date(normalized);
 
   if (Number.isNaN(date.getTime())) {
-    return "Fecha no disponible";
+    return "";
   }
 
-  return new Intl.DateTimeFormat("es-US", {
+  return new Intl.DateTimeFormat(locale === "es" ? "es-US" : "en-US", {
     timeZone: "America/New_York",
     day: "numeric",
     month: "short",
     year: "numeric",
     hour: "numeric",
     minute: "2-digit",
-    hour12: true,
+    hour12: locale !== "es",
   }).format(date);
 }
 
-function conversationTitle(conversation: SofiaConversationSummary): string {
-  return conversation.title?.trim() || "Nueva campaña";
+function conversationTitle(
+  conversation: SofiaConversationSummary,
+  fallback: string,
+): string {
+  return conversation.title?.trim() || fallback;
 }
 
 export default function SofiaChat({
   businessId,
   onDraftCreated,
 }: SofiaChatProps) {
+  const { locale, t } = useLocalization();
+  const tRef = useRef(t);
+  useEffect(() => {
+    tRef.current = t;
+  }, [t]);
   const [messages, setMessages] = useState<SofiaMessage[]>([]);
   const [message, setMessage] = useState("");
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -106,7 +115,7 @@ export default function SofiaChat({
         setError(
           err instanceof Error
             ? err.message
-            : "No se pudo cargar la conversación.",
+            : tRef.current("sofia.conversationLoadError"),
         );
         setErrorAction("history");
       } finally {
@@ -138,7 +147,7 @@ export default function SofiaChat({
       setError(
         err instanceof Error
           ? err.message
-          : "No se pudo actualizar el historial.",
+          : tRef.current("sofia.historyLoadError"),
       );
       setErrorAction("history");
     }
@@ -164,7 +173,7 @@ export default function SofiaChat({
       setError(
         err instanceof Error
           ? err.message
-          : "No se pudo cargar la conversación.",
+          : tRef.current("sofia.conversationLoadError"),
       );
       setErrorAction("conversation");
       setRetryConversationId(id);
@@ -219,7 +228,7 @@ export default function SofiaChat({
       setMessages((previous) => previous.slice(0, -1));
 
       setError(
-        err instanceof Error ? err.message : "No se pudo contactar a Sofía.",
+        err instanceof Error ? err.message : tRef.current("sofia.contactError"),
       );
       setErrorAction("send");
     } finally {
@@ -241,7 +250,7 @@ export default function SofiaChat({
       onDraftCreated(draft);
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "No se pudo generar el borrador.",
+        err instanceof Error ? err.message : tRef.current("sofia.draftError"),
       );
       setErrorAction("draft");
     } finally {
@@ -275,36 +284,37 @@ export default function SofiaChat({
   );
 
   const currentTitle = currentConversation
-    ? conversationTitle(currentConversation)
+    ? conversationTitle(currentConversation, t("sofia.newCampaign"))
     : conversationId
-      ? "Conversación actual"
-      : "Nueva conversación";
+      ? t("sofia.currentTitle")
+      : t("sofia.newConversationTitle");
 
   return (
     <section className="sofia-chat">
       <header>
-        <h2>Hablar con Sofía</h2>
-        <p>Tu estratega de marketing con inteligencia artificial.</p>
+        <h2>{t("sofia.title")}</h2>
+        <p>{t("sofia.description")}</p>
       </header>
 
       <div className="sofia-conversation-toolbar">
         <div className="sofia-conversation-heading">
           <div className="sofia-conversation-heading-text">
             <span className="sofia-conversation-label">
-              CONVERSACIÓN ACTUAL
+              {t("sofia.currentConversation")}
             </span>
 
             <strong>{currentTitle}</strong>
 
             {currentConversation && (
               <small>
-                {formatConversationDate(currentConversation.created_at)}
+                {formatConversationDate(currentConversation.created_at, locale) ||
+                  t("sofia.dateUnavailable")}
               </small>
             )}
           </div>
 
           <span className="sofia-conversation-status">
-            {conversationId ? "Activa" : "Sin iniciar"}
+            {conversationId ? t("sofia.active") : t("sofia.notStarted")}
           </span>
         </div>
 
@@ -316,7 +326,7 @@ export default function SofiaChat({
             disabled={chatDisabled}
           >
             <span aria-hidden="true">＋</span>
-            Nueva conversación
+            {t("sofia.newConversation")}
           </button>
 
           <button
@@ -332,20 +342,23 @@ export default function SofiaChat({
             aria-expanded={showHistory}
           >
             <span aria-hidden="true">◷</span>
-            Historial
+            {t("sofia.history")}
             <span aria-hidden="true">{showHistory ? "⌃" : "⌄"}</span>
           </button>
         </div>
 
         {showHistory && (
-          <div className="sofia-history-panel" aria-label="Historial de conversaciones">
+          <div
+            className="sofia-history-panel"
+            aria-label={t("sofia.history")}
+          >
             <div className="sofia-history-heading">
-              <strong>Conversaciones anteriores</strong>
+              <strong>{t("sofia.previousConversations")}</strong>
               <span>{conversations.length}</span>
             </div>
 
             {conversations.length === 0 ? (
-              <p>Todavía no hay conversaciones guardadas.</p>
+              <p>{t("sofia.noConversations")}</p>
             ) : (
               <div className="sofia-history-list">
                 {conversations.map((conversation) => (
@@ -365,14 +378,24 @@ export default function SofiaChat({
                     <span className="sofia-history-item-icon">◉</span>
 
                     <span className="sofia-history-item-details">
-                      <strong>{conversationTitle(conversation)}</strong>
+                      <strong>
+                        {conversationTitle(
+                          conversation,
+                          t("sofia.newCampaign"),
+                        )}
+                      </strong>
                       <small>
-                        {formatConversationDate(conversation.created_at)}
+                        {formatConversationDate(
+                          conversation.created_at,
+                          locale,
+                        ) || t("sofia.dateUnavailable")}
                       </small>
                     </span>
 
                     {conversation.id === conversationId && (
-                      <span className="sofia-history-current">Actual</span>
+                      <span className="sofia-history-current">
+                        {t("sofia.current")}
+                      </span>
                     )}
                   </button>
                 ))}
@@ -385,22 +408,23 @@ export default function SofiaChat({
       <div
         className="sofia-messages"
         role="log"
-        aria-label="Mensajes de la conversación con Sofía"
+        aria-label={t("sofia.messages")}
         aria-live="polite"
         aria-relevant="additions text"
       >
-        {loadingHistory && <p role="status">Cargando conversación…</p>}
+        {loadingHistory && (
+          <p role="status">{t("sofia.loadingConversation")}</p>
+        )}
 
-        {switchingConversation && <p role="status">Cargando conversación…</p>}
+        {switchingConversation && (
+          <p role="status">{t("sofia.loadingConversation")}</p>
+        )}
 
         {!loadingHistory &&
           !switchingConversation &&
           messages.length === 0 &&
           !error && (
-            <p>
-              ¡Hola! Soy Sofía. Cuéntame qué producto quieres promocionar o qué
-              idea tienes para tu negocio.
-            </p>
+            <p>{t("sofia.greeting")}</p>
           )}
 
         {messages.map((item, index) => (
@@ -408,12 +432,12 @@ export default function SofiaChat({
             key={index}
             className={`sofia-message sofia-message--${item.role}`}
           >
-            <strong>{item.role === "user" ? "Tú" : "Sofía"}</strong>
+            <strong>{item.role === "user" ? t("sofia.you") : "Sofia"}</strong>
             <p>{item.content}</p>
           </div>
         ))}
 
-        {loading && <p role="status">Sofía está preparando una respuesta…</p>}
+        {loading && <p role="status">{t("sofia.thinking")}</p>}
 
         <div ref={messagesEndRef} />
       </div>
@@ -423,10 +447,10 @@ export default function SofiaChat({
           {error}
           <button type="button" onClick={retryFailedAction}>
             {errorAction === "send"
-              ? "Reintentar mensaje"
+              ? t("sofia.retryMessage")
               : errorAction === "draft"
-                ? "Reintentar borrador"
-                : "Reintentar carga"}
+                ? t("sofia.retryDraft")
+                : t("sofia.retryLoad")}
           </button>
         </p>
       )}
@@ -438,7 +462,7 @@ export default function SofiaChat({
         }}
       >
         <textarea
-          aria-label="Mensaje para Sofía"
+          aria-label={t("sofia.messageLabel")}
           value={message}
           onChange={(event) => {
             setMessage(event.target.value);
@@ -462,8 +486,8 @@ export default function SofiaChat({
           }}
           placeholder={
             loadingHistory
-              ? "Cargando conversación..."
-              : "Escribe tu mensaje para Sofía..."
+              ? t("sofia.loadingPlaceholder")
+              : t("sofia.messagePlaceholder")
           }
           disabled={chatDisabled}
           maxLength={4000}
@@ -471,7 +495,7 @@ export default function SofiaChat({
         />
 
         <button type="submit" disabled={chatDisabled || !message.trim()}>
-          {loading ? "Enviando..." : "Enviar"}
+          {loading ? t("sofia.sending") : t("sofia.send")}
         </button>
       </form>
 
@@ -483,14 +507,13 @@ export default function SofiaChat({
           disabled={!conversationId || chatDisabled}
         >
           {generatingDraft
-            ? "Sofía y Leo están trabajando..."
-            : "Crear borrador con Leo"}
+            ? t("sofia.generating")
+            : t("sofia.createDraft")}
         </button>
 
         {generatedDraftTitle && (
           <p role="status">
-            Borrador creado: <strong>{generatedDraftTitle}</strong>. Puedes
-            revisarlo en Aprobaciones.
+            {t("sofia.draftCreated", { title: generatedDraftTitle })}
           </p>
         )}
       </div>

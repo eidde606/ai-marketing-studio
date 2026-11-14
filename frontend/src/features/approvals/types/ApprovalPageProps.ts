@@ -16,6 +16,8 @@ export type ApprovalPageProps = {
   loadingDrafts: boolean;
   loadError: string | null;
   pendingCount: number;
+  canApprove: boolean;
+  canPublish: boolean;
   draftMessages: ReactNode;
   visibleDrafts: Draft[];
   approvingIds: string[];

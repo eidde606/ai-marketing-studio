@@ -8,13 +8,19 @@ import {
   type HeyGenVoice,
   type HeyGenVoiceType,
 } from "../services/heygenAssetsApi";
+import { useLocalization } from "../../../app/localization";
 
-const avatarTypes: { value: HeyGenAvatarType | ""; label: string }[] = [
-  { value: "", label: "Todos los tipos" },
-  { value: "digital_twin", label: "Digital Twin" },
-  { value: "photo_avatar", label: "Avatar de foto" },
-  { value: "studio_avatar", label: "Avatar de estudio" },
+const avatarTypes: (HeyGenAvatarType | "")[] = [
+  "",
+  "digital_twin",
+  "photo_avatar",
+  "studio_avatar",
 ];
+const avatarTypeKeys = {
+  studio_avatar: "heygen.avatarType.studio",
+  digital_twin: "heygen.avatarType.digitalTwin",
+  photo_avatar: "heygen.avatarType.photo",
+} as const satisfies Record<HeyGenAvatarType, string>;
 
 export type AssetSelection = { avatar_id: string; voice_id: string };
 export function HeyGenAssetSelector({
@@ -22,6 +28,11 @@ export function HeyGenAssetSelector({
 }: {
   onSelection?: (value: AssetSelection | null) => void;
 }) {
+  const { t } = useLocalization();
+  const tRef = useRef(t);
+  useEffect(() => {
+    tRef.current = t;
+  }, [t]);
   const fieldId = useId();
   const avatarVisit = useRef(0);
   const voiceVisit = useRef(0);
@@ -60,7 +71,7 @@ export function HeyGenAssetSelector({
           setAvatarError(
             err instanceof Error
               ? err.message
-              : "No se pudieron cargar los avatares.",
+              : tRef.current("heygen.avatarLoadError"),
           );
         }
       })
@@ -89,7 +100,7 @@ export function HeyGenAssetSelector({
           setVoiceError(
             err instanceof Error
               ? err.message
-              : "No se pudieron cargar las voces.",
+              : tRef.current("heygen.voiceLoadError"),
           );
         }
       })
@@ -122,7 +133,7 @@ export function HeyGenAssetSelector({
       setAvatarError(
         err instanceof Error
           ? err.message
-          : "No se pudieron cargar más avatares.",
+          : tRef.current("heygen.avatarLoadError"),
       );
     } finally {
       if (visit === avatarVisit.current) setAvatarLoading(false);
@@ -145,7 +156,9 @@ export function HeyGenAssetSelector({
     } catch (err) {
       if (visit !== voiceVisit.current) return;
       setVoiceError(
-        err instanceof Error ? err.message : "No se pudieron cargar más voces.",
+        err instanceof Error
+          ? err.message
+          : tRef.current("heygen.voiceLoadError"),
       );
     } finally {
       if (visit === voiceVisit.current) setVoiceLoading(false);
@@ -206,23 +219,20 @@ export function HeyGenAssetSelector({
         onClick={toggleOpen}
       >
         {open
-          ? "Cerrar recursos de HeyGen"
-          : "Explorar avatares y voces de HeyGen"}
+          ? t("heygen.closeAssets")
+          : t("heygen.exploreAssets")}
       </button>
 
       {open && (
         <div className="heygen-assets">
           <div>
-            <h3>Seleccionar recursos de HeyGen</h3>
-            <p>
-              Explora los recursos disponibles en la cuenta conectada. Esta
-              selección no genera videos ni consume créditos.
-            </p>
+            <h3>{t("heygen.assetsTitle")}</h3>
+            <p>{t("heygen.assetsDescription")}</p>
           </div>
 
           <div className="heygen-field">
             <label htmlFor={`${fieldId}-heygen-avatar-ownership`}>
-              Disponibilidad
+              {t("heygen.availability")}
             </label>
             <select
               id={`${fieldId}-heygen-avatar-ownership`}
@@ -235,14 +245,14 @@ export function HeyGenAssetSelector({
                 setAvatarNextToken(null);
               }}
             >
-              <option value="private">Mis avatares</option>
-              <option value="public">Avatares públicos</option>
+              <option value="private">{t("heygen.myAvatars")}</option>
+              <option value="public">{t("heygen.publicAvatars")}</option>
             </select>
           </div>
 
           <div className="heygen-field">
             <label htmlFor={`${fieldId}-heygen-avatar-type`}>
-              Tipo de avatar
+              {t("heygen.avatarType")}
             </label>
             <select
               id={`${fieldId}-heygen-avatar-type`}
@@ -255,15 +265,17 @@ export function HeyGenAssetSelector({
                 setAvatarNextToken(null);
               }}
             >
-              {avatarTypes.map((option) => (
-                <option key={option.value || "all"} value={option.value}>
-                  {option.label}
+              {avatarTypes.map((value) => (
+                <option key={value || "all"} value={value}>
+                  {value ? t(avatarTypeKeys[value]) : t("heygen.avatarType.all")}
                 </option>
               ))}
             </select>
           </div>
 
-          {avatarLoading && <p role="status">Cargando avatares...</p>}
+          {avatarLoading && (
+            <p role="status">{t("heygen.loadingAvatars")}</p>
+          )}
           {avatarError && (
             <div className="heygen-asset-error">
               <p role="alert">{avatarError}</p>
@@ -278,15 +290,17 @@ export function HeyGenAssetSelector({
                   setAvatarRetry((value) => value + 1);
                 }}
               >
-                Reintentar carga de avatares
+                {t("heygen.retryAvatars")}
               </button>
             </div>
           )}
           {!avatarLoading && !avatarError && avatars.length === 0 && (
-            <p>No hay avatares disponibles con estos filtros.</p>
+            <p>{t("heygen.noAvatars")}</p>
           )}
           <div className="heygen-field">
-            <label htmlFor={`${fieldId}-heygen-selected-avatar`}>Avatar</label>
+            <label htmlFor={`${fieldId}-heygen-selected-avatar`}>
+              {t("heygen.avatar")}
+            </label>
             <select
               id={`${fieldId}-heygen-selected-avatar`}
               value={selectedAvatarId}
@@ -300,10 +314,12 @@ export function HeyGenAssetSelector({
               }}
               disabled={avatarLoading || avatars.length === 0}
             >
-              <option value="">Selecciona un avatar</option>
+              <option value="">{t("heygen.selectAvatar")}</option>
               {selectedAvatarId &&
                 !avatars.some((avatar) => avatar.id === selectedAvatarId) && (
-                  <option value={selectedAvatarId}>Avatar seleccionado</option>
+                  <option value={selectedAvatarId}>
+                    {t("heygen.selectedAvatar")}
+                  </option>
                 )}
               {avatars.map((avatar) => (
                 <option key={avatar.id} value={avatar.id}>
@@ -317,24 +333,31 @@ export function HeyGenAssetSelector({
             <div role="status" style={{ display: "grid", gap: "0.35rem" }}>
               <strong>{selectedAvatar.name}</strong>
               <span>
-                Tipo: {selectedAvatar.avatar_type.replace(/_/g, " ")} · ID:{" "}
-                {selectedAvatar.id}
+                {t("heygen.avatarTypeLabel", {
+                  type: selectedAvatar.avatar_type.replace(/_/g, " "),
+                  id: selectedAvatar.id,
+                })}
               </span>
               {selectedAvatar.default_voice_id && (
                 <small>
-                  Voz predeterminada: {selectedAvatar.default_voice_id}
+                  {t("heygen.defaultVoice", {
+                    id: selectedAvatar.default_voice_id,
+                  })}
                 </small>
               )}
               {selectedAvatar.supported_api_engines?.length ? (
                 <small>
-                  Motores compatibles:{" "}
-                  {selectedAvatar.supported_api_engines.join(", ")}
+                  {t("heygen.supportedEngines", {
+                    engines: selectedAvatar.supported_api_engines.join(", "),
+                  })}
                 </small>
               ) : null}
               {selectedAvatar.preview_image_url && (
                 <img
                   src={selectedAvatar.preview_image_url}
-                  alt={`Vista previa de ${selectedAvatar.name}`}
+                  alt={t("heygen.avatarPreview", {
+                    name: selectedAvatar.name,
+                  })}
                   loading="lazy"
                   style={{
                     width: "100%",
@@ -353,12 +376,16 @@ export function HeyGenAssetSelector({
               disabled={avatarLoading}
               onClick={() => void loadMoreAvatars()}
             >
-              {avatarLoading ? "Cargando..." : "Cargar más avatares"}
+              {avatarLoading
+                ? t("heygen.loadingMoreAvatars")
+                : t("heygen.loadMoreAvatars")}
             </button>
           )}
 
           <div className="heygen-field">
-            <label htmlFor={`${fieldId}-heygen-voice-type`}>Voces</label>
+            <label htmlFor={`${fieldId}-heygen-voice-type`}>
+              {t("heygen.voices")}
+            </label>
             <select
               id={`${fieldId}-heygen-voice-type`}
               value={voiceType}
@@ -370,12 +397,12 @@ export function HeyGenAssetSelector({
                 setVoiceNextToken(null);
               }}
             >
-              <option value="private">Voces de mi cuenta</option>
-              <option value="public">Voces públicas</option>
+              <option value="private">{t("heygen.myVoices")}</option>
+              <option value="public">{t("heygen.publicVoices")}</option>
             </select>
           </div>
 
-          {voiceLoading && <p role="status">Cargando voces...</p>}
+          {voiceLoading && <p role="status">{t("heygen.loadingVoices")}</p>}
           {voiceError && (
             <div className="heygen-asset-error">
               <p role="alert">{voiceError}</p>
@@ -390,15 +417,17 @@ export function HeyGenAssetSelector({
                   setVoiceRetry((value) => value + 1);
                 }}
               >
-                Reintentar carga de voces
+                {t("heygen.retryVoices")}
               </button>
             </div>
           )}
           {!voiceLoading && !voiceError && voices.length === 0 && (
-            <p>No hay voces disponibles con estos filtros.</p>
+            <p>{t("heygen.noVoices")}</p>
           )}
           <div className="heygen-field">
-            <label htmlFor={`${fieldId}-heygen-selected-voice`}>Voz</label>
+            <label htmlFor={`${fieldId}-heygen-selected-voice`}>
+              {t("heygen.voice")}
+            </label>
             <select
               id={`${fieldId}-heygen-selected-voice`}
               value={selectedVoiceId}
@@ -407,16 +436,20 @@ export function HeyGenAssetSelector({
                 voiceLoading || (voices.length === 0 && !defaultVoiceMissing)
               }
             >
-              <option value="">Selecciona una voz</option>
+              <option value="">{t("heygen.selectVoice")}</option>
               {defaultVoiceMissing && (
                 <option value={selectedAvatar?.default_voice_id ?? ""}>
-                  Voz predeterminada de {selectedAvatar?.name}
+                  {t("heygen.defaultVoiceFor", {
+                    name: selectedAvatar?.name ?? "",
+                  })}
                 </option>
               )}
               {selectedVoiceId &&
                 !voices.some((voice) => voice.voice_id === selectedVoiceId) &&
                 !defaultVoiceMissing && (
-                  <option value={selectedVoiceId}>Voz seleccionada</option>
+                  <option value={selectedVoiceId}>
+                    {t("heygen.selectedVoice")}
+                  </option>
                 )}
               {voices.map((voice) => (
                 <option
@@ -435,13 +468,14 @@ export function HeyGenAssetSelector({
 
           {onSelection && !valid && (
             <p>
-              Selecciona un avatar disponible y una voz activa de la lista para
-              continuar.
+              {t("heygen.selectActiveAssets")}
             </p>
           )}
           {selectedVoice && (
             <div role="status">
-              Voz seleccionada: {selectedVoice.name}
+              {t("heygen.selectedVoiceLabel", {
+                name: selectedVoice.name,
+              })}
               {selectedVoice.language ? ` · ${selectedVoice.language}` : ""}
               {" · ID: "}
               {selectedVoice.voice_id}
@@ -456,7 +490,9 @@ export function HeyGenAssetSelector({
               disabled={voiceLoading}
               onClick={() => void loadMoreVoices()}
             >
-              {voiceLoading ? "Cargando..." : "Cargar más voces"}
+              {voiceLoading
+                ? t("heygen.loadingMoreVoices")
+                : t("heygen.loadMoreVoices")}
             </button>
           )}
         </div>

@@ -59,8 +59,8 @@ describe("InstagramConnection", () => {
     );
     render(<InstagramConnection businessId="business-1" />);
 
-    expect(await screen.findByText("No conectada")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Conectar Instagram" }));
+    expect(await screen.findByText("Not connected")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Connect Instagram" }));
     expect((await screen.findByRole("alert")).textContent).toContain(
       "Conecta primero una página de Facebook",
     );
@@ -73,11 +73,11 @@ describe("InstagramConnection", () => {
     );
     render(<InstagramConnection businessId="business-1" />);
 
-    expect(await screen.findByText("Conectada y autorizada")).toBeTruthy();
+    expect(await screen.findByText("Connected and authorized")).toBeTruthy();
     expect(screen.getByText("@holacompravibes")).toBeTruthy();
-    expect(screen.getByText("Página asociada: Hola Compra Vibes")).toBeTruthy();
+    expect(screen.getByText("Facebook Page: Hola Compra Vibes")).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: "Reconectar Instagram" }),
+      screen.getByRole("button", { name: "Reconnect Instagram" }),
     ).toBeTruthy();
   });
 
@@ -88,16 +88,16 @@ describe("InstagramConnection", () => {
     render(<InstagramConnection businessId="business-1" />);
 
     expect(
-      await screen.findByText("Vinculada · faltan permisos"),
+      await screen.findByText("Linked · permissions missing"),
     ).toBeTruthy();
-    expect(screen.getByText(/Permisos pendientes: instagram_content_publish/)).toBeTruthy();
-    expect(screen.queryByText("Conectada y autorizada")).toBeNull();
+    expect(screen.getByText(/Missing permissions: instagram_content_publish/)).toBeTruthy();
+    expect(screen.queryByText("Connected and authorized")).toBeNull();
   });
 
   it.each([
-    ["reauthorization_required", "Requiere reconexión"],
-    ["permission_error", "Permisos insuficientes"],
-    ["discovery_error", "No se pudo verificar"],
+    ["reauthorization_required", "Reauthorization required"],
+    ["permission_error", "Insufficient permissions"],
+    ["discovery_error", "Could not verify"],
   ] as const)("shows the actionable %s state", async (status, label) => {
     vi.mocked(getInstagramConnection).mockResolvedValue(connection(status));
     render(<InstagramConnection businessId="business-1" />);
@@ -116,7 +116,7 @@ describe("InstagramConnection", () => {
     render(<InstagramConnection businessId="business-1" />);
 
     expect(
-      await screen.findByText("Instagram quedó conectado y autorizado por Meta."),
+      await screen.findByText("Instagram was connected and authorized by Meta."),
     ).toBeTruthy();
     expect(getInstagramConnection).toHaveBeenCalledWith("business-1");
     expect(window.location.hash).toBe("");
@@ -124,10 +124,10 @@ describe("InstagramConnection", () => {
 
   it("explains when no business is selected", () => {
     render(<InstagramConnection businessId="" />);
-    expect(screen.getByText("Selecciona un negocio para administrar Instagram.")).toBeTruthy();
+    expect(screen.getByText("Select a business to manage Instagram.")).toBeTruthy();
     expect(
       (screen.getByRole("button", {
-        name: "Conectar Instagram",
+        name: "Connect Instagram",
       }) as HTMLButtonElement).disabled,
     ).toBe(true);
     expect(getInstagramConnection).not.toHaveBeenCalled();

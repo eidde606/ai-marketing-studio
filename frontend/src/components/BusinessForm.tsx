@@ -5,6 +5,7 @@ import {
   type Business,
   type BusinessCreate,
 } from '../services/businessesApi';
+import { useLocalization } from '../app/localization';
 
 type Props = {
   onCreated: (business: Business) => void;
@@ -12,6 +13,7 @@ type Props = {
 };
 
 export default function BusinessForm({ onCreated, onCancel }: Props) {
+  const { t } = useLocalization();
   const [form, setForm] = useState<BusinessCreate>({
     name: '',
     description: '',
@@ -49,7 +51,7 @@ export default function BusinessForm({ onCreated, onCancel }: Props) {
 
       onCreated(business);
     } catch {
-      setError('No se pudo guardar el negocio. Inténtalo de nuevo.');
+      setError(t('businessForm.saveError'));
     } finally {
       setSaving(false);
     }
@@ -57,76 +59,75 @@ export default function BusinessForm({ onCreated, onCancel }: Props) {
 
   return (
     <section className="panel business-form-panel">
-      <h2>Agregar negocio</h2>
-      <p>
-        Cuéntanos sobre tu negocio para que el equipo IA pueda
-        crear estrategias y contenido personalizado.
-      </p>
+      <h2>{t('businessForm.title')}</h2>
+      <p>{t('businessForm.description')}</p>
 
       <form onSubmit={handleSubmit}>
-        <label htmlFor="business-name">Nombre del negocio *</label>
+        <label htmlFor="business-name">{t('businessForm.name')} *</label>
         <input
           id="business-name"
           required
           maxLength={120}
           value={form.name}
           onChange={(event) => updateField('name', event.target.value)}
-          placeholder="Ej. Latitude Food Fusion"
+          placeholder={t('businessForm.namePlaceholder')}
         />
 
-        <label htmlFor="business-industry">Tipo de negocio</label>
+        <label htmlFor="business-industry">{t('businessForm.industry')}</label>
         <input
           id="business-industry"
           value={form.industry ?? ''}
           onChange={(event) => updateField('industry', event.target.value)}
-          placeholder="Ej. Restaurante, entretenimiento, tienda online"
+          placeholder={t('businessForm.industryPlaceholder')}
         />
 
-        <label htmlFor="business-description">Descripción</label>
+        <label htmlFor="business-description">
+          {t('businessForm.descriptionLabel')}
+        </label>
         <textarea
           id="business-description"
           value={form.description ?? ''}
           onChange={(event) => updateField('description', event.target.value)}
-          placeholder="Describe tu negocio y lo que lo hace especial"
+          placeholder={t('businessForm.descriptionPlaceholder')}
         />
 
-        <label htmlFor="business-products">Productos o servicios</label>
+        <label htmlFor="business-products">{t('businessForm.products')}</label>
         <textarea
           id="business-products"
           value={form.products_services ?? ''}
           onChange={(event) =>
             updateField('products_services', event.target.value)
           }
-          placeholder="Ej. Encebollado, cazuela, bolones y comida ecuatoriana"
+          placeholder={t('businessForm.productsPlaceholder')}
         />
 
-        <label htmlFor="business-audience">Público objetivo</label>
+        <label htmlFor="business-audience">{t('businessForm.audience')}</label>
         <textarea
           id="business-audience"
           value={form.target_audience ?? ''}
           onChange={(event) =>
             updateField('target_audience', event.target.value)
           }
-          placeholder="¿A qué tipo de clientes quieres llegar?"
+          placeholder={t('businessForm.audiencePlaceholder')}
         />
 
-        <label htmlFor="business-area">Zona de servicio</label>
+        <label htmlFor="business-area">{t('businessForm.area')}</label>
         <input
           id="business-area"
           value={form.service_area ?? ''}
           onChange={(event) => updateField('service_area', event.target.value)}
-          placeholder="Ej. Richmond, Hopewell y Petersburg, Virginia"
+          placeholder={t('businessForm.areaPlaceholder')}
         />
 
-        <label htmlFor="business-voice">Estilo de comunicación</label>
+        <label htmlFor="business-voice">{t('businessForm.voice')}</label>
         <input
           id="business-voice"
           value={form.brand_voice ?? ''}
           onChange={(event) => updateField('brand_voice', event.target.value)}
-          placeholder="Ej. Familiar, alegre, profesional"
+          placeholder={t('businessForm.voicePlaceholder')}
         />
 
-        <label htmlFor="business-website">Sitio web</label>
+        <label htmlFor="business-website">{t('businessForm.website')}</label>
         <input
           id="business-website"
           type="url"
@@ -135,28 +136,30 @@ export default function BusinessForm({ onCreated, onCancel }: Props) {
           placeholder="https://tusitio.com"
         />
 
-        <label htmlFor="business-goals">Objetivos de marketing</label>
+        <label htmlFor="business-goals">{t('businessForm.goals')}</label>
         <textarea
           id="business-goals"
           value={form.marketing_goals ?? ''}
           onChange={(event) =>
             updateField('marketing_goals', event.target.value)
           }
-          placeholder="Ej. Aumentar pedidos, conseguir reservas, atraer clientes"
+          placeholder={t('businessForm.goalsPlaceholder')}
         />
 
-        <label htmlFor="business-platforms">Redes sociales preferidas</label>
+        <label htmlFor="business-platforms">
+          {t('businessForm.platforms')}
+        </label>
         <input
           id="business-platforms"
           value={form.preferred_platforms ?? ''}
           onChange={(event) =>
             updateField('preferred_platforms', event.target.value)
           }
-          placeholder="Ej. Instagram, Facebook, TikTok"
+          placeholder={t('businessForm.platformsPlaceholder')}
         />
 
         <label htmlFor="business-frequency">
-          Frecuencia de publicaciones
+          {t('businessForm.frequency')}
         </label>
         <select
           id="business-frequency"
@@ -174,12 +177,12 @@ export default function BusinessForm({ onCreated, onCancel }: Props) {
             font: 'inherit',
           }}
         >
-          <option value="">Seleccionar frecuencia</option>
-          <option value="daily">Todos los días</option>
-          <option value="5_per_week">5 veces por semana</option>
-          <option value="3_per_week">3 veces por semana</option>
-          <option value="weekly">Una vez por semana</option>
-          <option value="manual">Según sea necesario</option>
+          <option value="">{t('businessForm.chooseFrequency')}</option>
+          <option value="daily">{t('businessForm.frequency.daily')}</option>
+          <option value="5_per_week">{t('businessForm.frequency.five')}</option>
+          <option value="3_per_week">{t('businessForm.frequency.three')}</option>
+          <option value="weekly">{t('businessForm.frequency.weekly')}</option>
+          <option value="manual">{t('businessForm.frequency.manual')}</option>
         </select>
 
         {error && <p role="alert">{error}</p>}
@@ -191,7 +194,7 @@ export default function BusinessForm({ onCreated, onCancel }: Props) {
             onClick={onCancel}
             disabled={saving}
           >
-            Cancelar
+            {t('businessForm.cancel')}
           </button>
 
           <button
@@ -199,7 +202,9 @@ export default function BusinessForm({ onCreated, onCancel }: Props) {
             className="primary-button"
             disabled={saving || !form.name?.trim()}
           >
-            {saving ? 'Guardando...' : 'Guardar negocio'}
+            {saving
+              ? t('businessForm.saving')
+              : t('businessForm.save')}
           </button>
         </div>
       </form>

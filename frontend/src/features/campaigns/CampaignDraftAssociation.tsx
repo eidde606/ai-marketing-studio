@@ -1,5 +1,6 @@
 import type { Draft } from "../../services/draftsApi";
-import { draftLabels } from "./campaignLabels";
+import { useLocalization } from "../../app/localization";
+import { draftTranslationKeys } from "./campaignLabels";
 
 type Props = {
   availableDrafts: Draft[];
@@ -16,20 +17,32 @@ export default function CampaignDraftAssociation({
   onSelect,
   onAssociate,
 }: Props) {
+  const { t } = useLocalization();
   return (
     <>
       <div className="campaign-associate">
-        <label htmlFor="campaign-content">Asociar contenido existente</label>
+        <label htmlFor="campaign-content">
+          {t("campaigns.associateExisting")}
+        </label>
         <select
           id="campaign-content"
           value={draftId}
           disabled={busy}
           onChange={(e) => onSelect(e.target.value)}
         >
-          <option value="">Selecciona contenido sin campaña</option>
+          <option value="">{t("campaigns.selectUnassigned")}</option>
           {availableDrafts.map((draft) => (
             <option key={draft.id} value={draft.id}>
-              {draft.title} — {draftLabels[draft.status] ?? draft.status}
+              {draft.title} —{" "}
+              {draftTranslationKeys[
+                draft.status as keyof typeof draftTranslationKeys
+              ]
+                ? t(
+                    draftTranslationKeys[
+                      draft.status as keyof typeof draftTranslationKeys
+                    ],
+                  )
+                : draft.status}
             </option>
           ))}
         </select>
@@ -39,14 +52,11 @@ export default function CampaignDraftAssociation({
           disabled={busy || !draftId}
           onClick={() => void onAssociate(draftId)}
         >
-          Asociar
+          {t("campaigns.associate")}
         </button>
       </div>
       {!availableDrafts.length && (
-        <p className="campaign-note">
-          No hay contenido disponible sin campaña. Puedes crear contenido con
-          Sofía y Leo o desvincularlo de otra campaña.
-        </p>
+        <p className="campaign-note">{t("campaigns.noAvailableContent")}</p>
       )}
     </>
   );

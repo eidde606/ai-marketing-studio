@@ -9,6 +9,7 @@ import {
   type CampaignInput,
 } from "../../services/campaignsApi";
 import { getDrafts, type Draft } from "../../services/draftsApi";
+import { useLocalization } from "../../app/localization";
 
 import CampaignList from "./CampaignList";
 import CampaignForm from "./CampaignForm";
@@ -23,6 +24,7 @@ const emptyForm: CampaignInput = {
   end_date: null,
 };
 export default function CampaignsPage({ businessId }: { businessId: string }) {
+  const { t } = useLocalization();
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -34,11 +36,16 @@ export default function CampaignsPage({ businessId }: { businessId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const mounted = useRef(false);
+  const tRef = useRef(t);
   const mutationLock = useRef(false);
   const selected = campaigns.find((campaign) => campaign.id === selectedId);
   const availableDrafts = drafts.filter(
     (draft) => !draft.deleted_at && !draft.campaign_id,
   );
+
+  useEffect(() => {
+    tRef.current = t;
+  }, [t]);
 
   useEffect(() => {
     let active = true;
@@ -57,7 +64,7 @@ export default function CampaignsPage({ businessId }: { businessId: string }) {
       })
       .catch(() => {
         if (active)
-          setError("No se pudieron cargar las campañas. Inténtalo de nuevo.");
+          setError(tRef.current("campaigns.loadError"));
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -79,7 +86,9 @@ export default function CampaignsPage({ businessId }: { businessId: string }) {
     } catch (err) {
       if (mounted.current)
         setError(
-          err instanceof Error ? err.message : "No se pudo guardar la campaña.",
+          err instanceof Error
+            ? err.message
+            : tRef.current("campaigns.saveError"),
         );
     } finally {
       mutationLock.current = false;
@@ -139,7 +148,7 @@ export default function CampaignsPage({ businessId }: { businessId: string }) {
     if (
       !campaign ||
       !window.confirm(
-        `¿Eliminar permanentemente la campaña "${campaign.name}"? Sus borradores, aprobaciones y publicaciones se conservarán sin asignar a una campaña.`,
+        t("campaigns.deleteConfirm", { name: campaign.name }),
       )
     ) {
       return;
@@ -162,7 +171,7 @@ export default function CampaignsPage({ businessId }: { businessId: string }) {
       setEditingId(null);
       setDraftId("");
       setSuccess(
-        "Campaña eliminada correctamente. Su contenido e historial se conservaron.",
+        t("campaigns.deleted"),
       );
     });
   }
@@ -186,18 +195,16 @@ export default function CampaignsPage({ businessId }: { businessId: string }) {
 
   if (!businessId)
     return (
-      <section className="panel">
-        Selecciona un negocio para gestionar sus campañas.
-      </section>
+      <section className="panel">{t("campaigns.noBusiness")}</section>
     );
 
   return (
     <div className="campaign-workspace">
       <section className="page-intro campaign-page-intro">
         <div>
-          <span className="eyebrow">Planifica</span>
-          <h2>Campañas</h2>
-          <p>Define objetivos y organiza las piezas de contenido de tu negocio.</p>
+          <span className="eyebrow">{t("campaigns.eyebrow")}</span>
+          <h2>{t("campaigns.title")}</h2>
+          <p>{t("campaigns.description")}</p>
         </div>
         <button
           type="button"
@@ -209,15 +216,15 @@ export default function CampaignsPage({ businessId }: { businessId: string }) {
             setError(null);
           }}
         >
-          Nueva campaña
+          {t("campaigns.new")}
         </button>
       </section>
       <section className="panel campaign-management">
         <div className="panel-heading">
           <div>
-            <span className="eyebrow">Organización del trabajo</span>
-            <h3>Tu plan de marketing</h3>
-            <p>Selecciona una campaña para consultar sus objetivos y resultados.</p>
+            <span className="eyebrow">{t("campaigns.organization")}</span>
+            <h3>{t("campaigns.planTitle")}</h3>
+            <p>{t("campaigns.planDescription")}</p>
           </div>
           <div className="campaign-actions">
             <button
@@ -226,7 +233,7 @@ export default function CampaignsPage({ businessId }: { businessId: string }) {
               disabled={busy || loading}
               onClick={() => void refresh()}
             >
-              Actualizar
+              {t("campaigns.refresh")}
             </button>
           </div>
         </div>
@@ -240,12 +247,16 @@ export default function CampaignsPage({ businessId }: { businessId: string }) {
             {success}
           </p>
         )}
-        {loading && <p className="workspace-state" role="status">Cargando campañas…</p>}
+        {loading && (
+          <p className="workspace-state" role="status">
+            {t("campaigns.loading")}
+          </p>
+        )}
         {!loading && !campaigns.length && (
           <div className="campaign-empty">
             <span aria-hidden="true">✦</span>
-            <strong>Aún no hay campañas</strong>
-            <p>Crea una para definir objetivos y dar estructura a tu contenido.</p>
+            <strong>{t("campaigns.emptyTitle")}</strong>
+            <p>{t("campaigns.emptyDescription")}</p>
           </div>
         )}
         <CampaignList

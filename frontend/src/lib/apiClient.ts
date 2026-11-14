@@ -3,6 +3,16 @@ import { supabase } from "../services/supabaseClient";
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL?.trim() || "http://127.0.0.1:8000";
 
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 /** Send one authenticated request to our backend and read its JSON response. */
 export async function apiRequest<T>(
   path: string,
@@ -26,8 +36,9 @@ export async function apiRequest<T>(
 
   if (!response.ok) {
     const body = await response.json().catch(() => null);
-    throw new Error(
+    throw new ApiError(
       typeof body?.detail === "string" ? body.detail : fallbackError,
+      response.status,
     );
   }
 

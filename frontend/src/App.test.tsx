@@ -20,6 +20,11 @@ const mocks = vi.hoisted(() => ({
   updateUser: vi.fn(),
   unsubscribe: vi.fn(),
   onAuthStateChange: vi.fn(),
+  getAccount: vi.fn(),
+  updateAccountPreferences: vi.fn(),
+  getBusinessPreferences: vi.fn(),
+  updateBusinessPreferences: vi.fn(),
+  getHeyGenUsage: vi.fn(),
   getBusinesses: vi.fn(),
   getDrafts: vi.fn(),
   getConnectedFacebookAccounts: vi.fn(),
@@ -43,6 +48,14 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./services/supabaseClient", () => ({ supabase: { auth: mocks } }));
 vi.mock("./services/businessesApi", () => ({
   getBusinesses: mocks.getBusinesses,
+}));
+vi.mock("./services/accountApi", async (original) => ({
+  ...(await original<object>()),
+  getAccount: mocks.getAccount,
+  updateAccountPreferences: mocks.updateAccountPreferences,
+  getBusinessPreferences: mocks.getBusinessPreferences,
+  updateBusinessPreferences: mocks.updateBusinessPreferences,
+  getHeyGenUsage: mocks.getHeyGenUsage,
 }));
 vi.mock("./services/draftsApi", async (original) => ({
   ...(await original<object>()),
@@ -237,13 +250,15 @@ async function openApp() {
   await screen.findByRole("option", { name: "Negocio a" });
 }
 function select(id: string) {
-  fireEvent.change(screen.getByLabelText("Seleccionar negocio"), {
-    target: { value: id },
-  });
+  fireEvent.change(
+    screen.getByLabelText(/(Seleccionar negocio|Select business)/),
+    { target: { value: id } },
+  );
 }
 beforeEach(() => {
   vi.resetAllMocks();
   localStorage.clear();
+  localStorage.setItem("ai-marketing-studio:interface-language", "es");
   vi.stubGlobal(
     "fetch",
     vi.fn(() => {
@@ -257,6 +272,47 @@ beforeEach(() => {
     return { data: { subscription: { unsubscribe: mocks.unsubscribe } } };
   });
   mocks.signOut.mockImplementation(async () => authChange("SIGNED_OUT", null));
+  mocks.getAccount.mockResolvedValue({
+    user_id: "user-1",
+    preferences: { interface_language: "en", conversation_language: "en" },
+    businesses: ["a", "b"].map((id) => ({
+      id,
+      name: `Negocio ${id}`,
+      membership_id: `membership-${id}`,
+      role: "owner",
+      capabilities: ["publish"],
+    })),
+    features: {
+      public_registration: false,
+      facebook_publishing: true,
+      tiktok_direct_publishing: false,
+      tiktok_manual_export: true,
+      instagram_publishing: false,
+      instagram_connection: true,
+      mia_analysis: false,
+      scheduling: false,
+    },
+  });
+  mocks.updateAccountPreferences.mockResolvedValue({
+    interface_language: "es",
+    conversation_language: "en",
+  });
+  mocks.getBusinessPreferences.mockResolvedValue({
+    marketing_content_language: "en",
+  });
+  mocks.updateBusinessPreferences.mockResolvedValue({
+    marketing_content_language: "en",
+  });
+  mocks.getHeyGenUsage.mockResolvedValue({
+    business_id: "a",
+    configured: false,
+    limits: null,
+    attempts_used: 0,
+    active_jobs: 0,
+    remaining_generations: 0,
+    period: "lifetime",
+    unit: "generation_attempts",
+  });
   mocks.getBusinesses.mockResolvedValue([business("a"), business("b")]);
   mocks.getDrafts.mockResolvedValue([]);
   mocks.getConnectedFacebookAccounts.mockResolvedValue([]);
@@ -388,7 +444,7 @@ it("keeps all navigation destinations keyboard-focusable and closes mobile navig
 
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(
-    screen.getByRole("heading", { name: "Analíticas", level: 2 }),
+    screen.getByRole("heading", { name: "Resultados", level: 2 }),
   ).toBeTruthy();
   expect(localStorage.getItem("ai-marketing-studio:section")).toBe(
     "Analíticas",
@@ -397,7 +453,11 @@ it("keeps all navigation destinations keyboard-focusable and closes mobile navig
 it("selects the first business and remembers changes per user", async () => {
   await openApp();
   expect(
-    (screen.getByLabelText("Seleccionar negocio") as HTMLSelectElement).value,
+    (
+      screen.getByLabelText(
+        /(Seleccionar negocio|Select business)/,
+      ) as HTMLSelectElement
+    ).value,
   ).toBe("a");
   select("b");
   expect(localStorage.getItem("ai-marketing-studio:business:user-1")).toBe("b");
@@ -429,7 +489,11 @@ it("handles empty businesses", async () => {
   render(<App />);
   await screen.findByText("Sin negocios");
   expect(
-    (screen.getByLabelText("Seleccionar negocio") as HTMLSelectElement)
+    (
+      screen.getByLabelText(
+        /(Seleccionar negocio|Select business)/,
+      ) as HTMLSelectElement
+    )
       .disabled,
   ).toBe(true);
   expect(mocks.getDrafts).not.toHaveBeenCalled();
@@ -451,7 +515,7 @@ it.each([false, true])(
       id === "a" ? old.promise : Promise.resolve([draft("b")]),
     );
     await openApp();
-    expect(await screen.findByText("Cargando borradores...")).toBeTruthy();
+    expect(await screen.findByText("Cargando borradores…")).toBeTruthy();
     select("b");
     await screen.findByText("Borrador b");
     await act(async () => {
@@ -467,7 +531,7 @@ it("ignores businesses arriving after logout", async () => {
   const old = deferred<Business[]>();
   mocks.getBusinesses.mockReturnValue(old.promise);
   render(<App />);
-  await screen.findByRole("heading", { name: "Resumen" });
+  await screen.findByRole("heading", { name: "Iniciando tu espacio de trabajo…" });
   act(() => authChange("SIGNED_OUT", null));
   await act(async () => old.resolve([business("a")]));
   expect(mocks.getDrafts).not.toHaveBeenCalled();
@@ -478,7 +542,11 @@ it("creates and selects a business; navigation closes its form", async () => {
   fireEvent.click(screen.getByText("+ Agregar negocio"));
   fireEvent.click(screen.getByText("Crear negocio de prueba"));
   expect(
-    (screen.getByLabelText("Seleccionar negocio") as HTMLSelectElement).value,
+    (
+      screen.getByLabelText(
+        /(Seleccionar negocio|Select business)/,
+      ) as HTMLSelectElement
+    ).value,
   ).toBe("c");
   fireEvent.click(screen.getByText("+ Agregar negocio"));
   fireEvent.click(screen.getByRole("button", { name: "Campañas" }));
@@ -496,7 +564,7 @@ it("preserves Spanish navigation restoration and fallback", async () => {
   localStorage.setItem("ai-marketing-studio:section", "Analíticas");
   render(<App />);
   expect(
-    await screen.findByRole("heading", { name: "Analíticas", level: 2 }),
+    await screen.findByRole("heading", { name: "Resultados", level: 2 }),
   ).toBeTruthy();
 });
 it("shows draft loading failures", async () => {
@@ -629,7 +697,7 @@ it("does not reload businesses or drafts on token refresh", async () => {
   expect(mocks.getBusinesses).toHaveBeenCalledTimes(businessCalls);
   expect(mocks.getDrafts).toHaveBeenCalledTimes(draftCalls);
 });
-it("ignores stale Facebook connection status after switching businesses", async () => {
+it("does not present unavailable Mía analytics as operational", async () => {
   const old = deferred<unknown[]>();
   mocks.getConnectedFacebookAccounts.mockImplementation((id: string) =>
     id === "a" ? old.promise : Promise.resolve([]),
@@ -637,18 +705,18 @@ it("ignores stale Facebook connection status after switching businesses", async 
   await openApp();
   select("b");
   fireEvent.click(screen.getByRole("button", { name: "Equipo IA" }));
-  await screen.findByText(
-    "Conecta una página de Facebook para consultar estadísticas",
-  );
+  expect(
+    screen.queryByText("Conecta una página de Facebook para consultar estadísticas"),
+  ).toBeNull();
   await act(async () => old.resolve([{ id: "old-account" }]));
   expect(
     screen.queryByText("Análisis de interacciones de Facebook disponible"),
   ).toBeNull();
   expect(
-    screen.getByText(
+    screen.queryByText(
       "Conecta una página de Facebook para consultar estadísticas",
     ),
-  ).toBeTruthy();
+  ).toBeNull();
 });
 it("keeps the mobile Spanish navigation working", async () => {
   await openApp();
@@ -676,7 +744,7 @@ it.each([false, true])(
     const old = deferred<Draft[]>();
     mocks.getDrafts.mockReturnValueOnce(old.promise).mockResolvedValue([]);
     await openApp();
-    await screen.findByText("Cargando borradores...");
+    await screen.findByText("Cargando borradores…");
     act(() => authChange("SIGNED_OUT", null));
     expect(screen.getByText("Iniciar sesión")).toBeTruthy();
     act(() => authChange("SIGNED_IN", session));

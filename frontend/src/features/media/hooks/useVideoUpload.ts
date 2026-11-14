@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { uploadDraftVideo } from "../services/videoApi";
+import { useLocalization } from "../../../app/localization";
 
 export function useVideoUpload(draftId: string, onUploaded: () => void) {
+  const { t } = useLocalization();
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -20,7 +22,7 @@ export function useVideoUpload(draftId: string, onUploaded: () => void) {
 
     if (!isMp4) {
       setFile(null);
-      setError("Solo se permiten archivos de video MP4.");
+      setError(t("videoUpload.mp4Only"));
       return;
     }
 
@@ -39,7 +41,7 @@ export function useVideoUpload(draftId: string, onUploaded: () => void) {
       setFile(null);
       onUploaded();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Error al subir el video.");
+      setError(err instanceof Error ? err.message : t("videoUpload.error"));
     } finally {
       setUploading(false);
     }

@@ -1,40 +1,40 @@
 import { Instagram } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   getInstagramConnection,
   startInstagramConnection,
   type InstagramConnection as InstagramConnectionData,
 } from "../services/instagramApi";
+import { useLocalization } from "../app/localization";
 
 type Props = { businessId: string };
 
-const statusLabels: Record<InstagramConnectionData["status"], string> = {
-  not_connected: "No conectada",
-  linked_not_api_authorized: "Vinculada · faltan permisos",
-  connected_and_authorized: "Conectada y autorizada",
-  reauthorization_required: "Requiere reconexión",
-  permission_error: "Permisos insuficientes",
-  discovery_error: "No se pudo verificar",
-};
+const statusTranslationKeys = {
+  not_connected: "instagram.status.notConnected",
+  linked_not_api_authorized: "instagram.status.linked",
+  connected_and_authorized: "instagram.status.connected",
+  reauthorization_required: "instagram.status.reauthorize",
+  permission_error: "instagram.status.permission",
+  discovery_error: "instagram.status.discovery",
+} as const satisfies Record<InstagramConnectionData["status"], string>;
 
-const callbackMessages: Record<string, string> = {
-  connected_and_authorized: "Instagram quedó conectado y autorizado por Meta.",
-  linked_not_api_authorized:
-    "La cuenta está vinculada, pero falta el permiso para publicar. Revisa Meta y vuelve a conectar.",
-  not_connected:
-    "La página autorizada no devolvió una cuenta profesional de Instagram vinculada.",
-  reauthorization_required:
-    "Meta requiere una nueva autorización. Revisa los permisos e inténtalo otra vez.",
-  permission_error:
-    "Meta no concedió todos los permisos solicitados. Revisa la configuración de Instagram Login.",
-  discovery_error:
-    "Meta no permitió verificar la página y la cuenta de Instagram. Revisa el acceso a la página.",
-  invalid_state:
-    "La solicitud de conexión expiró o ya se utilizó. Inicia una conexión nueva.",
-  authorization_declined: "No se completó la autorización de Instagram.",
-};
+const callbackMessageKeys = {
+  connected_and_authorized: "instagram.callback.connected",
+  linked_not_api_authorized: "instagram.callback.linked",
+  not_connected: "instagram.callback.notConnected",
+  reauthorization_required: "instagram.callback.reauthorize",
+  permission_error: "instagram.callback.permission",
+  discovery_error: "instagram.callback.discovery",
+  invalid_state: "instagram.callback.invalid",
+  authorization_declined: "instagram.callback.declined",
+} as const;
 
 export default function InstagramConnection({ businessId }: Props) {
+  const { t } = useLocalization();
+  const tRef = useRef(t);
+  useEffect(() => {
+    tRef.current = t;
+  }, [t]);
   const [snapshot, setSnapshot] = useState<{
     businessId: string;
     retry: number;
@@ -47,12 +47,14 @@ export default function InstagramConnection({ businessId }: Props) {
     businessId: string;
     message: string;
   } | null>(null);
-  const [notice] = useState(() => {
+  const [callbackCode] = useState(() => {
     const match = window.location.hash.match(/^#instagram_result=([^&]+)/);
-    return match
-      ? callbackMessages[match[1]] ?? "Se recibió la respuesta de Meta."
-      : "";
+    return match?.[1] ?? "";
   });
+  const notice = callbackCode
+    ? t(callbackMessageKeys[callbackCode as keyof typeof callbackMessageKeys] ??
+        "instagram.callback.received")
+    : "";
   const currentSnapshot =
     snapshot?.businessId === businessId && snapshot.retry === retry
       ? snapshot
@@ -98,7 +100,7 @@ export default function InstagramConnection({ businessId }: Props) {
             error:
               cause instanceof Error
                 ? cause.message
-                : "No se pudo verificar la conexión de Instagram.",
+                : tRef.current("instagram.verifyError"),
           });
         }
       });
@@ -120,7 +122,7 @@ export default function InstagramConnection({ businessId }: Props) {
         message:
           cause instanceof Error
             ? cause.message
-            : "No se pudo iniciar la conexión con Instagram.",
+            : tRef.current("instagram.connectError"),
       });
       setConnecting(false);
     }
@@ -145,15 +147,14 @@ export default function InstagramConnection({ businessId }: Props) {
           </div>
           <div>
             <span className="eyebrow">Meta</span>
-            <h2>Conexión con Instagram</h2>
-            <p>
-              Autoriza la cuenta profesional vinculada a la página de Facebook
-              de este negocio.
-            </p>
+            <h2>{t("instagram.title")}</h2>
+            <p>{t("instagram.description")}</p>
           </div>
         </div>
         <span className={`social-status ${statusClass}`} role="status">
-          {loading ? "Verificando" : statusLabels[status]}
+          {loading
+            ? t("instagram.status.loading")
+            : t(statusTranslationKeys[status])}
         </span>
       </div>
 
@@ -162,19 +163,22 @@ export default function InstagramConnection({ businessId }: Props) {
           <strong>
             {connection?.username
               ? `@${connection.username}`
-              : "Cuenta de Instagram"}
+              : t("instagram.account")}
           </strong>
-          <p>
-            {connection?.message ??
-              "La conexión se verifica con Meta. Vincular una cuenta en Business Suite no concede por sí solo permisos de API."}
-          </p>
+          {connection?.message && <p>{connection.message}</p>}
+          <p>{t("instagram.connectionOnly")}</p>
           {connection?.facebook_page_name && (
-            <p>Página asociada: {connection.facebook_page_name}</p>
+            <p>
+              {t("instagram.page", {
+                name: connection.facebook_page_name,
+              })}
+            </p>
           )}
           {connection?.missing_permissions.length ? (
             <p>
-              Permisos pendientes:{" "}
-              {connection.missing_permissions.join(", ")}
+              {t("instagram.missingPermissions", {
+                permissions: connection.missing_permissions.join(", "),
+              })}
             </p>
           ) : null}
         </div>
@@ -186,16 +190,16 @@ export default function InstagramConnection({ businessId }: Props) {
         >
           <Instagram size={18} aria-hidden="true" />
           {connecting
-            ? "Abriendo Meta…"
+            ? t("instagram.opening")
             : connection?.username || connected
-              ? "Reconectar Instagram"
-              : "Conectar Instagram"}
+              ? t("instagram.reconnect")
+              : t("instagram.connect")}
         </button>
       </div>
 
       {loading && (
         <p className="facebook-connection-message" role="status">
-          Verificando el estado guardado de Instagram…
+          {t("instagram.loading")}
         </p>
       )}
       {notice && (
@@ -213,13 +217,13 @@ export default function InstagramConnection({ businessId }: Props) {
             className="outline-button"
             onClick={() => setRetry((value) => value + 1)}
           >
-            Reintentar verificación
+            {t("instagram.retry")}
           </button>
         </>
       )}
       {!businessId && (
         <p className="facebook-connection-message" role="status">
-          Selecciona un negocio para administrar Instagram.
+          {t("instagram.noBusiness")}
         </p>
       )}
     </section>

@@ -20,6 +20,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from '@/components/ui/sheet';
+import { useLocalization, type Translate } from "../app/localization";
 
 export type Section =
   | 'Resumen'
@@ -69,9 +70,26 @@ function Brand() {
   );
 }
 
-function UserFooter({ userDisplayName }: Pick<SidebarProps, "userDisplayName">) {
+const sectionMessage: Record<Section, Parameters<Translate>[0]> = {
+  Resumen: "nav.home",
+  Campañas: "nav.campaigns",
+  Contenido: "nav.content",
+  "Equipo IA": "nav.aiTeam",
+  Aprobaciones: "nav.approvals",
+  Analíticas: "nav.analytics",
+  Configuración: "nav.settings",
+};
+
+export function getSectionLabel(section: Section, t: Translate) {
+  return t(sectionMessage[section]);
+}
+
+function UserFooter({
+  userDisplayName,
+}: Pick<SidebarProps, "userDisplayName">) {
+  const { locale, t } = useLocalization();
   const initial =
-    Array.from(userDisplayName.trim())[0]?.toLocaleUpperCase("es") ?? "T";
+    Array.from(userDisplayName.trim())[0]?.toLocaleUpperCase(locale) ?? "U";
 
   return (
     <div className="app-sidebar__user">
@@ -81,7 +99,7 @@ function UserFooter({ userDisplayName }: Pick<SidebarProps, "userDisplayName">) 
 
       <div className="app-sidebar__user-info">
         <strong title={userDisplayName}>{userDisplayName}</strong>
-        <span>Cuenta de trabajo</span>
+        <span>{t("shell.workAccount")}</span>
       </div>
     </div>
   );
@@ -93,9 +111,10 @@ function Navigation({
   pendingCount,
   closeOnSelect = false,
 }: NavigationProps) {
+  const { t } = useLocalization();
   return (
-    <nav aria-label="Navegación principal" className="app-sidebar__navigation">
-      <span className="app-sidebar__nav-label">Espacio de trabajo</span>
+    <nav aria-label={t("nav.main")} className="app-sidebar__navigation">
+      <span className="app-sidebar__nav-label">{t("nav.workspace")}</span>
 
       {sections.map(({ label, icon: Icon }) => {
         const active = activeSection === label;
@@ -108,12 +127,16 @@ function Navigation({
             onClick={() => onSectionChange(label)}
           >
             <Icon className="size-4 shrink-0" aria-hidden="true" />
-            <span className="app-sidebar__nav-text">{label}</span>
+            <span className="app-sidebar__nav-text">
+              {getSectionLabel(label, t)}
+            </span>
 
             {label === 'Aprobaciones' && pendingCount > 0 && (
               <b
                 className="app-sidebar__count"
-                aria-label={`${pendingCount} aprobaciones pendientes`}
+                aria-label={t("nav.pendingApprovals", {
+                  count: pendingCount,
+                })}
               >
                 {pendingCount}
               </b>
@@ -139,6 +162,7 @@ export function Sidebar({
   pendingCount,
   userDisplayName,
 }: SidebarProps) {
+  const { t } = useLocalization();
   return (
     <>
       <aside className="app-sidebar">
@@ -162,7 +186,7 @@ export function Sidebar({
           <SheetTrigger asChild>
             <button
               type="button"
-              aria-label="Abrir navegación principal"
+              aria-label={t("nav.open")}
               className="app-sidebar__mobile-trigger"
             >
               <Menu className="size-5" aria-hidden="true" />
@@ -177,11 +201,11 @@ export function Sidebar({
               <Brand />
 
               <SheetTitle className="sr-only">
-                Navegación principal
+                {t("nav.main")}
               </SheetTitle>
 
               <SheetDescription className="sr-only">
-                Secciones del espacio de trabajo de AI Marketing Studio
+                {t("nav.workspace")}
               </SheetDescription>
             </SheetHeader>
 

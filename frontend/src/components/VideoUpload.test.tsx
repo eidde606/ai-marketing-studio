@@ -26,7 +26,7 @@ it("rejects non-MP4 files before sending a request", () => {
     target: { files: [new File(["x"], "photo.jpg", { type: "image/jpeg" })] },
   });
   expect(screen.getByRole("alert").textContent).toBe(
-    "Solo se permiten archivos de video MP4.",
+    "Only MP4 video files are allowed.",
   );
   expect(fetch).not.toHaveBeenCalled();
 });
@@ -44,9 +44,9 @@ it("uploads once with the current token and FormData, then clears selection", as
     target: { files: [file] },
   });
   await act(async () =>
-    fireEvent.click(screen.getByRole("button", { name: "Subir video" })),
+    fireEvent.click(screen.getByRole("button", { name: "Upload video" })),
   );
-  fireEvent.click(screen.getByRole("button", { name: "Subiendo video..." }));
+  fireEvent.click(screen.getByRole("button", { name: "Uploading video…" }));
   expect(fetch).toHaveBeenCalledTimes(1);
   expect(uploaded).not.toHaveBeenCalled();
   const [url, request] = vi.mocked(fetch).mock.calls[0];
@@ -65,7 +65,7 @@ it("retains the file on upload failure and does not retry automatically", async 
   fireEvent.change(view.container.querySelector('input[type="file"]')!, {
     target: { files: [new File(["video"], "clip.mp4")] },
   });
-  fireEvent.click(screen.getByRole("button", { name: "Subir video" }));
+  fireEvent.click(screen.getByRole("button", { name: "Upload video" }));
   expect((await screen.findByRole("alert")).textContent).toBe(
     "No se pudo subir el video (500).",
   );

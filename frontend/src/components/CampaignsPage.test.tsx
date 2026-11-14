@@ -76,9 +76,9 @@ const remainingCampaign: Campaign = {
 async function openDeletionForm() {
   render(<CampaignsPage businessId="business-1" />);
   fireEvent.click(
-    await screen.findByRole("button", { name: "Editar campaña" }),
+    await screen.findByRole("button", { name: "Edit campaign" }),
   );
-  return screen.getByRole("button", { name: "Eliminar campaña" });
+  return screen.getByRole("button", { name: "Delete campaign" });
 }
 
 describe("CampaignsPage campaign management", () => {
@@ -107,22 +107,22 @@ describe("CampaignsPage campaign management", () => {
     render(<CampaignsPage businessId="business-1" />);
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Editar campaña" }),
+      await screen.findByRole("button", { name: "Edit campaign" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Eliminar campaña" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete campaign" }));
 
     expect(confirm).toHaveBeenCalledWith(
       expect.stringContaining("Campaña de verano"),
     );
     expect(campaignApi.deleteCampaign).not.toHaveBeenCalled();
     expect(
-      screen.getByRole("heading", { name: "Editar campaña" }),
+      screen.getByRole("heading", { name: "Edit campaign" }),
     ).toBeTruthy();
     expect(
       screen.getByText("Campaña de verano", { selector: "strong" }),
     ).toBeTruthy();
     await waitFor(() => {
-      expect(screen.queryByText(/Campaña eliminada correctamente/)).toBeNull();
+      expect(screen.queryByText(/Campaign deleted/)).toBeNull();
     });
     confirm.mockRestore();
   });
@@ -142,7 +142,7 @@ describe("CampaignsPage campaign management", () => {
     fireEvent.click(deleteButton);
 
     await screen.findByText(
-      "Campaña eliminada correctamente. Su contenido e historial se conservaron.",
+      "Campaign deleted. Its content and history have been preserved.",
     );
     expect(campaignApi.deleteCampaign).toHaveBeenCalledTimes(1);
     expect(campaignApi.deleteCampaign).toHaveBeenCalledWith(
@@ -153,13 +153,13 @@ describe("CampaignsPage campaign management", () => {
       screen.queryByText(campaign.name, { selector: "strong" }),
     ).toBeNull();
     expect(
-      screen.queryByRole("heading", { name: "Editar campaña" }),
+      screen.queryByRole("heading", { name: "Edit campaign" }),
     ).toBeNull();
     expect(
       screen.getByRole("heading", { name: remainingCampaign.name }),
     ).toBeTruthy();
     expect(
-      screen.getByRole("option", { name: "Publicación conservada — Aprobado" }),
+      screen.getByRole("option", { name: "Publicación conservada — Approved" }),
     ).toBeTruthy();
     expect(campaignApi.setCampaignDraft).not.toHaveBeenCalled();
     expect(campaignApi.updateCampaign).not.toHaveBeenCalled();
@@ -175,13 +175,13 @@ describe("CampaignsPage campaign management", () => {
     });
     fireEvent.click(await openDeletionForm());
 
-    await screen.findByText(/Aún no hay campañas/);
+    await screen.findByText(/No campaigns yet/);
     expect(screen.getByRole("status").textContent).toContain(
-      "Campaña eliminada correctamente",
+      "Campaign deleted",
     );
     expect(screen.queryByRole("heading", { name: campaign.name })).toBeNull();
     expect(
-      screen.queryByRole("heading", { name: "Editar campaña" }),
+      screen.queryByRole("heading", { name: "Edit campaign" }),
     ).toBeNull();
     expect(campaignApi.deleteCampaign).toHaveBeenCalledTimes(1);
     expect(campaignApi.deleteCampaign).toHaveBeenCalledWith(
@@ -205,23 +205,23 @@ describe("CampaignsPage campaign management", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("No se pudo eliminar la campaña");
     expect(
-      screen.getByRole("heading", { name: "Editar campaña" }),
+      screen.getByRole("heading", { name: "Edit campaign" }),
     ).toBeTruthy();
     expect(
       screen.getByText(campaign.name, { selector: "strong" }),
     ).toBeTruthy();
-    expect((screen.getByLabelText("Nombre *") as HTMLInputElement).value).toBe(
+    expect((screen.getByLabelText("Name *") as HTMLInputElement).value).toBe(
       campaign.name,
     );
     expect(
       screen.queryByRole("option", { name: /Publicación conservada/ }),
     ).toBeNull();
-    expect(screen.queryByText(/Campaña eliminada correctamente/)).toBeNull();
+    expect(screen.queryByText(/Campaign deleted/)).toBeNull();
     expect(campaignApi.setCampaignDraft).not.toHaveBeenCalled();
     expect(campaignApi.deleteCampaign).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(screen.getByRole("button", { name: "Eliminar campaña" }));
-    await screen.findByText(/Campaña eliminada correctamente/);
+    fireEvent.click(screen.getByRole("button", { name: "Delete campaign" }));
+    await screen.findByText(/Campaign deleted/);
     expect(campaignApi.deleteCampaign).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole("alert")).toBeNull();
   });
@@ -243,12 +243,12 @@ describe("CampaignsPage campaign management", () => {
     expect(
       screen.getByText(campaign.name, { selector: "strong" }),
     ).toBeTruthy();
-    expect(screen.queryByText(/Campaña eliminada correctamente/)).toBeNull();
+    expect(screen.queryByText(/Campaign deleted/)).toBeNull();
 
     await act(async () => {
       finishDeletion({ message: "Campaña eliminada correctamente." });
     });
-    await screen.findByText(/Campaña eliminada correctamente/);
+    await screen.findByText(/Campaign deleted/);
     expect(
       screen.queryByText(campaign.name, { selector: "strong" }),
     ).toBeNull();
@@ -269,41 +269,41 @@ describe("CampaignsPage campaign management", () => {
     });
     render(<CampaignsPage businessId="business-1" />);
     await screen.findByRole("heading", { name: campaign.name });
-    fireEvent.click(screen.getByRole("button", { name: "Nueva campaña" }));
+    fireEvent.click(screen.getByRole("button", { name: "New campaign" }));
     expect(
       (
         screen.getByRole("button", {
-          name: "Guardar campaña",
+          name: "Save campaign",
         }) as HTMLButtonElement
       ).disabled,
     ).toBe(true);
-    fireEvent.change(screen.getByLabelText("Nombre *"), {
+    fireEvent.change(screen.getByLabelText("Name *"), {
       target: { value: "  Nueva campaña  " },
     });
-    fireEvent.change(screen.getByLabelText("Objetivo *"), {
+    fireEvent.change(screen.getByLabelText("Objective *"), {
       target: { value: "  Más visitas  " },
     });
-    fireEvent.change(screen.getByLabelText("Estado"), {
+    fireEvent.change(screen.getByLabelText("Status"), {
       target: { value: "paused" },
     });
-    fireEvent.change(screen.getByLabelText("Fecha inicial (opcional)"), {
+    fireEvent.change(screen.getByLabelText("Start date (optional)"), {
       target: { value: "2026-06-01" },
     });
-    fireEvent.change(screen.getByLabelText("Fecha final (opcional)"), {
+    fireEvent.change(screen.getByLabelText("End date (optional)"), {
       target: { value: "2026-06-30" },
     });
     expect(
-      screen.getByLabelText("Fecha final (opcional)").getAttribute("min"),
+      screen.getByLabelText("End date (optional)").getAttribute("min"),
     ).toBe("2026-06-01");
-    fireEvent.click(screen.getByRole("button", { name: "Guardar campaña" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save campaign" }));
     await waitFor(() =>
       expect(campaignApi.createCampaign).toHaveBeenCalledWith(
         "business-1",
         input,
       ),
     );
-    await screen.findByRole("heading", { name: "Nueva campaña" });
-    expect(screen.queryByLabelText("Nombre *")).toBeNull();
+    await screen.findByRole("heading", { name: input.name });
+    expect(screen.queryByLabelText("Name *")).toBeNull();
     expect(campaignApi.updateCampaign).not.toHaveBeenCalled();
   });
 
@@ -321,16 +321,16 @@ describe("CampaignsPage campaign management", () => {
       end_date: null,
     });
     await openDeletionForm();
-    fireEvent.change(screen.getByLabelText("Estado"), {
+    fireEvent.change(screen.getByLabelText("Status"), {
       target: { value: "archived" },
     });
-    fireEvent.change(screen.getByLabelText("Fecha inicial (opcional)"), {
+    fireEvent.change(screen.getByLabelText("Start date (optional)"), {
       target: { value: "" },
     });
-    fireEvent.change(screen.getByLabelText("Fecha final (opcional)"), {
+    fireEvent.change(screen.getByLabelText("End date (optional)"), {
       target: { value: "" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Guardar campaña" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save campaign" }));
     await waitFor(() =>
       expect(campaignApi.updateCampaign).toHaveBeenCalledWith(
         "business-1",
@@ -345,19 +345,19 @@ describe("CampaignsPage campaign management", () => {
       ),
     );
     await screen.findByRole("heading", { name: campaign.name });
-    expect(screen.getAllByText("Archivada").length).toBe(2);
-    expect(screen.getByText("Sin fecha → Sin fecha")).toBeTruthy();
+    expect(screen.getAllByText("Archived").length).toBe(2);
+    expect(screen.getByText("No date → No date")).toBeTruthy();
     expect(campaignApi.createCampaign).not.toHaveBeenCalled();
   });
 
   it("cancels an edit without saving or changing the campaign", async () => {
     await openDeletionForm();
-    fireEvent.change(screen.getByLabelText("Nombre *"), {
+    fireEvent.change(screen.getByLabelText("Name *"), {
       target: { value: "Cambio sin guardar" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.getByRole("heading", { name: campaign.name })).toBeTruthy();
-    expect(screen.queryByLabelText("Nombre *")).toBeNull();
+    expect(screen.queryByLabelText("Name *")).toBeNull();
     expect(campaignApi.updateCampaign).not.toHaveBeenCalled();
   });
 
@@ -385,12 +385,12 @@ describe("CampaignsPage campaign management", () => {
       .mockResolvedValueOnce(campaign);
     render(<CampaignsPage businessId="business-1" />);
     await screen.findByRole("heading", { name: campaign.name });
-    fireEvent.change(screen.getByLabelText("Asociar contenido existente"), {
+    fireEvent.change(screen.getByLabelText("Add existing content"), {
       target: { value: draft.id },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Asociar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add to campaign" }));
     const detach = await screen.findByRole("button", {
-      name: `Desvincular ${draft.title}`,
+      name: `Remove ${draft.title} from campaign`,
     });
     expect(campaignApi.setCampaignDraft).toHaveBeenNthCalledWith(
       1,
@@ -401,21 +401,21 @@ describe("CampaignsPage campaign management", () => {
     );
     expect(
       screen
-        .getByRole("progressbar", { name: "Progreso de publicación" })
+        .getByRole("progressbar", { name: "Publication progress" })
         .getAttribute("value"),
     ).toBe("100");
     expect(
       screen
-        .getByRole("progressbar", { name: `Progreso de ${campaign.name}` })
+        .getByRole("progressbar", { name: `Progress for ${campaign.name}` })
         .getAttribute("value"),
     ).toBe("100");
-    expect(screen.getByText("Publicado · Aprobado")).toBeTruthy();
+    expect(screen.getByText("Published · Approved")).toBeTruthy();
     expect(
       screen.queryByRole("option", { name: /Publicación conservada/ }),
     ).toBeNull();
     fireEvent.click(detach);
     await screen.findByRole("option", {
-      name: "Publicación conservada — Aprobado",
+      name: "Publicación conservada — Approved",
     });
     expect(campaignApi.setCampaignDraft).toHaveBeenNthCalledWith(
       2,
@@ -426,11 +426,13 @@ describe("CampaignsPage campaign management", () => {
     );
     expect(
       screen
-        .getByRole("progressbar", { name: "Progreso de publicación" })
+        .getByRole("progressbar", { name: "Publication progress" })
         .getAttribute("value"),
     ).toBe("0");
     expect(
-      screen.queryByRole("button", { name: `Desvincular ${draft.title}` }),
+      screen.queryByRole("button", {
+        name: `Remove ${draft.title} from campaign`,
+      }),
     ).toBeNull();
   });
 
@@ -456,11 +458,11 @@ describe("CampaignsPage campaign management", () => {
       screen.getByRole("heading", { name: remainingCampaign.name }),
     ).toBeTruthy();
     expect(summary.getAttribute("aria-pressed")).toBe("true");
-    fireEvent.click(screen.getByRole("button", { name: "Actualizar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     await waitFor(() =>
       expect(
         screen
-          .getByRole("progressbar", { name: "Progreso de publicación" })
+          .getByRole("progressbar", { name: "Publication progress" })
           .getAttribute("value"),
       ).toBe("50"),
     );
@@ -476,14 +478,14 @@ describe("CampaignsPage campaign management", () => {
       new Error("La fecha final no puede ser anterior a la inicial."),
     );
     await openDeletionForm();
-    fireEvent.change(screen.getByLabelText("Nombre *"), {
+    fireEvent.change(screen.getByLabelText("Name *"), {
       target: { value: "Cambio pendiente" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Guardar campaña" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save campaign" }));
     expect((await screen.findByRole("alert")).textContent).toBe(
       "La fecha final no puede ser anterior a la inicial.",
     );
-    expect((screen.getByLabelText("Nombre *") as HTMLInputElement).value).toBe(
+    expect((screen.getByLabelText("Name *") as HTMLInputElement).value).toBe(
       "Cambio pendiente",
     );
     expect(

@@ -1,5 +1,5 @@
 import { ChevronRight, Facebook } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   getConnectedFacebookAccounts,
   getFacebookHandoff,
@@ -8,12 +8,18 @@ import {
   type ConnectedFacebookAccount,
   type FacebookPage,
 } from "../services/facebookApi";
+import { useLocalization } from "../app/localization";
 
 type Props = {
   businessId: string;
 };
 
 export default function FacebookConnection({ businessId }: Props) {
+  const { t } = useLocalization();
+  const tRef = useRef(t);
+  useEffect(() => {
+    tRef.current = t;
+  }, [t]);
   const [pages, setPages] = useState<FacebookPage[]>([]);
 
   const [connectedAccounts, setConnectedAccounts] = useState<
@@ -69,7 +75,7 @@ export default function FacebookConnection({ businessId }: Props) {
         setMessage("");
       } catch {
         if (active) {
-          setMessage("No se pudieron recuperar las páginas de Facebook.");
+          setMessage(tRef.current("facebook.pagesError"));
           setHandoffToken(null);
         }
       } finally {
@@ -98,7 +104,7 @@ export default function FacebookConnection({ businessId }: Props) {
         }
       } catch {
         if (active) {
-          setMessage("No se pudo verificar la conexión de Facebook.");
+          setMessage(tRef.current("facebook.verifyError"));
         }
       }
     }
@@ -120,14 +126,14 @@ export default function FacebookConnection({ businessId }: Props) {
       const authorizationUrl = await startFacebookConnection(businessId);
       window.location.assign(authorizationUrl);
     } catch {
-      setMessage("No se pudo iniciar la conexión con Facebook.");
+      setMessage(t("facebook.startError"));
       setLoading(false);
     }
   }
 
   async function handleSelectPage(pageId: string) {
     if (!handoffToken || handoffBusinessId !== businessId) {
-      setMessage("Selecciona el negocio correcto antes de continuar.");
+      setMessage(t("facebook.wrongBusiness"));
       return;
     }
 
@@ -137,12 +143,12 @@ export default function FacebookConnection({ businessId }: Props) {
     try {
       const result = await selectFacebookPage(handoffToken, pageId);
 
-      setMessage(`Página conectada: ${result.page_name}`);
+      setMessage(t("facebook.connectedPage", { name: result.page_name }));
       setPages([]);
       setHandoffToken(null);
       setHandoffBusinessId(null);
     } catch {
-      setMessage("No se pudo conectar la página seleccionada.");
+      setMessage(t("facebook.selectPageError"));
     } finally {
       setLoading(false);
     }
@@ -157,27 +163,23 @@ export default function FacebookConnection({ businessId }: Props) {
           </div>
 
           <div>
-            <span className="eyebrow">Redes sociales</span>
-            <h2>Conexión con Facebook</h2>
-            <p>
-              Vincula una página de Facebook para publicar contenido desde AI
-              Marketing Studio.
-            </p>
+            <span className="eyebrow">{t("facebook.eyebrow")}</span>
+            <h2>{t("facebook.title")}</h2>
+            <p>{t("facebook.description")}</p>
           </div>
         </div>
 
         <span className="facebook-connection-badge">
-          {pages.length > 0 ? "Seleccionar página" : "Configuración"}
+          {pages.length > 0
+            ? t("facebook.selectPage")
+            : t("facebook.settings")}
         </span>
       </div>
 
       <div className="facebook-connection-content">
         <div className="facebook-connection-description">
-          <strong>Administra tus publicaciones desde un solo lugar</strong>
-          <p>
-            Autoriza tu cuenta de Facebook y selecciona la página que deseas
-            administrar.
-          </p>
+          <strong>{t("facebook.manageTitle")}</strong>
+          <p>{t("facebook.manageDescription")}</p>
         </div>
 
         <button
@@ -188,14 +190,14 @@ export default function FacebookConnection({ businessId }: Props) {
         >
           <Facebook size={18} />
           {connectedAccounts.length > 0
-            ? "Reconectar Facebook"
-            : "Conectar Facebook"}
+            ? t("facebook.reconnect")
+            : t("facebook.connect")}
         </button>
       </div>
 
       {loading && (
         <p className="facebook-connection-message" role="status">
-          Procesando conexión...
+          {t("facebook.loading")}
         </p>
       )}
 
@@ -203,7 +205,7 @@ export default function FacebookConnection({ businessId }: Props) {
         <p key={account.id} className="facebook-connection-message">
           {account.page_name} —{" "}
           {account.connection_status === "connected"
-            ? "Conectada"
+            ? t("facebook.connected")
             : account.connection_status}
         </p>
       ))}
@@ -216,8 +218,8 @@ export default function FacebookConnection({ businessId }: Props) {
 
       {pages.length > 0 && (
         <div className="facebook-page-selection">
-          <h3>Selecciona una página</h3>
-          <p>Elige la página que deseas conectar con este negocio.</p>
+          <h3>{t("facebook.choosePageTitle")}</h3>
+          <p>{t("facebook.choosePageDescription")}</p>
 
           <div className="facebook-page-list">
             {pages.map((page) => (

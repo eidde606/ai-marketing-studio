@@ -9,6 +9,7 @@ import {
 import type { Section } from "../../../components/Sidebar";
 import type { DraftCollection } from "./useDraftCollection";
 import type { DraftOperations } from "./useDraftOperations";
+import { useLocalization } from "../../../app/localization";
 
 export function useDraftActions(
   selectedBusinessId: string,
@@ -16,6 +17,11 @@ export function useDraftActions(
   operations: DraftOperations,
   setActiveSection: (section: Section) => void,
 ) {
+  const { t } = useLocalization();
+  const tRef = useRef(t);
+  useEffect(() => {
+    tRef.current = t;
+  }, [t]);
   const [generating, setGenerating] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -58,7 +64,7 @@ export function useDraftActions(
       console.error("Content generation failed:", error);
       if (isCurrentBusiness() && selectedBusinessRef.current === businessId) {
         setGenerationError(
-          "No se pudo generar el contenido. Inténtalo de nuevo.",
+          tRef.current("draft.generationError"),
         );
       }
     } finally {
@@ -74,7 +80,7 @@ export function useDraftActions(
   };
   const handleSaveEdit = async (id: string) => {
     if (!editTitle.trim() || !editCaption.trim()) {
-      setApprovalError("El título y el texto no pueden estar vacíos.");
+      setApprovalError(t("draft.requiredFields"));
       return;
     }
     if (busyDraftIds.includes(id) || approvingIds.includes(id)) return;
@@ -90,7 +96,7 @@ export function useDraftActions(
       setEditingId(null);
     } catch {
       if (!isCurrentBusiness()) return;
-      setApprovalError("No se pudo guardar el borrador. Inténtalo de nuevo.");
+      setApprovalError(tRef.current("draft.saveError"));
     } finally {
       setBusyDraftIds((current) => current.filter((value) => value !== id));
     }
@@ -106,7 +112,7 @@ export function useDraftActions(
       return;
     if (
       !window.confirm(
-        "¿Eliminar este elemento de Aprobaciones? Las publicaciones ya realizadas en redes sociales no se eliminarán.",
+        t("draft.deleteConfirm"),
       )
     )
       return;
@@ -122,7 +128,7 @@ export function useDraftActions(
     } catch {
       if (!isCurrentBusiness()) return;
       setApprovalError(
-        "No se pudo eliminar el elemento. Si hay una operación en curso, espera a que termine e inténtalo de nuevo.",
+        tRef.current("draft.deleteError"),
       );
     } finally {
       deleteLocks.current.delete(id);
@@ -139,7 +145,7 @@ export function useDraftActions(
       return;
     if (
       !window.confirm(
-        "¿Rechazar esta publicación? Se conservará en el historial.",
+        t("draft.rejectConfirm"),
       )
     )
       return;
@@ -152,7 +158,7 @@ export function useDraftActions(
       if (editingId === id) setEditingId(null);
     } catch {
       if (!isCurrentBusiness()) return;
-      setApprovalError("No se pudo rechazar el borrador. Inténtalo de nuevo.");
+      setApprovalError(tRef.current("draft.rejectError"));
     } finally {
       setBusyDraftIds((current) => current.filter((value) => value !== id));
     }

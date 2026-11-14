@@ -1,5 +1,11 @@
 import { useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Facebook, Settings2, UserRound } from "lucide-react";
+import { useLocalization } from "../app/localization";
+import {
+  AccountStatusNotice,
+  CapabilityStatus,
+} from "../app/ProductStatus";
+import type { FeatureAvailability } from "../services/accountApi";
 
 type SettingsTab = "account" | "integrations";
 
@@ -8,6 +14,9 @@ type Props = {
   userDisplayName: string;
   userEmail: string;
   onSaveDisplayName: (displayName: string) => Promise<string>;
+  canManageConnections?: boolean;
+  languagePreferences?: ReactNode;
+  features?: FeatureAvailability;
   facebookConnection: ReactNode;
   instagramConnection?: ReactNode;
   tiktokConnection: ReactNode;
@@ -18,12 +27,17 @@ export default function SettingsPage({
   userDisplayName,
   userEmail,
   onSaveDisplayName,
+  canManageConnections = false,
+  languagePreferences,
+  features,
   facebookConnection,
   instagramConnection,
   tiktokConnection,
 }: Props) {
+  const { t } = useLocalization();
   const [activeTab, setActiveTab] = useState<SettingsTab>("account");
-  const initialName = userDisplayName === "Mi cuenta" ? "" : userDisplayName;
+  const initialName =
+    userDisplayName === t("shell.myAccount") ? "" : userDisplayName;
   const [displayName, setDisplayName] = useState(initialName);
   const [savedName, setSavedName] = useState(initialName);
   const [saving, setSaving] = useState(false);
@@ -41,13 +55,13 @@ export default function SettingsPage({
 
     const normalized = displayName.trim();
     if (!normalized) {
-      setFeedback({ type: "error", message: "Escribe un nombre para mostrar." });
+      setFeedback({ type: "error", message: t("settings.displayNameRequired") });
       return;
     }
     if (normalized.length > maxNameLength) {
       setFeedback({
         type: "error",
-        message: "El nombre no puede superar los 80 caracteres.",
+        message: t("settings.displayNameTooLong"),
       });
       return;
     }
@@ -61,15 +75,12 @@ export default function SettingsPage({
       setSavedName(saved);
       setFeedback({
         type: "success",
-        message: "Nombre para mostrar actualizado.",
+        message: t("settings.displayNameSaved"),
       });
-    } catch (error) {
+    } catch {
       setFeedback({
         type: "error",
-        message:
-          error instanceof Error
-            ? error.message
-            : "No se pudo guardar el nombre. Inténtalo de nuevo.",
+        message: t("settings.displayNameSaveError"),
       });
     } finally {
       savingRef.current = false;
@@ -81,14 +92,17 @@ export default function SettingsPage({
     <div className="settings-workspace">
       <section className="page-intro">
         <div>
-          <span className="eyebrow">Tu espacio de trabajo</span>
-          <h2>Configuración</h2>
-          <p>Administra tu cuenta y las conexiones de este negocio.</p>
+          <span className="eyebrow">{t("settings.introEyebrow")}</span>
+          <h2>{t("settings.introTitle")}</h2>
+          <p>{t("settings.introDescription")}</p>
         </div>
       </section>
 
       <div className="settings-layout">
-        <nav className="settings-nav" aria-label="Secciones de configuración">
+        <nav
+          className="settings-nav"
+          aria-label={t("settings.integrationNavigation")}
+        >
           <button
             type="button"
             className={activeTab === "account" ? "is-active" : ""}
@@ -96,7 +110,7 @@ export default function SettingsPage({
             onClick={() => setActiveTab("account")}
           >
             <UserRound size={18} aria-hidden="true" />
-            Cuenta
+            {t("settings.accountTab")}
           </button>
           <button
             type="button"
@@ -105,7 +119,7 @@ export default function SettingsPage({
             onClick={() => setActiveTab("integrations")}
           >
             <Settings2 size={18} aria-hidden="true" />
-            Integraciones
+            {t("settings.integrationsTab")}
           </button>
         </nav>
 
@@ -116,20 +130,26 @@ export default function SettingsPage({
                 <UserRound size={20} />
               </span>
               <div>
-                <h3 id="account-title">Información de la cuenta</h3>
-                <p>Datos asociados a tu sesión actual.</p>
+                <h3 id="account-title">{t("settings.accountTitle")}</h3>
+                <p>{t("settings.accountDescription")}</p>
               </div>
             </div>
+            <AccountStatusNotice
+              title={t("account.statusActive")}
+              description={t("account.statusActiveHelp")}
+            />
             <form className="settings-profile-form" onSubmit={handleSave}>
-              <label htmlFor="account-display-name">Nombre para mostrar</label>
+              <label htmlFor="account-display-name">
+                {t("settings.displayName")}
+              </label>
               <input
                 id="account-display-name"
                 name="displayName"
                 type="text"
                 autoComplete="nickname"
-                placeholder="Mi cuenta"
+                placeholder={t("settings.displayNamePlaceholder")}
                 value={displayName}
-                maxLength={120}
+                maxLength={maxNameLength}
                 aria-invalid={feedback?.type === "error"}
                 aria-describedby="account-display-name-help"
                 disabled={saving}
@@ -139,19 +159,18 @@ export default function SettingsPage({
                 }}
               />
               <small id="account-display-name-help">
-                Este nombre aparece en tu espacio de trabajo. Máximo 80
-                caracteres.
+                {t("settings.displayNameHelp")}
               </small>
               <button
                 type="submit"
                 className="primary-button"
                 disabled={!changed || saving}
               >
-                {saving ? "Guardando…" : "Guardar cambios"}
+                {saving ? t("common.saving") : t("common.save")}
               </button>
               {saving && (
                 <p className="settings-profile-feedback" role="status">
-                  Guardando cambios…
+                  {t("common.saving")}
                 </p>
               )}
               {feedback && (
@@ -165,14 +184,14 @@ export default function SettingsPage({
             </form>
             <dl className="settings-account-details">
               <div>
-                <dt>Correo electrónico</dt>
-                <dd>{userEmail || "No disponible"}</dd>
+                <dt>{t("settings.email")}</dt>
+                <dd>{userEmail || t("settings.emailUnavailable")}</dd>
               </div>
             </dl>
             <p className="settings-note" role="note">
-              Tu nombre de perfil es privado y solo se usa para personalizar tu
-              cuenta.
+              {t("settings.profileNote")}
             </p>
+            {languagePreferences}
           </section>
         ) : (
           <section className="settings-integrations" aria-labelledby="integrations-title">
@@ -181,23 +200,77 @@ export default function SettingsPage({
                 <Facebook size={20} />
               </div>
               <div>
-                <h3 id="integrations-title">Redes sociales</h3>
+                <h3 id="integrations-title">{t("settings.socialTitle")}</h3>
                 <p>
-                  Las conexiones y publicaciones se administran por negocio.
-                  {businessId ? "" : " Selecciona un negocio para continuar."}
+                  {t("settings.socialDescription")}
+                  {businessId ? "" : ` ${t("settings.selectBusiness")}`}
                 </p>
               </div>
             </header>
             {!businessId && (
               <p className="settings-note" role="status">
-                No hay un negocio seleccionado.
+                {t("settings.noBusiness")}
               </p>
             )}
-            <div className="settings-integration-list">
-              {facebookConnection}
-              {instagramConnection}
-              {tiktokConnection}
-            </div>
+            {features && (
+              <section
+                className="settings-capabilities"
+                aria-labelledby="feature-availability-title"
+              >
+                <h4 id="feature-availability-title">
+                  {t("settings.featuresTitle")}
+                </h4>
+                <ul>
+                  <CapabilityStatus
+                    label={t("settings.facebookPublishing")}
+                    available={features.facebook_publishing}
+                    availableText={t("capability.available")}
+                    unavailableText={t("capability.unavailable")}
+                  />
+                  <CapabilityStatus
+                    label={t("settings.tiktokDirect")}
+                    available={features.tiktok_direct_publishing}
+                    availableText={t("capability.available")}
+                    unavailableText={t("capability.unavailable")}
+                  />
+                  <CapabilityStatus
+                    label={t("settings.tiktokManual")}
+                    available={features.tiktok_manual_export}
+                    availableText={t("capability.available")}
+                    unavailableText={t("capability.unavailable")}
+                  />
+                  <CapabilityStatus
+                    label={t("settings.instagramConnection")}
+                    available={features.instagram_connection}
+                    availableText={t("capability.available")}
+                    unavailableText={t("capability.unavailable")}
+                  />
+                  <CapabilityStatus
+                    label={t("settings.instagramPublishing")}
+                    available={features.instagram_publishing}
+                    availableText={t("capability.available")}
+                    unavailableText={t("capability.unavailable")}
+                  />
+                  <CapabilityStatus
+                    label={t("settings.miaAnalysis")}
+                    available={features.mia_analysis}
+                    availableText={t("capability.available")}
+                    unavailableText={t("capability.unavailable")}
+                  />
+                </ul>
+              </section>
+            )}
+            {canManageConnections ? (
+              <div className="settings-integration-list">
+                {facebookConnection}
+                {instagramConnection}
+                {tiktokConnection}
+              </div>
+            ) : (
+              <p className="settings-note" role="note">
+                {t("settings.connectionsRestricted")}
+              </p>
+            )}
           </section>
         )}
       </div>

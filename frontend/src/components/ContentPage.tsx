@@ -7,6 +7,7 @@ import {
   type FacebookAnalytics,
 } from "../services/draftsApi";
 import { fetchVideoPreview } from "../features/media/services/videoApi";
+import { useLocalization } from "../app/localization";
 
 type Props = {
   drafts: Draft[];
@@ -16,26 +17,21 @@ type Props = {
 
 type ContentFilter = "all" | "pending" | "approved" | "published" | "rejected";
 
-const filterLabels: Record<ContentFilter, string> = {
-  all: "Todo el contenido",
-  pending: "Pendiente",
-  approved: "Aprobado",
-  published: "Publicado",
-  rejected: "Rechazado",
-};
-
-function draftStatus(draft: Draft): { label: string; tone: string } {
+function draftStatus(
+  draft: Draft,
+): { status: Exclude<ContentFilter, "all">; tone: string } {
   if (
     draft.facebook_publish_status === "published" ||
     draft.tiktok_publish_status === "published"
   )
-    return { label: "Publicado", tone: "published" };
-  if (draft.status === "approved") return { label: "Aprobado", tone: "approved" };
-  if (draft.status === "rejected") return { label: "Rechazado", tone: "rejected" };
-  return { label: "Pendiente de revisión", tone: "pending" };
+    return { status: "published", tone: "published" };
+  if (draft.status === "approved") return { status: "approved", tone: "approved" };
+  if (draft.status === "rejected") return { status: "rejected", tone: "rejected" };
+  return { status: "pending", tone: "pending" };
 }
 
 export default function ContentPage({ drafts, loading, error }: Props) {
+  const { locale, t } = useLocalization();
   const [analytics, setAnalytics] = useState<Record<string, FacebookAnalytics>>(
     {},
   );
@@ -52,23 +48,18 @@ export default function ContentPage({ drafts, loading, error }: Props) {
     [drafts],
   );
   const filteredDrafts = useMemo(() => {
-    const normalizedQuery = query.trim().toLocaleLowerCase("es");
+    const normalizedQuery = query.trim().toLocaleLowerCase(locale);
     return availableDrafts.filter((draft) => {
       const state = draftStatus(draft);
       const includesQuery =
         !normalizedQuery ||
         `${draft.title} ${draft.caption} ${draft.platform}`
-          .toLocaleLowerCase("es")
+          .toLocaleLowerCase(locale)
           .includes(normalizedQuery);
-      const includesFilter =
-        filter === "all" ||
-        (filter === "published" && state.label === "Publicado") ||
-        (filter === "pending" && state.label === "Pendiente de revisión") ||
-        (filter === "approved" && state.label === "Aprobado") ||
-        (filter === "rejected" && state.label === "Rechazado");
+      const includesFilter = filter === "all" || filter === state.status;
       return includesQuery && includesFilter;
     });
-  }, [availableDrafts, filter, query]);
+  }, [availableDrafts, filter, locale, query]);
 
   async function handleViewAnalytics(draftId: string) {
     setLoadingId(draftId);
@@ -77,7 +68,7 @@ export default function ContentPage({ drafts, loading, error }: Props) {
       const data = await getFacebookAnalytics(draftId);
       setAnalytics((current) => ({ ...current, [draftId]: data }));
     } catch {
-      setAnalyticsError("No se pudieron cargar las métricas de Facebook.");
+      setAnalyticsError(t("content.analyticsError"));
     } finally {
       setLoadingId(null);
     }
@@ -97,7 +88,7 @@ export default function ContentPage({ drafts, loading, error }: Props) {
       setPreviewError(
         previewFailure instanceof Error
           ? previewFailure.message
-          : "No se pudo cargar la vista previa.",
+          : t("content.previewError"),
       );
     } finally {
       setPreviewLoadingId(null);
@@ -107,7 +98,9 @@ export default function ContentPage({ drafts, loading, error }: Props) {
   if (loading) {
     return (
       <section className="content-workspace">
-        <p className="workspace-state" role="status">Cargando contenido…</p>
+        <p className="workspace-state" role="status">
+          {t("content.loading")}
+        </p>
       </section>
     );
   }
@@ -125,36 +118,56 @@ export default function ContentPage({ drafts, loading, error }: Props) {
     <div className="content-workspace">
       <section className="page-intro">
         <div>
-          <span className="eyebrow">Crea y organiza</span>
-          <h2>Biblioteca de contenido</h2>
-          <p>Encuentra borradores, revisa su estado y consulta publicaciones.</p>
+          <span className="eyebrow">{t("content.introEyebrow")}</span>
+          <h2>{t("content.title")}</h2>
+          <p>{t("content.description")}</p>
         </div>
         <span className="content-library-count">
-          {availableDrafts.length} {availableDrafts.length === 1 ? "pieza" : "piezas"}
+          {t("content.itemCount", {
+            count: availableDrafts.length,
+            item: t(
+              availableDrafts.length === 1
+                ? "content.itemSingular"
+                : "content.itemPlural",
+            ),
+          })}
         </span>
       </section>
 
-      <section className="content-toolbar" aria-label="Buscar y filtrar contenido">
+      <section
+        className="content-toolbar"
+        aria-label={t("content.searchAndFilter")}
+      >
         <label className="content-search">
           <Search size={17} aria-hidden="true" />
-          <span className="sr-only">Buscar contenido</span>
+          <span className="sr-only">{t("content.searchLabel")}</span>
           <input
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Buscar por título, texto o plataforma"
+            placeholder={t("content.searchPlaceholder")}
           />
         </label>
         <label className="content-filter">
-          <span>Estado</span>
+          <span>{t("content.statusFilter")}</span>
           <select
             value={filter}
             onChange={(event) =>
               setFilter(event.target.value as ContentFilter)
             }
           >
-            {Object.entries(filterLabels).map(([value, label]) => (
-              <option key={value} value={value}>{label}</option>
+            {(
+              [
+                ["all", "content.filter.all"],
+                ["pending", "content.filter.pending"],
+                ["approved", "content.filter.approved"],
+                ["published", "content.filter.published"],
+                ["rejected", "content.filter.rejected"],
+              ] as const
+            ).map(([value, key]) => (
+              <option key={value} value={value}>
+                {t(key)}
+              </option>
             ))}
           </select>
         </label>
@@ -163,11 +176,17 @@ export default function ContentPage({ drafts, loading, error }: Props) {
       {filteredDrafts.length === 0 ? (
         <section className="content-empty">
           <span className="content-empty__icon"><Image size={22} aria-hidden="true" /></span>
-          <h3>{availableDrafts.length ? "No hay resultados" : "Tu biblioteca está lista"}</h3>
+          <h3>
+            {t(
+              availableDrafts.length
+                ? "content.emptyResults"
+                : "content.emptyLibrary",
+            )}
+          </h3>
           <p>
             {availableDrafts.length
-              ? "Prueba con otros términos o cambia el filtro de estado."
-              : "El contenido creado y publicado para este negocio aparecerá aquí."}
+              ? t("content.refineSearch")
+              : t("content.libraryEmpty")}
           </p>
         </section>
       ) : (
@@ -189,10 +208,15 @@ export default function ContentPage({ drafts, loading, error }: Props) {
                       controls
                       playsInline
                       preload="metadata"
-                      aria-label={`Vista previa de ${draft.title}`}
+                      aria-label={t("content.previewOf", {
+                        title: draft.title,
+                      })}
                     />
                   ) : previewUrl && draft.media_type === "image" ? (
-                    <img src={previewUrl} alt={`Vista previa de ${draft.title}`} />
+                    <img
+                      src={previewUrl}
+                      alt={t("content.previewOf", { title: draft.title })}
+                    />
                   ) : (
                     <span aria-hidden="true">
                       {draft.media_type === "video" ? (
@@ -210,8 +234,8 @@ export default function ContentPage({ drafts, loading, error }: Props) {
                       onClick={() => void handlePreview(draft)}
                     >
                       {previewLoadingId === draft.id
-                        ? "Cargando vista previa…"
-                        : "Ver vista previa"}
+                        ? t("content.previewLoading")
+                        : t("content.preview")}
                     </button>
                   )}
                 </div>
@@ -219,14 +243,22 @@ export default function ContentPage({ drafts, loading, error }: Props) {
                   <div className="content-library-card__meta">
                     <span>{draft.platform}</span>
                     <span className={`content-state content-state--${state.tone}`}>
-                      {state.label}
+                      {t(
+                        `content.statusLabel.${state.status}` as
+                          | "content.statusLabel.published"
+                          | "content.statusLabel.approved"
+                          | "content.statusLabel.rejected"
+                          | "content.statusLabel.pending",
+                      )}
                     </span>
                   </div>
                   <h3>{draft.title}</h3>
                   <p className="content-library-card__caption">{draft.caption}</p>
                   <div className="content-library-card__footer">
                     <span>
-                      {draft.source === "ai" ? "Creado con IA" : "Creado manualmente"}
+                      {draft.source === "ai"
+                        ? t("content.createdWithAI")
+                        : t("content.createdManually")}
                     </span>
                     {draft.facebook_publish_status === "published" && (
                       <button
@@ -236,25 +268,34 @@ export default function ContentPage({ drafts, loading, error }: Props) {
                         onClick={() => void handleViewAnalytics(draft.id)}
                       >
                         {loadingId === draft.id
-                          ? "Cargando…"
+                          ? t("content.metricsLoading")
                           : postAnalytics
-                            ? "Actualizar métricas"
-                            : "Ver métricas"}
+                            ? t("content.refreshMetrics")
+                            : t("content.viewMetrics")}
                       </button>
                     )}
                   </div>
                   {postAnalytics && (
-                    <div className="content-card-analytics" aria-label="Métricas de Facebook">
-                      <span>{postAnalytics.reactions} reacciones</span>
-                      <span>{postAnalytics.comments} comentarios</span>
-                      <span>{postAnalytics.shares} compartidos</span>
+                    <div
+                      className="content-card-analytics"
+                      aria-label={t("content.facebookMetrics")}
+                    >
+                      <span>
+                        {postAnalytics.reactions} {t("content.reactions")}
+                      </span>
+                      <span>
+                        {postAnalytics.comments} {t("content.comments")}
+                      </span>
+                      <span>
+                        {postAnalytics.shares} {t("content.shares")}
+                      </span>
                       {postAnalytics.permalink_url && (
                         <a
                           href={postAnalytics.permalink_url}
                           target="_blank"
                           rel="noopener noreferrer"
                         >
-                          Abrir publicación
+                          {t("content.openPost")}
                         </a>
                       )}
                     </div>

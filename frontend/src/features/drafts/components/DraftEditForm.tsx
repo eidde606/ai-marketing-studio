@@ -1,5 +1,6 @@
 import type { Dispatch, SetStateAction } from "react";
 import type { Draft } from "../../../services/draftsApi";
+import { useLocalization } from "../../../app/localization";
 type Props = {
   draft: Draft;
   editTitle: string;
@@ -20,6 +21,7 @@ export function DraftEditForm({
   handleSaveEdit,
   setEditingId,
 }: Props) {
+  const { t } = useLocalization();
   return (
     <div
       className="draft-edit-form"
@@ -29,7 +31,7 @@ export function DraftEditForm({
         marginTop: "1rem",
       }}
     >
-      <label htmlFor={`edit-title-${draft.id}`}>Título</label>
+      <label htmlFor={`edit-title-${draft.id}`}>{t("draftEdit.title")}</label>
 
       <input
         id={`edit-title-${draft.id}`}
@@ -43,7 +45,7 @@ export function DraftEditForm({
       />
 
       <label htmlFor={`edit-caption-${draft.id}`}>
-        Texto de la publicación
+        {t("draftEdit.caption")}
       </label>
 
       <textarea
@@ -68,7 +70,9 @@ export function DraftEditForm({
           }
           onClick={() => void handleSaveEdit(draft.id)}
         >
-          {busyDraftIds.includes(draft.id) ? "Guardando..." : "Guardar cambios"}
+          {busyDraftIds.includes(draft.id)
+            ? t("draftEdit.saving")
+            : t("draftEdit.save")}
         </button>
 
         <button
@@ -77,7 +81,7 @@ export function DraftEditForm({
           disabled={busyDraftIds.includes(draft.id)}
           onClick={() => setEditingId(null)}
         >
-          Cancelar
+          {t("draftEdit.cancel")}
         </button>
       </div>
     </div>

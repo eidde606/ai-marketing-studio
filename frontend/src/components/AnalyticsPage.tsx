@@ -5,6 +5,7 @@ import {
   type Draft,
   type FacebookAnalytics,
 } from "../services/draftsApi";
+import { useLocalization } from "../app/localization";
 
 type Props = {
   drafts: Draft[];
@@ -12,11 +13,12 @@ type Props = {
   error: string | null;
 };
 
-function metricValue(value: number, hasData: boolean): string {
-  return hasData ? value.toLocaleString("es") : "—";
+function metricValue(value: number, hasData: boolean, locale: string): string {
+  return hasData ? value.toLocaleString(locale) : "—";
 }
 
 export default function AnalyticsPage({ drafts, loading, error }: Props) {
+  const { locale, t } = useLocalization();
   const publishedDrafts = useMemo(
     () =>
       drafts.filter(
@@ -33,7 +35,6 @@ export default function AnalyticsPage({ drafts, loading, error }: Props) {
   );
   const [analyticsFailure, setAnalyticsFailure] = useState<{
     requestKey: string;
-    message: string;
   } | null>(null);
   const [unavailableCount, setUnavailableCount] = useState(0);
   const [retryCount, setRetryCount] = useState(0);
@@ -41,7 +42,7 @@ export default function AnalyticsPage({ drafts, loading, error }: Props) {
   const analyticsLoading = completedRequestKey !== requestKey;
   const analyticsError =
     analyticsFailure?.requestKey === requestKey
-      ? analyticsFailure.message
+      ? t("analytics.loadError")
       : null;
 
   useEffect(() => {
@@ -67,7 +68,6 @@ export default function AnalyticsPage({ drafts, loading, error }: Props) {
         if (!cancelled) {
           setAnalyticsFailure({
             requestKey,
-            message: "No se pudieron procesar las analíticas.",
           });
           setCompletedRequestKey(requestKey);
         }
@@ -94,7 +94,9 @@ export default function AnalyticsPage({ drafts, loading, error }: Props) {
   if (loading) {
     return (
       <div className="analytics-workspace">
-        <p className="workspace-state" role="status">Cargando contenido…</p>
+        <p className="workspace-state" role="status">
+          {t("analytics.loading")}
+        </p>
       </div>
     );
   }
@@ -110,9 +112,9 @@ export default function AnalyticsPage({ drafts, loading, error }: Props) {
     <div className="analytics-workspace">
       <section className="page-intro">
         <div>
-          <span className="eyebrow">Mide lo que importa</span>
-          <h2>Analíticas</h2>
-          <p>Resultados disponibles de las publicaciones de este negocio.</p>
+          <span className="eyebrow">{t("analytics.eyebrow")}</span>
+          <h2>{t("analytics.title")}</h2>
+          <p>{t("analytics.description")}</p>
         </div>
         <button
           type="button"
@@ -123,7 +125,9 @@ export default function AnalyticsPage({ drafts, loading, error }: Props) {
             setRetryCount((count) => count + 1);
           }}
         >
-          {analyticsLoading ? "Actualizando…" : "Actualizar métricas"}
+          {analyticsLoading
+            ? t("analytics.refreshing")
+            : t("analytics.refreshMetrics")}
         </button>
       </section>
 
@@ -132,84 +136,94 @@ export default function AnalyticsPage({ drafts, loading, error }: Props) {
           <BarChart3 size={18} aria-hidden="true" />
         </span>
         <p>
-          Los datos disponibles aquí son métricas de Facebook. No se muestran
-          tendencias ni métricas de TikTok porque no están disponibles en esta
-          vista.
+          {t("analytics.sourceNote")}
         </p>
       </section>
 
       {analyticsLoading ? (
-        <p className="workspace-state" role="status">Consultando métricas de Facebook…</p>
+        <p className="workspace-state" role="status">
+          {t("analytics.querying")}
+        </p>
       ) : analyticsError ? (
         <p className="workspace-state workspace-state--error" role="alert">{analyticsError}</p>
       ) : (
         <>
-          <section className="analytics-metrics" aria-label="Métricas de Facebook">
+          <section
+            className="analytics-metrics"
+            aria-label={t("analytics.facebookMetrics")}
+          >
             <article className="analytics-metric">
               <span className="analytics-metric__icon analytics-metric__icon--violet">
                 <BarChart3 size={18} aria-hidden="true" />
               </span>
-              <small>Publicaciones confirmadas</small>
-              <strong>{publishedDrafts.length.toLocaleString("es")}</strong>
-              <span>Historial de Facebook</span>
+              <small>{t("analytics.confirmedPosts")}</small>
+              <strong>{publishedDrafts.length.toLocaleString(locale)}</strong>
+              <span>{t("analytics.facebookHistory")}</span>
             </article>
             <article className="analytics-metric">
               <span className="analytics-metric__icon analytics-metric__icon--blue">
                 <ThumbsUp size={18} aria-hidden="true" />
               </span>
-              <small>Reacciones</small>
-              <strong>{metricValue(totals.reactions, hasMetrics)}</strong>
-              <span>{hasMetrics ? "Total de datos accesibles" : "Sin datos disponibles"}</span>
+              <small>{t("analytics.reactions")}</small>
+              <strong>{metricValue(totals.reactions, hasMetrics, locale)}</strong>
+              <span>
+                {t(hasMetrics ? "analytics.accessibleTotal" : "analytics.noData")}
+              </span>
             </article>
             <article className="analytics-metric">
               <span className="analytics-metric__icon analytics-metric__icon--green">
                 <MessageCircle size={18} aria-hidden="true" />
               </span>
-              <small>Comentarios</small>
-              <strong>{metricValue(totals.comments, hasMetrics)}</strong>
-              <span>{hasMetrics ? "Total de datos accesibles" : "Sin datos disponibles"}</span>
+              <small>{t("analytics.comments")}</small>
+              <strong>{metricValue(totals.comments, hasMetrics, locale)}</strong>
+              <span>
+                {t(hasMetrics ? "analytics.accessibleTotal" : "analytics.noData")}
+              </span>
             </article>
             <article className="analytics-metric">
               <span className="analytics-metric__icon analytics-metric__icon--amber">
                 <Share2 size={18} aria-hidden="true" />
               </span>
-              <small>Compartidos</small>
-              <strong>{metricValue(totals.shares, hasMetrics)}</strong>
-              <span>{hasMetrics ? "Total de datos accesibles" : "Sin datos disponibles"}</span>
+              <small>{t("analytics.shares")}</small>
+              <strong>{metricValue(totals.shares, hasMetrics, locale)}</strong>
+              <span>
+                {t(hasMetrics ? "analytics.accessibleTotal" : "analytics.noData")}
+              </span>
             </article>
           </section>
 
           {unavailableCount > 0 && (
             <p className="analytics-warning" role="status">
-              {unavailableCount}{" "}
-              {unavailableCount === 1
-                ? "publicación no tiene métricas disponibles"
-                : "publicaciones no tienen métricas disponibles"}
-              . Puede deberse a restricciones de acceso o a que se eliminaron en
-              Facebook.
+              {t(
+                unavailableCount === 1
+                  ? "analytics.unavailableOne"
+                  : "analytics.unavailableMany",
+                { count: unavailableCount },
+              )}
             </p>
           )}
 
           <section className="analytics-posts">
             <header className="analytics-posts__header">
               <div>
-                <span className="eyebrow">Detalle</span>
-                <h3>Publicaciones analizadas</h3>
+                <span className="eyebrow">{t("analytics.detail")}</span>
+                <h3>{t("analytics.postsAnalyzed")}</h3>
               </div>
-              <span>{analytics.length} con datos</span>
+              <span>{t("analytics.withData", { count: analytics.length })}</span>
             </header>
             {publishedDrafts.length === 0 ? (
               <div className="analytics-empty">
                 <BarChart3 size={24} aria-hidden="true" />
-                <strong>Aún no hay publicaciones de Facebook</strong>
-                <p>Las métricas aparecerán cuando haya publicaciones confirmadas.</p>
+                <strong>{t("analytics.noFacebookPosts")}</strong>
+                <p>{t("analytics.postsWillAppear")}</p>
               </div>
             ) : analytics.length === 0 ? (
               <div className="analytics-empty">
-                <strong>No hay métricas disponibles</strong>
+                <strong>{t("analytics.noAvailableMetrics")}</strong>
                 <p>
-                  Hay {publishedDrafts.length} publicaciones confirmadas, pero
-                  Facebook no devolvió datos accesibles.
+                  {t("analytics.postsNoMetrics", {
+                    count: publishedDrafts.length,
+                  })}
                 </p>
               </div>
             ) : (
@@ -224,9 +238,15 @@ export default function AnalyticsPage({ drafts, loading, error }: Props) {
                         <span>Facebook · {item.platform}</span>
                       </div>
                       <div className="analytics-post__metrics">
-                        <span>{item.reactions} reacciones</span>
-                        <span>{item.comments} comentarios</span>
-                        <span>{item.shares} compartidos</span>
+                        <span>
+                          {item.reactions} {t("analytics.reactions").toLocaleLowerCase(locale)}
+                        </span>
+                        <span>
+                          {item.comments} {t("analytics.comments").toLocaleLowerCase(locale)}
+                        </span>
+                        <span>
+                          {item.shares} {t("analytics.shares").toLocaleLowerCase(locale)}
+                        </span>
                       </div>
                       {item.permalink_url && (
                         <a
@@ -234,7 +254,7 @@ export default function AnalyticsPage({ drafts, loading, error }: Props) {
                           target="_blank"
                           rel="noopener noreferrer"
                         >
-                          Ver publicación
+                          {t("analytics.viewPost")}
                         </a>
                       )}
                     </article>

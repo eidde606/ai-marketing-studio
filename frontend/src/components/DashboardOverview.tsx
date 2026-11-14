@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { getFacebookReach, type Draft } from "../services/draftsApi";
 import { getCampaigns, type Campaign } from "../services/campaignsApi";
+import { useLocalization } from "../app/localization";
 import type { Section } from "./Sidebar";
 
 type Agent = {
@@ -27,6 +28,7 @@ type DashboardOverviewProps = {
   loadError: string | null;
   visibleDrafts: Draft[];
   pendingCount: number;
+  canApprove: boolean;
   agents: Agent[];
   userDisplayName: string;
   draftMessages: ReactNode;
@@ -50,6 +52,7 @@ const DashboardOverview: FC<DashboardOverviewProps> = ({
   loadError,
   visibleDrafts,
   pendingCount,
+  canApprove,
   agents,
   userDisplayName,
   draftMessages,
@@ -64,6 +67,7 @@ const DashboardOverview: FC<DashboardOverviewProps> = ({
   startEditing,
   setActiveSection,
 }) => {
+  const { locale, t } = useLocalization();
   const [campaignResult, setCampaignResult] = useState<{
     businessId: string;
     campaigns: Campaign[];
@@ -102,14 +106,14 @@ const DashboardOverview: FC<DashboardOverviewProps> = ({
           setCampaignResult({
             businessId: selectedBusinessId,
             campaigns: [],
-            error: "No se pudieron cargar las campañas.",
+            error: t("dashboard.campaignsLoadError"),
           });
       });
 
     return () => {
       active = false;
     };
-  }, [selectedBusinessId]);
+  }, [selectedBusinessId, t]);
 
   const publishedFacebookDrafts = useMemo(
     () =>
@@ -191,12 +195,10 @@ const DashboardOverview: FC<DashboardOverviewProps> = ({
         <div className="dashboard-hero__copy">
           <span className="dashboard-kicker">
             <Sparkles size={15} aria-hidden="true" />
-            Tu espacio creativo
+            {t("dashboard.heroEyebrow")}
           </span>
-          <h2>Hola, {userDisplayName}</h2>
-          <p>
-            Sigue tu trabajo y continúa con el siguiente paso de tu marketing.
-          </p>
+          <h2>{t("dashboard.hello", { name: userDisplayName })}</h2>
+          <p>{t("dashboard.intro")}</p>
         </div>
         <button
           className="dashboard-hero__action"
@@ -205,7 +207,7 @@ const DashboardOverview: FC<DashboardOverviewProps> = ({
           disabled={!selectedBusinessId || generating}
         >
           <FilePlus2 size={18} aria-hidden="true" />
-          {generating ? "Preparando contenido…" : "Crear contenido"}
+          {generating ? t("dashboard.preparing") : t("dashboard.create")}
           <ArrowRight size={16} aria-hidden="true" />
         </button>
         {generationError && (
@@ -215,12 +217,15 @@ const DashboardOverview: FC<DashboardOverviewProps> = ({
         )}
       </section>
 
-      <section className="workflow-steps" aria-label="Flujo de trabajo">
+      <section
+        className="workflow-steps"
+        aria-label={t("dashboard.workflow")}
+      >
         {[
-          ["Planifica", "Campañas", "Campañas"],
-          ["Crea", "Equipo IA", "Equipo IA"],
-          ["Revisa", "Aprobaciones", "Aprobaciones"],
-          ["Analiza", "Resultados", "Analíticas"],
+          [t("dashboard.stepCreate"), t("nav.content"), "Contenido"],
+          [t("dashboard.stepReview"), t("nav.approvals"), "Aprobaciones"],
+          [t("dashboard.stepApprove"), t("nav.approvals"), "Aprobaciones"],
+          [t("dashboard.stepResults"), t("nav.analytics"), "Analíticas"],
         ].map(([label, hint, section], index) => (
           <button
             type="button"
@@ -240,49 +245,67 @@ const DashboardOverview: FC<DashboardOverviewProps> = ({
         ))}
       </section>
 
-      <section className="dashboard-kpis" aria-label="Actividad del negocio">
+      <section
+        className="dashboard-kpis"
+        aria-label={t("dashboard.businessActivity")}
+      >
         <article className="dashboard-kpi">
           <span className="dashboard-kpi__icon dashboard-kpi__icon--violet">
             <Megaphone size={18} aria-hidden="true" />
           </span>
-          <span className="dashboard-kpi__label">Campañas activas</span>
+          <span className="dashboard-kpi__label">
+            {t("dashboard.activeCampaigns")}
+          </span>
           <strong>
             {campaignsLoading || campaignsError ? "—" : activeCampaigns.length}
           </strong>
-          <small>{campaignsError ?? "De este negocio"}</small>
+          <small>{campaignsError ?? t("dashboard.thisBusiness")}</small>
         </article>
         <article className="dashboard-kpi">
           <span className="dashboard-kpi__icon dashboard-kpi__icon--blue">
             <FilePlus2 size={18} aria-hidden="true" />
           </span>
-          <span className="dashboard-kpi__label">Contenido en biblioteca</span>
+          <span className="dashboard-kpi__label">
+            {t("dashboard.library")}
+          </span>
           <strong>{loadingDrafts || loadError ? "—" : drafts.length}</strong>
-          <small>{loadError ?? "Borradores e historial"}</small>
+          <small>{loadError ?? t("dashboard.draftsHistory")}</small>
         </article>
         <article className="dashboard-kpi">
           <span className="dashboard-kpi__icon dashboard-kpi__icon--amber">
             <Clock3 size={18} aria-hidden="true" />
           </span>
-          <span className="dashboard-kpi__label">Por revisar</span>
+          <span className="dashboard-kpi__label">
+            {t("dashboard.pendingReview")}
+          </span>
           <strong>{loadingDrafts || loadError ? "—" : pendingCount}</strong>
-          <small>{loadError ?? "Esperando tu aprobación"}</small>
+          <small>
+            {loadError ??
+              t(canApprove ? "dashboard.awaitingApproval" : "dashboard.awaitingAdmin")}
+          </small>
         </article>
         <article className="dashboard-kpi">
           <span className="dashboard-kpi__icon dashboard-kpi__icon--green">
             <BarChart3 size={18} aria-hidden="true" />
           </span>
-          <span className="dashboard-kpi__label">Espectadores únicos</span>
+          <span className="dashboard-kpi__label">
+            {t("dashboard.uniqueViewers")}
+          </span>
           <strong>
             {reachLoading
               ? "…"
               : uniqueMediaViews === null
                 ? "—"
-                : uniqueMediaViews.toLocaleString("es")}
+                : uniqueMediaViews.toLocaleString(
+                    locale === "es" ? "es" : "en-US",
+                  )}
           </strong>
           <small>
             {unavailableReachCount > 0
-              ? `${unavailableReachCount} publicaciones sin dato disponible`
-              : "Métricas disponibles de Facebook"}
+              ? t("dashboard.unavailableMetrics", {
+                  count: unavailableReachCount,
+                })
+              : t("dashboard.facebookMetrics")}
           </small>
         </article>
       </section>
@@ -291,19 +314,22 @@ const DashboardOverview: FC<DashboardOverviewProps> = ({
         <article className="workspace-card dashboard-campaigns">
           <header className="workspace-card__header">
             <div>
-              <span className="eyebrow">Planifica</span>
-              <h3>Campañas</h3>
+              <span className="eyebrow">{t("dashboard.plan")}</span>
+              <h3>{t("dashboard.campaigns")}</h3>
             </div>
             <button
               type="button"
               className="quiet-link"
               onClick={() => setActiveSection("Campañas")}
             >
-              Ver campañas <ArrowRight size={15} aria-hidden="true" />
+              {t("dashboard.viewCampaigns")}{" "}
+              <ArrowRight size={15} aria-hidden="true" />
             </button>
           </header>
           {campaignsLoading ? (
-            <p className="workspace-state" role="status">Cargando campañas…</p>
+            <p className="workspace-state" role="status">
+              {t("dashboard.loadingCampaigns")}
+            </p>
           ) : campaignsError ? (
             <p className="workspace-state workspace-state--error" role="alert">
               {campaignsError}
@@ -316,14 +342,14 @@ const DashboardOverview: FC<DashboardOverviewProps> = ({
                     <strong>{campaign.name}</strong>
                     <span className={`status-pill status-pill--${campaign.status}`}>
                       {campaign.status === "active"
-                        ? "Activa"
+                        ? t("dashboard.campaignStatus.active")
                         : campaign.status === "paused"
-                          ? "Pausada"
+                          ? t("dashboard.campaignStatus.paused")
                           : campaign.status === "completed"
-                            ? "Completada"
+                            ? t("dashboard.campaignStatus.completed")
                             : campaign.status === "archived"
-                              ? "Archivada"
-                              : "Borrador"}
+                              ? t("dashboard.campaignStatus.archived")
+                              : t("dashboard.campaignStatus.draft")}
                     </span>
                   </div>
                   <p>{campaign.objective}</p>
@@ -331,8 +357,11 @@ const DashboardOverview: FC<DashboardOverviewProps> = ({
                     <span style={{ width: `${campaign.progress}%` }} />
                   </div>
                   <small>
-                    {campaign.published_count} de {campaign.total_count} piezas
-                    publicadas · {campaign.progress}%
+                    {t("dashboard.postsPublished", {
+                      published: campaign.published_count,
+                      total: campaign.total_count,
+                      progress: campaign.progress,
+                    })}
                   </small>
                 </div>
               ))}
@@ -340,10 +369,11 @@ const DashboardOverview: FC<DashboardOverviewProps> = ({
           ) : (
             <div className="workspace-empty">
               <span className="workspace-empty__icon"><Megaphone size={20} /></span>
-              <strong>Tu primera campaña empieza aquí</strong>
-              <p>Define un objetivo y organiza el contenido de tu negocio.</p>
+              <strong>{t("dashboard.firstCampaign")}</strong>
+              <p>{t("dashboard.campaignHelp")}</p>
               <button type="button" className="quiet-link" onClick={() => setActiveSection("Campañas")}>
-                Crear campaña <ArrowRight size={15} aria-hidden="true" />
+                {t("dashboard.createCampaign")}{" "}
+                <ArrowRight size={15} aria-hidden="true" />
               </button>
             </div>
           )}
@@ -352,8 +382,8 @@ const DashboardOverview: FC<DashboardOverviewProps> = ({
         <article className="workspace-card dashboard-approvals">
           <header className="workspace-card__header">
             <div>
-              <span className="eyebrow">Revisión</span>
-              <h3>Necesitan tu atención</h3>
+              <span className="eyebrow">{t("dashboard.review")}</span>
+              <h3>{t("dashboard.needsAttention")}</h3>
             </div>
             <span className="dashboard-count">{pendingCount}</span>
           </header>
@@ -381,35 +411,41 @@ const DashboardOverview: FC<DashboardOverviewProps> = ({
                         editingId === draft.id
                       }
                     >
-                      Revisar
+                      {t("dashboard.reviewDraft")}
                     </button>
-                    <button
-                      type="button"
-                      className="dashboard-approval__approve"
-                      onClick={() => void handleApprove(draft.id)}
-                      disabled={
-                        approvingIds.includes(draft.id) ||
-                        busyDraftIds.includes(draft.id) ||
-                        imageBusyIds.includes(draft.id) ||
-                        editingId === draft.id
-                      }
-                    >
-                      <CheckCircle2 size={15} aria-hidden="true" />
-                      {approvingIds.includes(draft.id) ? "Aprobando…" : "Aprobar"}
-                    </button>
-                    <button
-                      type="button"
-                      className="dashboard-approval__reject"
-                      onClick={() => void handleReject(draft.id)}
-                      disabled={
-                        busyDraftIds.includes(draft.id) ||
-                        approvingIds.includes(draft.id) ||
-                        imageBusyIds.includes(draft.id) ||
-                        editingId === draft.id
-                      }
-                    >
-                      Rechazar
-                    </button>
+                    {canApprove && (
+                      <>
+                        <button
+                          type="button"
+                          className="dashboard-approval__approve"
+                          onClick={() => void handleApprove(draft.id)}
+                          disabled={
+                            approvingIds.includes(draft.id) ||
+                            busyDraftIds.includes(draft.id) ||
+                            imageBusyIds.includes(draft.id) ||
+                            editingId === draft.id
+                          }
+                        >
+                          <CheckCircle2 size={15} aria-hidden="true" />
+                          {approvingIds.includes(draft.id)
+                            ? t("dashboard.approving")
+                            : t("dashboard.approve")}
+                        </button>
+                        <button
+                          type="button"
+                          className="dashboard-approval__reject"
+                          onClick={() => void handleReject(draft.id)}
+                          disabled={
+                            busyDraftIds.includes(draft.id) ||
+                            approvingIds.includes(draft.id) ||
+                            imageBusyIds.includes(draft.id) ||
+                            editingId === draft.id
+                          }
+                        >
+                          {t("dashboard.reject")}
+                        </button>
+                      </>
+                    )}
                   </div>
                 </article>
               ))}
@@ -417,8 +453,8 @@ const DashboardOverview: FC<DashboardOverviewProps> = ({
           ) : !loadingDrafts && !loadError ? (
             <div className="workspace-empty workspace-empty--compact">
               <CheckCircle2 size={22} aria-hidden="true" />
-              <strong>No hay aprobaciones pendientes</strong>
-              <p>Tu bandeja está al día.</p>
+              <strong>{t("dashboard.noPending")}</strong>
+              <p>{t("dashboard.inboxCurrent")}</p>
             </div>
           ) : null}
           <button
@@ -426,22 +462,24 @@ const DashboardOverview: FC<DashboardOverviewProps> = ({
             className="quiet-link dashboard-section-link"
             onClick={() => setActiveSection("Aprobaciones")}
           >
-            Abrir bandeja <ArrowRight size={15} aria-hidden="true" />
+            {t("dashboard.openReview")}{" "}
+            <ArrowRight size={15} aria-hidden="true" />
           </button>
         </article>
 
         <article className="workspace-card dashboard-publications">
           <header className="workspace-card__header">
             <div>
-              <span className="eyebrow">Publicado</span>
-              <h3>Actividad reciente</h3>
+              <span className="eyebrow">{t("dashboard.published")}</span>
+              <h3>{t("dashboard.recentActivity")}</h3>
             </div>
             <button
               type="button"
               className="quiet-link"
               onClick={() => setActiveSection("Contenido")}
             >
-              Ver contenido <ArrowRight size={15} aria-hidden="true" />
+              {t("dashboard.viewContent")}{" "}
+              <ArrowRight size={15} aria-hidden="true" />
             </button>
           </header>
           {recentPosts.length ? (
@@ -462,15 +500,17 @@ const DashboardOverview: FC<DashboardOverviewProps> = ({
                       · {formatDraftDate(draft.published_at ?? "")}
                     </p>
                   </div>
-                  <CheckCircle2 size={17} aria-label="Publicado" />
+                  <CheckCircle2
+                    size={17}
+                    aria-label={t("dashboard.publishedLabel")}
+                  />
                 </article>
               ))}
             </div>
           ) : (
             <div className="workspace-empty workspace-empty--compact">
               <p>
-                Las publicaciones aparecerán aquí después de confirmar su
-                publicación.
+                {t("dashboard.noPublications")}
               </p>
             </div>
           )}
@@ -479,15 +519,16 @@ const DashboardOverview: FC<DashboardOverviewProps> = ({
         <article className="workspace-card dashboard-team">
           <header className="workspace-card__header">
             <div>
-              <span className="eyebrow">Tu equipo de IA</span>
-              <h3>Roles y actividad</h3>
+              <span className="eyebrow">{t("dashboard.team")}</span>
+              <h3>{t("dashboard.teamActivity")}</h3>
             </div>
             <button
               type="button"
               className="quiet-link"
               onClick={() => setActiveSection("Equipo IA")}
             >
-              Ir al equipo <ArrowRight size={15} aria-hidden="true" />
+              {t("dashboard.openTeam")}{" "}
+              <ArrowRight size={15} aria-hidden="true" />
             </button>
           </header>
           <div className="dashboard-agent-list">

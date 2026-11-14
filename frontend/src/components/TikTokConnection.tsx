@@ -1,13 +1,19 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   getConnectedTikTokAccounts,
   startTikTokConnection,
   type ConnectedTikTokAccount,
 } from "../services/tiktokApi";
+import { useLocalization } from "../app/localization";
 
 type Props = { businessId: string };
 
 export default function TikTokConnection({ businessId }: Props) {
+  const { t } = useLocalization();
+  const tRef = useRef(t);
+  useEffect(() => {
+    tRef.current = t;
+  }, [t]);
   const [retryCount, setRetryCount] = useState(0);
   const [snapshot, setSnapshot] = useState<{
     businessId: string;
@@ -47,9 +53,9 @@ export default function TikTokConnection({ businessId }: Props) {
         if (active) {
           let resultMessage = "";
           if (connected && result.length > 0)
-            resultMessage = "Se verificó la cuenta de TikTok para este negocio.";
+            resultMessage = tRef.current("tiktok.verified");
           else if (connected)
-            resultMessage = "Verifica que hayas seleccionado el negocio correcto.";
+            resultMessage = tRef.current("tiktok.wrongBusiness");
           setSnapshot({
             businessId,
             retryCount,
@@ -64,8 +70,7 @@ export default function TikTokConnection({ businessId }: Props) {
             businessId,
             retryCount,
             accounts: [],
-            message:
-            "No se pudo verificar la conexión de TikTok. Inténtalo de nuevo.",
+            message: tRef.current("tiktok.verifyError"),
             failed: true,
           });
       }
@@ -89,7 +94,9 @@ export default function TikTokConnection({ businessId }: Props) {
         retryCount,
         accounts: currentSnapshot?.accounts ?? [],
         message:
-          error instanceof Error ? error.message : "No se pudo iniciar TikTok.",
+          error instanceof Error
+            ? error.message
+            : tRef.current("tiktok.connectError"),
         failed: false,
       });
     } finally {
@@ -110,12 +117,9 @@ export default function TikTokConnection({ businessId }: Props) {
             ♪
           </div>
           <div>
-            <span className="eyebrow">Redes sociales</span>
-            <h2>Conexión con TikTok</h2>
-            <p>
-              Autoriza TikTok para este negocio y revisa el estado de la cuenta
-              conectada.
-            </p>
+            <span className="eyebrow">{t("tiktok.eyebrow")}</span>
+            <h2>{t("tiktok.title")}</h2>
+            <p>{t("tiktok.description")}</p>
           </div>
         </div>
         <span
@@ -131,22 +135,19 @@ export default function TikTokConnection({ businessId }: Props) {
           role="status"
         >
           {loading
-            ? "Verificando"
+            ? t("tiktok.checking")
             : connectedAccounts.length
-              ? "Conectada"
+              ? t("tiktok.connectedStatus")
               : connectionAvailable
-                ? "Revisar acceso"
-                : "No conectada"}
+                ? t("tiktok.reviewAccess")
+                : t("tiktok.notConnected")}
         </span>
       </div>
       <div className="facebook-connection-content">
         <div className="facebook-connection-description">
-          <strong>La autorización de TikTok está disponible</strong>
-          <p>
-            La publicación depende de los permisos concedidos y de la
-            elegibilidad de la cuenta. Esta pantalla confirma la conexión; no
-            garantiza que cada publicación sea aceptada por TikTok.
-          </p>
+          <strong>{t("tiktok.available")}</strong>
+          <p>{t("tiktok.eligibility")}</p>
+          <p>{t("tiktok.manualOnly")}</p>
         </div>
         <button
           type="button"
@@ -155,13 +156,13 @@ export default function TikTokConnection({ businessId }: Props) {
           disabled={loading || !businessId}
         >
           {connectedAccounts.length > 0
-            ? "Reconectar TikTok"
-            : "Conectar TikTok"}
+            ? t("tiktok.reconnect")
+            : t("tiktok.connect")}
         </button>
       </div>
       {loading && !message && (
         <p className="facebook-connection-message" role="status">
-          Verificando el estado de TikTok…
+          {t("tiktok.loading")}
         </p>
       )}
       {accounts.map((account, index) => (
@@ -169,10 +170,16 @@ export default function TikTokConnection({ businessId }: Props) {
           key={account.id ?? account.platform_account_id ?? index}
           className="facebook-connection-message"
         >
-          {account.account_name ?? account.display_name ?? "Cuenta de TikTok"} —{" "}
+          {account.account_name ??
+            account.display_name ??
+            t("tiktok.account")}{" "}
+          —{" "}
           {account.connection_status === "connected"
-            ? "Conectada"
-            : `Estado: ${account.connection_status ?? "sin verificar"}`}
+            ? t("tiktok.connectedStatus")
+            : t("tiktok.status", {
+                status:
+                  account.connection_status ?? t("tiktok.unverified"),
+              })}
         </p>
       ))}
       {message && (
@@ -189,7 +196,7 @@ export default function TikTokConnection({ businessId }: Props) {
           className="outline-button"
           onClick={() => setRetryCount((count) => count + 1)}
         >
-          Reintentar verificación
+          {t("tiktok.retry")}
         </button>
       )}
     </section>

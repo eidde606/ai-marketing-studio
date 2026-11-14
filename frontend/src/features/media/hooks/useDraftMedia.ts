@@ -13,12 +13,19 @@ import {
 import { useDraftImages } from "../../../hooks/useDraftImages";
 import type { DraftCollection } from "../../drafts/hooks/useDraftCollection";
 import type { DraftOperations } from "../../drafts/hooks/useDraftOperations";
+import { useLocalization } from "../../../app/localization";
+import { useRef } from "react";
 
 export function useDraftMedia(
   selectedBusinessId: string,
   collection: DraftCollection,
   operations: Pick<DraftOperations, "imageLocks" | "busyDraftIds">,
 ) {
+  const { t } = useLocalization();
+  const tRef = useRef(t);
+  useEffect(() => {
+    tRef.current = t;
+  }, [t]);
   const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
   const [imageBusyIds, setImageBusyIds] = useState<string[]>([]);
   const [imageErrors, setImageErrors] = useState<Record<string, string>>({});
@@ -68,7 +75,7 @@ export function useDraftMedia(
       return;
     if (
       !window.confirm(
-        "¿Generar una imagen con IA? Esta operación puede generar un cargo en la API de OpenAI.",
+        tRef.current("media.confirmGenerate"),
       )
     )
       return;
@@ -116,7 +123,7 @@ export function useDraftMedia(
           setImageErrors((current) => ({
             ...current,
             [draft.id]:
-              "No se pudo confirmar la generación. Actualiza la página antes de intentar nuevamente.",
+              tRef.current("media.generationUncertain"),
           }));
         }
       }
@@ -150,7 +157,7 @@ export function useDraftMedia(
       if (isCurrentBusiness() && selectedBusinessRef.current === businessId) {
         setImageErrors((current) => ({
           ...current,
-          [draft.id]: "No se pudo cargar la imagen. Inténtalo nuevamente.",
+          [draft.id]: tRef.current("media.imageLoadError"),
         }));
       }
     } finally {
@@ -179,7 +186,7 @@ export function useDraftMedia(
       if (isCurrentBusiness() && selectedBusinessRef.current === businessId) {
         setRevisionErrors((current) => ({
           ...current,
-          [draftId]: "No se pudo consultar el estado de la edición.",
+          [draftId]: tRef.current("media.revisionStatusError"),
         }));
       }
     }
@@ -200,7 +207,7 @@ export function useDraftMedia(
       return;
     if (
       !window.confirm(
-        "¿Crear una nueva imagen con IA? Esta solicitud puede generar un cargo adicional en OpenAI. La original se conservará.",
+        tRef.current("media.confirmRevision"),
       )
     )
       return;
@@ -221,7 +228,7 @@ export function useDraftMedia(
         setRevisionErrors((current) => ({
           ...current,
           [draft.id]:
-            "No se pudo confirmar la generación. Consulta el estado antes de volver a intentarlo para evitar cargos duplicados.",
+            tRef.current("media.revisionUncertain"),
         }));
       }
     } finally {
@@ -243,7 +250,7 @@ export function useDraftMedia(
       return;
     if (
       decision === "accept" &&
-      !window.confirm("¿Usar la nueva versión para esta publicación?")
+      !window.confirm(tRef.current("media.confirmAccept"))
     )
       return;
     const businessId = draft.business_id;
@@ -282,7 +289,7 @@ export function useDraftMedia(
         setRevisionErrors((current) => ({
           ...current,
           [draft.id]:
-            "No se pudo confirmar el cambio. Actualiza la página y comprueba el resultado.",
+            tRef.current("media.revisionDecisionError"),
         }));
       }
     } finally {

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   approveDraft,
   updateDraftDestinations,
@@ -9,12 +9,18 @@ import {
 } from "../../../services/draftsApi";
 import type { DraftCollection } from "../../drafts/hooks/useDraftCollection";
 import type { DraftOperations } from "../../drafts/hooks/useDraftOperations";
+import { useLocalization } from "../../../app/localization";
 
 export function useApprovalActions(
   selectedBusinessId: string,
   collection: DraftCollection,
   operations: DraftOperations,
 ) {
+  const { t } = useLocalization();
+  const tRef = useRef(t);
+  useEffect(() => {
+    tRef.current = t;
+  }, [t]);
   const { visibleDrafts, setApprovals, updateLocalDraft, isCurrentBusiness } =
     collection;
   const {
@@ -67,7 +73,7 @@ export function useApprovalActions(
       updateLocalDraft(updated);
     } catch {
       if (!isCurrentBusiness()) return;
-      setApprovalError("No se pudo aprobar el borrador. Inténtalo de nuevo.");
+      setApprovalError(tRef.current("approval.approveError"));
     } finally {
       setApprovingIds((current) => current.filter((value) => value !== id));
     }
@@ -121,7 +127,7 @@ export function useApprovalActions(
 
       if (!isCurrentBusiness()) return;
       setPublishError(
-        "No se pudo confirmar la publicación en TikTok. Verifica el estado antes de intentar nuevamente.",
+        tRef.current("approval.tiktokPublishError"),
       );
 
       // The request may have reached TikTok.
@@ -166,7 +172,7 @@ export function useApprovalActions(
     } catch {
       if (!isCurrentBusiness()) return;
       setPublishError(
-        "No se pudo confirmar la publicación. Revisa Facebook antes de intentar nuevamente.",
+        tRef.current("approval.facebookPublishError"),
       );
       // The server may have marked the draft as needing review.
       // Reloading drafts later will retrieve the authoritative status.
@@ -201,7 +207,7 @@ export function useApprovalActions(
 
       if (!isCurrentBusiness()) return;
       setPublishError(
-        "No se pudo verificar la publicación en TikTok. Inténtalo nuevamente más tarde.",
+        tRef.current("approval.tiktokVerifyError"),
       );
     } finally {
       setPublishingIds((current) => current.filter((value) => value !== id));
@@ -231,7 +237,7 @@ export function useApprovalActions(
       console.error("Facebook video verification failed:", error);
       if (!isCurrentBusiness()) return;
       setPublishError(
-        "No se pudo verificar el video. Inténtalo nuevamente más tarde.",
+        tRef.current("approval.facebookVerifyError"),
       );
     }
   };

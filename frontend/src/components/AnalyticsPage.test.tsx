@@ -45,12 +45,12 @@ describe("AnalyticsPage", () => {
     );
 
     expect(await screen.findByText("12")).toBeTruthy();
-    expect(screen.getByText("3 comentarios")).toBeTruthy();
-    expect(screen.getByText("2 compartidos")).toBeTruthy();
+    expect(screen.getByText("3 comments")).toBeTruthy();
+    expect(screen.getByText("2 shares")).toBeTruthy();
     expect(
-      screen.getByText(/No se muestran tendencias ni métricas de TikTok/),
+      screen.getByText(/TikTok trends and metrics are not available/),
     ).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Ver publicación" })).toHaveProperty(
+    expect(screen.getByRole("link", { name: "View post" })).toHaveProperty(
       "href",
       "https://facebook.test/post",
     );
@@ -60,7 +60,7 @@ describe("AnalyticsPage", () => {
     render(<AnalyticsPage drafts={[]} loading={false} error={null} />);
 
     expect(
-      await screen.findByText("Aún no hay publicaciones de Facebook"),
+      await screen.findByText("No Facebook posts yet"),
     ).toBeTruthy();
     expect(screen.getAllByText("—")).toHaveLength(3);
   });
@@ -77,8 +77,8 @@ describe("AnalyticsPage", () => {
     );
 
     expect(
-      await screen.findByText(/publicación no tiene métricas disponibles/),
+      await screen.findByText(/post has no available metrics/),
     ).toBeTruthy();
-    expect(screen.getByText("No hay métricas disponibles")).toBeTruthy();
+    expect(screen.getByText("No metrics available")).toBeTruthy();
   });
 });

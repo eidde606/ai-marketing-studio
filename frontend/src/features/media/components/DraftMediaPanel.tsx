@@ -5,6 +5,7 @@ import type { Draft } from "../../../services/draftsApi";
 import type { useDraftMedia } from "../hooks/useDraftMedia";
 import type { useApprovalMedia } from "../hooks/useApprovalMedia";
 import { VideoUpload } from "./VideoUpload";
+import { useLocalization } from "../../../app/localization";
 type Props = {
   heygen?: HeyGenController;
   draft: Draft;
@@ -31,6 +32,7 @@ export function DraftMediaPanel({
   handlePreviewImage,
   browserMedia,
 }: Props) {
+  const { t } = useLocalization();
   const [heygenOpen, setHeygenOpen] = useState(false);
   const {
     openVideoEditorId,
@@ -46,34 +48,34 @@ export function DraftMediaPanel({
   return (
     <section
       className="draft-image-section"
-      aria-label="Multimedia y herramientas para el borrador"
+      aria-label={t("media.ariaLabel")}
     >
       <strong>
         {draft.media_type === "video"
-          ? "Multimedia del video"
-          : "Imagen de la publicación"}
+          ? t("media.videoAssets")
+          : t("media.postImage")}
       </strong>
 
       {imageUrls[draft.id] && (
         <img
           className="approval-media-image"
           src={imageUrls[draft.id]}
-          alt={`Imagen para ${draft.title}`}
+          alt={t("media.imageFor", { title: draft.title })}
         />
       )}
 
       {draft.image_status === "generating" && (
         <p role="status">
-          La imagen se está generando. Esto puede tardar unos minutos.
+          {t("media.imageGenerating")}
         </p>
       )}
 
       {draft.image_status === "failed" && (
-        <p role="status">La generación anterior no se completó.</p>
+        <p role="status">{t("media.imageFailed")}</p>
       )}
 
       {draft.image_status === "completed" && !imageUrls[draft.id] && (
-        <p>La imagen está guardada y lista para visualizar.</p>
+        <p>{t("media.imageReady")}</p>
       )}
 
       {imageErrors[draft.id] && (
@@ -98,10 +100,10 @@ export function DraftMediaPanel({
               onClick={() => void handleGenerateImage(draft)}
             >
               {imageBusyIds.includes(draft.id)
-                ? "Generando imagen..."
+                ? t("media.generatingImage")
                 : draft.image_status === "failed"
-                  ? "Reintentar imagen"
-                  : "✦ Generar imagen"}
+                  ? t("media.retryImage")
+                  : t("media.createImage")}
             </button>
           )}
 
@@ -113,10 +115,10 @@ export function DraftMediaPanel({
             onClick={() => void handlePreviewImage(draft)}
           >
             {imageBusyIds.includes(draft.id)
-              ? "Cargando imagen..."
+              ? t("media.loadingImage")
               : imageUrls[draft.id]
-                ? "Actualizar vista previa"
-                : "Ver imagen"}
+                ? t("media.refreshPreview")
+                : t("media.viewImage")}
           </button>
         )}
       </div>
@@ -125,7 +127,7 @@ export function DraftMediaPanel({
         draft.video_status === "completed" &&
         !!draft.video_url && (
           <div className="approval-video-preview">
-            <strong>Video de la publicación</strong>
+            <strong>{t("media.videoPost")}</strong>
 
             <button
               type="button"
@@ -144,10 +146,10 @@ export function DraftMediaPanel({
               }}
             >
               {videoLoadingId === draft.id
-                ? "Cargando video..."
+                ? t("media.loadingVideo")
                 : videoUrls[draft.id]
-                  ? "Cerrar video"
-                  : "🎬 Ver video"}
+                  ? t("media.closeVideo")
+                  : t("media.viewVideo")}
             </button>
 
             {videoUrls[draft.id] && (
@@ -159,7 +161,7 @@ export function DraftMediaPanel({
                 playsInline
                 preload="metadata"
               >
-                Tu navegador no admite la reproducción de video.
+                {t("media.videoUnsupported")}
               </video>
             )}
 
@@ -174,14 +176,16 @@ export function DraftMediaPanel({
           <div
             className="heygen-script-header"
           >
-            <strong>🎬 Guion para HeyGen</strong>
+            <strong>{t("media.heygenScript")}</strong>
 
             <button
               type="button"
               className="text-button"
               onClick={() => void handleCopyScript(draft)}
             >
-              {copiedScriptId === draft.id ? "✓ Copiado" : "Copiar guion"}
+              {copiedScriptId === draft.id
+                ? t("media.copied")
+                : t("media.copyScript")}
             </button>
           </div>
 
@@ -203,8 +207,8 @@ export function DraftMediaPanel({
               onClick={() => setHeygenOpen((value) => !value)}
             >
               {heygenOpen
-                ? "Cerrar generación de video"
-                : "Crear o recuperar video con HeyGen"}
+                ? t("media.closeHeygen")
+                : t("media.createHeygen")}
             </button>
             {heygenOpen && (
               <HeyGenGenerationPanel draft={draft} controller={heygen} />
@@ -227,8 +231,8 @@ export function DraftMediaPanel({
               }
             >
               {openVideoEditorId === draft.id
-                ? "Cerrar carga de video"
-                : "🎬 Subir video MP4"}
+                ? t("media.closeUpload")
+                : t("media.uploadVideo")}
             </button>
 
             {openVideoEditorId === draft.id && (
@@ -245,7 +249,7 @@ export function DraftMediaPanel({
 
       {!draft.image_prompt && !draft.image_url && (
         <small>
-          Este borrador no tiene una descripción de imagen generada por IA.
+          {t("media.noImagePrompt")}
         </small>
       )}
     </section>

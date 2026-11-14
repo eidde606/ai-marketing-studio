@@ -1,5 +1,6 @@
 import { Eye, EyeOff, LockKeyhole, Mail, Sparkles } from "lucide-react";
 import { useState, type FormEvent } from "react";
+import { useLocalization } from "../app/localization";
 import { supabase } from "../services/supabaseClient";
 
 type AuthMode = "login" | "forgot" | "reset";
@@ -13,6 +14,7 @@ export default function AuthPage({
   recoveryMode = false,
   onRecoveryComplete,
 }: AuthPageProps) {
+  const { locale, setInterfaceLanguage, t } = useLocalization();
   const [mode, setMode] = useState<AuthMode>(recoveryMode ? "reset" : "login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -44,12 +46,10 @@ export default function AuthPage({
 
         if (error) throw error;
 
-        setMessage(
-          "Si existe una cuenta con ese correo, recibirás un enlace para restablecer tu contraseña.",
-        );
+        setMessage(t("auth.resetLinkSent"));
       } else if (currentMode === "reset") {
         if (password.length < 12) {
-          throw new Error("La contraseña debe tener al menos 12 caracteres.");
+          throw new Error(t("auth.passwordMin"));
         }
 
         const { error } = await supabase.auth.updateUser({
@@ -60,7 +60,7 @@ export default function AuthPage({
 
         setPassword("");
         onRecoveryComplete?.();
-        setMessage("Contraseña actualizada correctamente.");
+        setMessage(t("auth.passwordSaved"));
       } else {
         const { error } = await supabase.auth.signInWithPassword({
           email,
@@ -70,10 +70,13 @@ export default function AuthPage({
         if (error) throw error;
       }
     } catch (err) {
+      const message = err instanceof Error ? err.message : "";
       setError(
-        err instanceof Error
-          ? err.message
-          : "Ocurrió un error. Inténtalo nuevamente.",
+        message === t("auth.passwordMin")
+          ? message
+          : currentMode === "login"
+            ? t("auth.signInError")
+            : t("auth.unknownError"),
       );
     } finally {
       setLoading(false);
@@ -82,6 +85,26 @@ export default function AuthPage({
 
   return (
     <main className="min-h-screen bg-slate-950 lg:grid lg:grid-cols-2">
+      <div className="fixed right-4 top-4 z-20 rounded-lg border border-white/15 bg-slate-950/60 p-2 text-sm text-white shadow-lg backdrop-blur sm:right-6 sm:top-6">
+        <label className="sr-only" htmlFor="auth-language">
+          {t("language.choose")}
+        </label>
+        <select
+          id="auth-language"
+          value={locale}
+          onChange={(event) =>
+            void setInterfaceLanguage(event.target.value as "en" | "es")
+          }
+          className="cursor-pointer rounded-md bg-transparent px-2 py-1 text-white outline-none focus-visible:ring-2 focus-visible:ring-violet-300"
+        >
+          <option value="en" className="text-slate-900">
+            {t("common.english")}
+          </option>
+          <option value="es" className="text-slate-900">
+            {t("common.spanish")}
+          </option>
+        </select>
+      </div>
       <section className="relative flex flex-col justify-between overflow-hidden bg-gradient-to-br from-violet-950 via-violet-800 to-fuchsia-700 px-6 py-8 text-white lg:p-14">
         <div className="absolute -right-32 top-20 h-96 w-96 rounded-full bg-fuchsia-400/20 blur-3xl" />
         <div className="absolute -bottom-32 left-0 h-96 w-96 rounded-full bg-violet-300/20 blur-3xl" />
@@ -95,16 +118,13 @@ export default function AuthPage({
 
         <div className="relative max-w-lg">
           <p className="mb-5 text-sm font-semibold uppercase tracking-[0.25em] text-violet-200">
-            Tu espacio creativo
+            {t("auth.creativeSpace")}
           </p>
-          <h1 className="text-5xl font-bold leading-tight">
-            Ideas inteligentes.
-            <br />
-            Marketing extraordinario.
+          <h1 className="whitespace-pre-line text-5xl font-bold leading-tight">
+            {t("auth.heroHeadline")}
           </h1>
           <p className="mt-6 text-lg leading-8 text-violet-100">
-            Crea contenido, organiza campañas y lleva tus marcas al siguiente
-            nivel con inteligencia artificial.
+            {t("auth.heroDescription")}
           </p>
         </div>
 
@@ -127,17 +147,17 @@ export default function AuthPage({
           <div className="mb-9">
             <h2 className="text-3xl font-bold tracking-tight text-slate-900">
               {currentMode === "login"
-                ? "¡Bienvenida de nuevo!"
+                ? t("auth.welcome")
                 : currentMode === "forgot"
-                  ? "Recuperar contraseña"
-                  : "Nueva contraseña"}
+                  ? t("auth.recover")
+                  : t("auth.newPassword")}
             </h2>
             <p className="mt-3 text-sm leading-6 text-slate-500">
               {currentMode === "login"
-                ? "Inicia sesión para continuar creando grandes ideas."
+                ? t("auth.continue")
                 : currentMode === "forgot"
-                  ? "Te enviaremos un enlace para recuperar tu acceso."
-                  : "Elige una contraseña nueva para tu cuenta."}
+                  ? t("auth.recoverHelp")
+                  : t("auth.newPasswordHelp")}
             </p>
           </div>
 
@@ -148,7 +168,7 @@ export default function AuthPage({
                   htmlFor="auth-email"
                   className="mb-2 block text-sm font-semibold text-slate-700"
                 >
-                  Correo electrónico
+                  {t("auth.email")}
                 </label>
                 <div className="relative">
                   <Mail
@@ -159,7 +179,7 @@ export default function AuthPage({
                     id="auth-email"
                     type="email"
                     autoComplete="email"
-                    placeholder="tu@correo.com"
+                    placeholder={t("auth.emailPlaceholder")}
                     value={email}
                     onChange={(event) => setEmail(event.target.value)}
                     required
@@ -177,8 +197,8 @@ export default function AuthPage({
                     className="text-sm font-semibold text-slate-700"
                   >
                     {currentMode === "reset"
-                      ? "Nueva contraseña"
-                      : "Contraseña"}
+                      ? t("auth.passwordNew")
+                      : t("auth.password")}
                   </label>
                   {currentMode === "login" && (
                     <button
@@ -186,7 +206,7 @@ export default function AuthPage({
                       onClick={() => switchMode("forgot")}
                       className="text-sm font-semibold text-violet-700 hover:text-violet-900"
                     >
-                      ¿Olvidaste tu contraseña?
+                      {t("auth.forgot")}
                     </button>
                   )}
                 </div>
@@ -215,7 +235,9 @@ export default function AuthPage({
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
                     aria-label={
-                      showPassword ? "Ocultar contraseña" : "Mostrar contraseña"
+                      showPassword
+                        ? t("auth.hidePassword")
+                        : t("auth.showPassword")
                     }
                     className="absolute right-4 top-3.5 text-slate-400 hover:text-slate-700"
                   >
@@ -249,12 +271,12 @@ export default function AuthPage({
               className="w-full rounded-xl bg-violet-700 px-5 py-3.5 font-semibold text-white shadow-lg shadow-violet-700/20 transition hover:bg-violet-800 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {loading
-                ? "Procesando..."
+                ? t("auth.processing")
                 : currentMode === "login"
-                  ? "Iniciar sesión"
+                  ? t("auth.signIn")
                   : currentMode === "forgot"
-                    ? "Enviar enlace"
-                    : "Guardar nueva contraseña"}
+                    ? t("auth.sendLink")
+                    : t("auth.savePassword")}
             </button>
           </form>
 
@@ -264,12 +286,12 @@ export default function AuthPage({
               onClick={() => switchMode("login")}
               className="mt-7 w-full text-center text-sm font-semibold text-violet-700 hover:underline"
             >
-              Volver a iniciar sesión
+              {t("auth.backToSignIn")}
             </button>
           )}
 
           <p className="mt-12 text-center text-xs text-slate-400">
-            Acceso privado y seguro
+            {t("auth.accessibility")}
           </p>
         </div>
       </section>

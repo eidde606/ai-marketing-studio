@@ -6,6 +6,7 @@ import {
   HeyGenAssetSelector,
   type AssetSelection,
 } from "./HeyGenAssetSelector";
+import { useLocalization } from "../../../app/localization";
 
 export function HeyGenGenerationPanel({
   draft,
@@ -14,6 +15,7 @@ export function HeyGenGenerationPanel({
   draft: Draft;
   controller: HeyGenController;
 }) {
+  const { t } = useLocalization();
   const scriptId = useId();
   const [script, setScript] = useState(draft.video_script ?? "");
   const [selection, setSelection] = useState<AssetSelection | null>(null);
@@ -62,31 +64,31 @@ export function HeyGenGenerationPanel({
   const progressLabel =
     state.busy && !job
       ? state.uncertain
-        ? "Enviando y confirmando la solicitud"
-        : "Consultando el estado guardado"
+        ? t("heygen.progress.recovering")
+        : t("heygen.progress.checking")
       : job?.status === "SUBMITTING"
-        ? "Enviando solicitud a HeyGen"
+        ? t("heygen.progress.submitting")
         : job?.status === "PROCESSING"
-          ? "HeyGen está generando el video"
+          ? t("heygen.progress.processing")
           : savingVideo
-            ? "Guardando el video en almacenamiento privado"
+            ? t("heygen.progress.storing")
             : "";
   const message =
     state.uncertain || job?.status === "UNKNOWN"
-      ? "No sabemos si HeyGen recibió la solicitud. Recupera el estado; no generes otro video."
+      ? t("heygen.status.uncertain")
       : job?.status === "FAILED"
-        ? "HeyGen no pudo generar el video. Puedes revisar los datos antes de autorizar una nueva generación."
+        ? t("heygen.status.failed")
         : stored
-          ? "Video guardado de forma privada. Puedes verlo antes de aprobar el contenido."
+          ? t("heygen.status.stored")
           : job?.status === "COMPLETED" && job.storage_status === "FAILED"
-            ? "El video no se pudo adjuntar. El borrador puede haber cambiado. Contacta al administrador."
+            ? t("heygen.status.storageFailed")
             : job?.status === "COMPLETED"
-              ? "El video está generado. Recupera el estado para completar su almacenamiento privado."
+              ? t("heygen.status.completed")
               : job
-                ? "HeyGen está procesando tu video. Puede tardar unos minutos."
+                ? t("heygen.status.processing")
                 : state.checked
-                  ? "Revisa el guion y selecciona un avatar y una voz."
-                  : "Consultando el estado del video...";
+                  ? t("heygen.status.checked")
+                  : t("heygen.status.checking");
 
   async function showPreview() {
     if (previewBusy || !stored) return;
@@ -98,7 +100,7 @@ export function HeyGenGenerationPanel({
     } catch {
       if (active.current)
         setPreviewError(
-          "No se pudo abrir el video. Solicita una nueva vista previa.",
+          t("heygen.previewError"),
         );
     } finally {
       if (active.current) setPreviewBusy(false);
@@ -107,11 +109,11 @@ export function HeyGenGenerationPanel({
   return (
     <section
       className="heygen-editor"
-      aria-label="Generación de video con HeyGen"
+      aria-label={t("heygen.ariaLabel")}
     >
       <header className="heygen-editor-header">
-        <h3>Crear video con HeyGen</h3>
-        <p>Configura tu avatar, voz y guion antes de generar el video.</p>
+        <h3>{t("heygen.title")}</h3>
+        <p>{t("heygen.configure")}</p>
       </header>
       <p className="heygen-status" role="status">
         {message}
@@ -137,7 +139,7 @@ export function HeyGenGenerationPanel({
           disabled={state.busy}
           onClick={() => void controller.reconcile(draft)}
         >
-          {state.busy ? "Consultando..." : "Recuperar estado del video"}
+          {state.busy ? t("heygen.recovering") : t("heygen.recover")}
         </button>
       )}
       {(!job || job.status === "FAILED") && !state.uncertain && (
@@ -145,7 +147,7 @@ export function HeyGenGenerationPanel({
           <fieldset className="heygen-inputs" disabled={state.busy}>
             <HeyGenAssetSelector onSelection={setSelection} />
             <div className="heygen-field">
-              <label htmlFor={scriptId}>Guion del video</label>
+              <label htmlFor={scriptId}>{t("heygen.script")}</label>
               <textarea
                 id={scriptId}
                 className="heygen-script-textarea"
@@ -156,14 +158,12 @@ export function HeyGenGenerationPanel({
                 onChange={(event) => setScript(event.target.value)}
               />
               <small id={`${scriptId}-help`}>
-                Hasta 5.000 caracteres. El texto se conserva tal como lo
-                escribas.
+                {t("heygen.scriptHelp")}
               </small>
             </div>
           </fieldset>
           <p className="heygen-generation-notice">
-            Video vertical · 1080p. HeyGen consume créditos de API. El costo
-            exacto no está disponible aquí.
+            {t("heygen.formatNotice")}
           </p>
           <button
             className="primary-button"
@@ -177,11 +177,10 @@ export function HeyGenGenerationPanel({
                 void controller.generate(draft, { ...selection, script });
             }}
           >
-            Generar video con HeyGen
+            {t("heygen.generate")}
           </button>
           <small id={`${scriptId}-generation-help`}>
-            Selecciona un avatar y una voz, y confirma antes de enviar la
-            solicitud pagada.
+            {t("heygen.confirmNotice")}
           </small>
         </>
       )}
@@ -194,8 +193,8 @@ export function HeyGenGenerationPanel({
             onClick={() => void showPreview()}
           >
             {previewBusy
-              ? "Cargando video..."
-              : "Actualizar vista previa privada"}
+              ? t("heygen.previewLoading")
+              : t("heygen.previewRefresh")}
           </button>
           {preview && (
             <video
@@ -207,7 +206,7 @@ export function HeyGenGenerationPanel({
               onError={() => {
                 setPreview(null);
                 setPreviewError(
-                  "La vista previa venció o no está disponible. Actualízala para volver a verla.",
+                  t("heygen.previewExpired"),
                 );
               }}
             />
@@ -216,7 +215,7 @@ export function HeyGenGenerationPanel({
         </>
       )}
       <p className="heygen-approval-notice">
-        Generar un video no aprueba ni publica este contenido.
+        {t("heygen.noAutoAction")}
       </p>
     </section>
   );

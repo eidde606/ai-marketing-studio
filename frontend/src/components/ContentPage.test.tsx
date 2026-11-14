@@ -71,26 +71,27 @@ describe("ContentPage", () => {
     expect(screen.getByText("Lanzamiento de producto")).toBeTruthy();
     expect(screen.getByText("Texto para el equipo")).toBeTruthy();
     expect(screen.queryByText("Contenido eliminado")).toBeNull();
-    fireEvent.change(screen.getByRole("searchbox", { name: "Buscar contenido" }), {
-      target: { value: "colección" },
-    });
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search content" }),
+      { target: { value: "colección" } },
+    );
     expect(screen.getByText("Lanzamiento de producto")).toBeTruthy();
     expect(screen.queryByText("Texto para el equipo")).toBeNull();
-    fireEvent.change(screen.getByLabelText("Estado"), {
+    fireEvent.change(screen.getByLabelText("Status"), {
       target: { value: "approved" },
     });
-    expect(screen.getByText("No hay resultados")).toBeTruthy();
+    expect(screen.getByText("No results found")).toBeTruthy();
   });
 
   it("loads private image previews only after explicit selection", async () => {
     mocks.getDraftImage.mockResolvedValue({ image_url: "https://private.test/image" });
     render(<ContentPage drafts={[draft()]} loading={false} error={null} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Ver vista previa" }));
+    fireEvent.click(screen.getByRole("button", { name: "View preview" }));
 
     expect(mocks.getDraftImage).toHaveBeenCalledWith("draft-1");
     expect(
-      await screen.findByRole("img", { name: "Vista previa de Lanzamiento de producto" }),
+      await screen.findByRole("img", { name: "Preview of Lanzamiento de producto" }),
     ).toHaveProperty("src", "https://private.test/image");
   });
 
@@ -110,7 +111,7 @@ describe("ContentPage", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Ver vista previa" }));
+    fireEvent.click(screen.getByRole("button", { name: "View preview" }));
     await waitFor(() => {
       expect(mocks.fetchVideoPreview).toHaveBeenCalledWith("draft-1");
     });
@@ -137,10 +138,10 @@ describe("ContentPage", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Ver vista previa" }));
+    fireEvent.click(screen.getByRole("button", { name: "View preview" }));
 
     const video = await screen.findByLabelText(
-      "Vista previa de Lanzamiento de producto",
+      "Preview of Lanzamiento de producto",
     );
     expect(video.tagName).toBe("VIDEO");
     expect((video as HTMLVideoElement).src).toBe(

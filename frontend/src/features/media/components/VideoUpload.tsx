@@ -8,6 +8,7 @@ import {
   X,
 } from "lucide-react";
 import { useVideoUpload } from "../hooks/useVideoUpload";
+import { useLocalization } from "../../../app/localization";
 
 type VideoUploadProps = {
   draftId: string;
@@ -15,6 +16,7 @@ type VideoUploadProps = {
 };
 
 export function VideoUpload({ draftId, onUploaded }: VideoUploadProps) {
+  const { t } = useLocalization();
   const inputId = useId();
 
   const [dragging, setDragging] = useState(false);
@@ -54,7 +56,7 @@ export function VideoUpload({ draftId, onUploaded }: VideoUploadProps) {
             color: "#35244f",
           }}
         >
-          Subir video
+          {t("videoUpload.title")}
         </strong>
 
         <span
@@ -137,7 +139,7 @@ export function VideoUpload({ draftId, onUploaded }: VideoUploadProps) {
             color: "#35244f",
           }}
         >
-          Selecciona tu video
+          {t("videoUpload.choosePrompt")}
         </strong>
 
         <span
@@ -146,7 +148,7 @@ export function VideoUpload({ draftId, onUploaded }: VideoUploadProps) {
             color: "#81758f",
           }}
         >
-          Arrastra un archivo MP4 aquí o selecciónalo desde tu dispositivo.
+          {t("videoUpload.dropHelp")}
         </span>
 
         <label
@@ -168,7 +170,7 @@ export function VideoUpload({ draftId, onUploaded }: VideoUploadProps) {
           }}
         >
           <Upload size={16} />
-          Elegir video
+          {t("videoUpload.choose")}
         </label>
 
         {!file && (
@@ -178,7 +180,7 @@ export function VideoUpload({ draftId, onUploaded }: VideoUploadProps) {
               color: "#a09aab",
             }}
           >
-            Ningún archivo seleccionado
+            {t("videoUpload.none")}
           </span>
         )}
       </div>
@@ -247,7 +249,7 @@ export function VideoUpload({ draftId, onUploaded }: VideoUploadProps) {
           <button
             type="button"
             disabled={uploading}
-            aria-label="Quitar video seleccionado"
+            aria-label={t("videoUpload.remove")}
             onClick={() => setFile(null)}
             style={{
               border: "none",
@@ -295,12 +297,12 @@ export function VideoUpload({ draftId, onUploaded }: VideoUploadProps) {
                 animation: "video-upload-spin 1s linear infinite",
               }}
             />
-            Subiendo video...
+            {t("videoUpload.uploading")}
           </>
         ) : (
           <>
             <Upload size={18} />
-            Subir video
+            {t("videoUpload.upload")}
           </>
         )}
       </button>
@@ -315,7 +317,7 @@ export function VideoUpload({ draftId, onUploaded }: VideoUploadProps) {
             color: "#81758f",
           }}
         >
-          Estamos subiendo tu video. No cierres esta página.
+          {t("videoUpload.doNotClose")}
         </p>
       )}
 

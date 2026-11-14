@@ -48,7 +48,7 @@ it("loads and displays avatar metadata and selectable voices", async () => {
   });
 
   render(<HeyGenAssetSelector />);
-  fireEvent.click(screen.getByRole("button", { name: /Explorar avatares/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Explore HeyGen avatars/ }));
 
   await screen.findByRole("option", { name: /Avatar de prueba/ });
   await screen.findByRole("option", { name: /Voz de prueba/ });
@@ -57,11 +57,11 @@ it("loads and displays avatar metadata and selectable voices", async () => {
   });
 
   expect(
-    await screen.findByText(/Motores compatibles: avatar_iv, avatar_v/),
+    await screen.findByText(/Supported engines: avatar_iv, avatar_v/),
   ).toBeTruthy();
-  expect(screen.getByLabelText("Voz")).toHaveProperty("value", "voice-1");
+  expect(screen.getByLabelText("Voice")).toHaveProperty("value", "voice-1");
   expect(
-    screen.getByText(/Voz seleccionada: Voz de prueba · es · ID: voice-1/),
+    screen.getByText(/Selected voice: Voz de prueba · es · ID: voice-1/),
   ).toBeTruthy();
   expect(getHeyGenAvatarAssets).toHaveBeenCalledWith({
     avatarType: undefined,
@@ -150,10 +150,10 @@ it("filters photo avatars and paginates avatar and voice results", async () => {
     });
 
   render(<HeyGenAssetSelector />);
-  fireEvent.click(screen.getByRole("button", { name: /Explorar avatares/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Explore HeyGen avatars/ }));
   await screen.findByRole("option", { name: /Voz privada/ });
 
-  fireEvent.change(screen.getByLabelText("Tipo de avatar"), {
+  fireEvent.change(screen.getByLabelText("Avatar type"), {
     target: { value: "photo_avatar" },
   });
   await waitFor(() =>
@@ -162,11 +162,11 @@ it("filters photo avatars and paginates avatar and voice results", async () => {
       ownership: "private",
     }),
   );
-  await screen.findByRole("button", { name: "Cargar más avatares" });
-  fireEvent.click(screen.getByRole("button", { name: "Cargar más avatares" }));
+  await screen.findByRole("button", { name: "Load more avatars" });
+  fireEvent.click(screen.getByRole("button", { name: "Load more avatars" }));
   await screen.findByRole("option", { name: /Avatar siguiente/ });
 
-  fireEvent.click(screen.getByRole("button", { name: "Cargar más voces" }));
+  fireEvent.click(screen.getByRole("button", { name: "Load more voices" }));
   await screen.findByRole("option", { name: /Voz siguiente/ });
   expect(getHeyGenAvatarAssets).toHaveBeenCalledWith({
     avatarType: "photo_avatar",
@@ -201,10 +201,10 @@ it("switches between private and public voice lists and reports failures", async
     });
 
   render(<HeyGenAssetSelector />);
-  fireEvent.click(screen.getByRole("button", { name: /Explorar avatares/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Explore HeyGen avatars/ }));
   expect(await screen.findByRole("alert")).toBeTruthy();
 
-  fireEvent.change(screen.getByLabelText("Voces"), {
+  fireEvent.change(screen.getByLabelText("Voices"), {
     target: { value: "public" },
   });
   await screen.findByRole("option", { name: /Voz pública/ });
@@ -241,10 +241,10 @@ it("offers retry after an avatar catalog failure", async () => {
   });
 
   render(<HeyGenAssetSelector />);
-  fireEvent.click(screen.getByRole("button", { name: /Explorar avatares/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Explore HeyGen avatars/ }));
   expect(await screen.findByRole("alert")).toBeTruthy();
   fireEvent.click(
-    screen.getByRole("button", { name: "Reintentar carga de avatares" }),
+    screen.getByRole("button", { name: "Retry loading avatars" }),
   );
   await screen.findByRole("option", { name: /Avatar recuperado/ });
   expect(getHeyGenAvatarAssets).toHaveBeenCalledTimes(2);
@@ -272,10 +272,10 @@ it("offers retry after a voice catalog failure", async () => {
     });
 
   render(<HeyGenAssetSelector />);
-  fireEvent.click(screen.getByRole("button", { name: /Explorar avatares/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Explore HeyGen avatars/ }));
   expect(await screen.findByText("No se pudieron cargar las voces.")).toBeTruthy();
   fireEvent.click(
-    screen.getByRole("button", { name: "Reintentar carga de voces" }),
+    screen.getByRole("button", { name: "Retry loading voices" }),
   );
   await screen.findByRole("option", { name: /Voz recuperada/ });
   expect(getHeyGenVoiceAssets).toHaveBeenCalledTimes(2);

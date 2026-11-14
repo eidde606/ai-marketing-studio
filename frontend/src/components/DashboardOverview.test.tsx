@@ -60,7 +60,7 @@ function draft(overrides: Partial<Draft> = {}) {
   } as Draft;
 }
 
-function renderDashboard(drafts: Draft[] = []) {
+function renderDashboard(drafts: Draft[] = [], canApprove = true) {
   return render(
     <DashboardOverview
       selectedBusinessId="business-1"
@@ -70,6 +70,7 @@ function renderDashboard(drafts: Draft[] = []) {
       loadError={null}
       visibleDrafts={drafts}
       pendingCount={drafts.filter((item) => item.status === "pending").length}
+      canApprove={canApprove}
       agents={[
         {
           name: "Sofía",
@@ -95,6 +96,20 @@ function renderDashboard(drafts: Draft[] = []) {
 }
 
 describe("DashboardOverview", () => {
+  it("keeps review available to members but hides approval and rejection actions", () => {
+    mocks.getCampaigns.mockResolvedValue([]);
+    const view = renderDashboard([draft()], false);
+    expect(
+      view.container.querySelector(".dashboard-approval__review"),
+    ).toBeTruthy();
+    expect(
+      view.container.querySelector(".dashboard-approval__approve"),
+    ).toBeNull();
+    expect(
+      view.container.querySelector(".dashboard-approval__reject"),
+    ).toBeNull();
+  });
+
   it("uses the account name and actual campaign and publication data", async () => {
     mocks.getCampaigns.mockResolvedValue([
       campaign("active"),
@@ -112,14 +127,14 @@ describe("DashboardOverview", () => {
     renderDashboard([published]);
 
     expect(
-      await screen.findByRole("heading", { name: "Hola, Mi cuenta" }),
+      await screen.findByRole("heading", { name: "Welcome, Mi cuenta" }),
     ).toBeTruthy();
     expect(document.querySelector(".dashboard-kpi strong")?.textContent).toBe(
       "1",
     );
     expect(screen.getByText("Campaña campaign-1")).toBeTruthy();
     expect(
-      screen.getAllByText("1 de 2 piezas publicadas · 50%"),
+      screen.getAllByText("1 of 2 posts published · 50%"),
     ).toHaveLength(2);
     await waitFor(() => {
       expect(screen.getByText("42")).toBeTruthy();
@@ -131,13 +146,15 @@ describe("DashboardOverview", () => {
     mocks.getCampaigns.mockResolvedValue([]);
     renderDashboard();
 
-    expect(await screen.findByText("Tu primera campaña empieza aquí")).toBeTruthy();
+    expect(
+      await screen.findByText("Your first campaign starts here"),
+    ).toBeTruthy();
     expect(document.querySelector(".dashboard-kpi strong")?.textContent).toBe(
       "0",
     );
     expect(
       screen.getByText(
-        "Las publicaciones aparecerán aquí después de confirmar su publicación.",
+        "Confirmed publications will appear here.",
       ),
     ).toBeTruthy();
   });
@@ -147,7 +164,7 @@ describe("DashboardOverview", () => {
     renderDashboard();
 
     expect((await screen.findByRole("alert")).textContent).toContain(
-      "No se pudieron cargar las campañas.",
+      "Campaigns could not be loaded.",
     );
     expect(document.querySelector(".dashboard-kpi strong")?.textContent).toBe(
       "—",

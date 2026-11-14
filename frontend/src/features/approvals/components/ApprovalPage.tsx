@@ -5,6 +5,7 @@ import { Trash2 } from "lucide-react";
 import { DraftMediaPanel } from "../../media/components/DraftMediaPanel";
 import { useApprovalMedia } from "../../media/hooks/useApprovalMedia";
 import type { ApprovalPageProps } from "../types/ApprovalPageProps";
+import { useLocalization } from "../../../app/localization";
 
 const ApprovalPage: FC<ApprovalPageProps> = ({
   heygen,
@@ -16,6 +17,8 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
   loadingDrafts,
   loadError,
   pendingCount,
+  canApprove,
+  canPublish,
   draftMessages,
   visibleDrafts,
   approvingIds,
@@ -51,6 +54,7 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
   toggleImageEditor,
   startEditing,
 }) => {
+  const { t } = useLocalization();
   const browserMedia = useApprovalMedia();
   const {
     downloadBusyId,
@@ -60,24 +64,26 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
   } = browserMedia;
   const statusLabel = (status: string) =>
     status === "pending"
-      ? "Pendiente de aprobación"
+      ? t("approval.status.pending")
       : status === "approved"
-        ? "Aprobado"
+        ? t("approval.status.approved")
         : status === "rejected"
-          ? "Rechazado"
+          ? t("approval.status.rejected")
           : status;
 
   return (
     <section className="approval-page">
       <div className="panel-heading">
         <div>
-          <span className="eyebrow">Revisa antes de publicar</span>
-          <h2>Contenido y aprobaciones</h2>
-          <p>Aprueba el contenido antes de iniciar una publicación.</p>
+          <span className="eyebrow">{t("approval.eyebrow")}</span>
+          <h2>{t("approval.title")}</h2>
+          <p>{t("approval.description")}</p>
         </div>
 
         <span className="approval-counter">
-          {loadingDrafts || loadError ? "—" : pendingCount} pendientes
+          {loadingDrafts || loadError
+            ? "—"
+            : t("approval.pendingCount", { count: pendingCount })}
         </span>
       </div>
 
@@ -130,18 +136,18 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
 
               {editingId !== draft.id && (
                 <section className="approval-card-caption">
-                  <h4>Texto de la publicación</h4>
+                  <h4>{t("approval.caption")}</h4>
                   <p>{draft.caption}</p>
                 </section>
               )}
 
               <section
                 className="approval-card-controls"
-                aria-label={`Acciones para ${draft.title}`}
+                aria-label={t("approval.actions", { title: draft.title })}
               >
-                {draft.status === "pending" && (
+                {canPublish && draft.status === "pending" && (
                   <div className="approval-platform-selection">
-                    <strong>Publishing destination (optional):</strong>
+                    <strong>{t("approval.destinationOptional")}</strong>
                     <label>
                       <input
                         type="checkbox"
@@ -163,30 +169,29 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                       />{" "}
                       Facebook
                     </label>
-                    <small>
-                      Leave Facebook unchecked to approve for manual use. TikTok
-                      uses download and copy; Instagram publishing is unavailable.
-                    </small>
+                    <small>{t("approval.manualDestination")}</small>
                   </div>
                 )}
 
                 <div className="approval-card-decisions">
                   {draft.status === "pending" && editingId !== draft.id ? (
                     <div className="approval-actions">
-                      <button
-                        className="approve-button"
-                        type="button"
-                        disabled={
-                          approvingIds.includes(draft.id) ||
-                          busyDraftIds.includes(draft.id) ||
-                          imageBusyIds.includes(draft.id)
-                        }
-                        onClick={() => void handleApprove(draft.id)}
-                      >
-                        {approvingIds.includes(draft.id)
-                          ? "Aprobando..."
-                          : "✓ Aprobar"}
-                      </button>
+                      {canApprove && (
+                        <button
+                          className="approve-button"
+                          type="button"
+                          disabled={
+                            approvingIds.includes(draft.id) ||
+                            busyDraftIds.includes(draft.id) ||
+                            imageBusyIds.includes(draft.id)
+                          }
+                          onClick={() => void handleApprove(draft.id)}
+                        >
+                          {approvingIds.includes(draft.id)
+                            ? t("approval.approving")
+                            : t("approval.approve")}
+                        </button>
+                      )}
 
                       <button
                         className="text-button"
@@ -197,23 +202,25 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                         }
                         onClick={() => startEditing(draft)}
                       >
-                        Editar
+                        {t("approval.edit")}
                       </button>
 
-                      <button
-                        className="reject-button"
-                        type="button"
-                        disabled={
-                          busyDraftIds.includes(draft.id) ||
-                          approvingIds.includes(draft.id) ||
-                          imageBusyIds.includes(draft.id)
-                        }
-                        onClick={() => void handleReject(draft.id)}
-                      >
-                        {busyDraftIds.includes(draft.id)
-                          ? "Procesando..."
-                          : "Rechazar"}
-                      </button>
+                      {canApprove && (
+                        <button
+                          className="reject-button"
+                          type="button"
+                          disabled={
+                            busyDraftIds.includes(draft.id) ||
+                            approvingIds.includes(draft.id) ||
+                            imageBusyIds.includes(draft.id)
+                          }
+                          onClick={() => void handleReject(draft.id)}
+                        >
+                          {busyDraftIds.includes(draft.id)
+                            ? t("approval.processing")
+                            : t("approval.reject")}
+                        </button>
+                      )}
                     </div>
                   ) : draft.status !== "pending" ? (
                     <span
@@ -222,9 +229,9 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                       }`}
                     >
                       {draft.status === "approved"
-                        ? "✓ Aprobado"
+                        ? t("approval.finalApproved")
                         : draft.status === "rejected"
-                          ? "✕ Rechazado"
+                          ? t("approval.finalRejected")
                           : draft.status}
                     </span>
                   ) : null}
@@ -232,7 +239,8 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
 
                 {draft.status === "approved" && (
                   <div className="approval-card-publishing">
-                    {(draft.publish_destinations ?? ["facebook"]).includes(
+                    {canPublish &&
+                      (draft.publish_destinations ?? ["facebook"]).includes(
                       "facebook",
                     ) &&
                       draft.facebook_publish_status === "not_published" && (
@@ -244,10 +252,10 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                             if (
                               window.confirm(
                                 draft.media_type === "video"
-                                  ? "¿Enviar este video y su descripción a Facebook? Puede tardar en procesarse."
+                                  ? t("approval.confirmVideo")
                                   : draft.image_url
-                                    ? "¿Publicar esta imagen y su descripción en Facebook?"
-                                    : "¿Publicar este texto en Facebook?",
+                                    ? t("approval.confirmImage")
+                                    : t("approval.confirmText"),
                               )
                             ) {
                               void handlePublishFacebook(draft.id);
@@ -255,8 +263,8 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                           }}
                         >
                           {publishingIds.includes(draft.id)
-                            ? "Publicando..."
-                            : "Publicar en Facebook"}
+                            ? t("approval.publishing")
+                            : t("approval.publishFacebook")}
                         </button>
                       )}
 
@@ -265,7 +273,7 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                         className="facebook-publish-status is-published"
                         role="status"
                       >
-                        ✓ Publicado en Facebook
+                        {t("approval.publishedFacebook")}
                       </span>
                     )}
 
@@ -274,7 +282,7 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                         className="facebook-publish-status is-publishing"
                         role="status"
                       >
-                        Publicación en proceso. Actualiza para verificar.
+                        {t("approval.publishingStatus")}
                       </span>
                     )}
 
@@ -289,8 +297,7 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                           className="facebook-publish-status needs-review"
                           role="alert"
                         >
-                          Publicación por verificar. Revisa Facebook antes de
-                          volver a intentar.
+                          {t("approval.needsReview")}
                         </span>
 
                         {draft.media_type === "video" &&
@@ -300,7 +307,7 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                               className="text-button"
                               onClick={() => onVerifyFacebookVideo(draft.id)}
                             >
-                              Verificar publicación en Facebook
+                              {t("approval.verifyFacebook")}
                             </button>
                           )}
                       </div>
@@ -320,8 +327,8 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                         onClick={() => void handleDownloadVideo(draft)}
                       >
                         {downloadBusyId === draft.id
-                          ? "Descargando video..."
-                          : "⬇ Descargar video para TikTok"}
+                          ? t("approval.downloading")
+                          : t("approval.downloadTikTok")}
                       </button>
                       <button
                         type="button"
@@ -329,13 +336,11 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                         onClick={() => void handleCopyCaption(draft)}
                       >
                         {copiedCaptionId === draft.id
-                          ? "✓ Descripción copiada"
-                          : "Copiar descripción y hashtags"}
+                          ? t("approval.captionCopied")
+                          : t("approval.copyCaption")}
                       </button>
                     </div>
                   )}
-
-                {/* Spanish AI image editor */}
 
                 {draft.status === "pending" &&
                   draft.image_status === "completed" &&
@@ -381,8 +386,8 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
                   >
                     <Trash2 size={16} aria-hidden="true" />{" "}
                     {deletingIds.includes(draft.id)
-                      ? "Eliminando..."
-                      : "Eliminar"}
+                      ? t("approval.deleting")
+                      : t("approval.delete")}
                   </button>
                   </div>
                 </section>
@@ -390,7 +395,7 @@ const ApprovalPage: FC<ApprovalPageProps> = ({
           ))}
 
         {!loadingDrafts && !loadError && visibleDrafts.length === 0 && (
-          <p className="empty-state">Todavía no hay borradores para revisar.</p>
+          <p className="empty-state">{t("approval.empty")}</p>
         )}
       </div>
     </section>

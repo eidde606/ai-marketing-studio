@@ -1,5 +1,6 @@
 import type { Draft } from "../../../services/draftsApi";
 import type { useDraftMedia } from "../hooks/useDraftMedia";
+import { useLocalization } from "../../../app/localization";
 type Props = { draft: Draft } & Pick<
   ReturnType<typeof useDraftMedia>,
   | "toggleImageEditor"
@@ -32,6 +33,7 @@ export function ImageRevisionEditor({
   handleCreateRevision,
   refreshRevision,
 }: Props) {
+  const { t } = useLocalization();
   return (
     <div className="ai-image-editor">
       <button
@@ -41,7 +43,7 @@ export function ImageRevisionEditor({
         aria-expanded={!!showImageEditor[draft.id]}
         aria-controls={`ai-editor-content-${draft.id}`}
       >
-        <span>✦ Editar imagen con IA</span>
+        <span>{t("media.imageEditor")}</span>
 
         <span aria-hidden="true">{showImageEditor[draft.id] ? "−" : "+"}</span>
       </button>
@@ -49,8 +51,7 @@ export function ImageRevisionEditor({
       {showImageEditor[draft.id] && (
         <div id={`ai-editor-content-${draft.id}`} className="ai-editor-content">
           <p>
-            Describe en español los cambios. La imagen original se conservará
-            hasta que aceptes una versión nueva.
+            {t("media.imageInstructions")}
           </p>
 
           {revisionErrors[draft.id] && (
@@ -62,7 +63,7 @@ export function ImageRevisionEditor({
           {revisions[draft.id]?.status === "ready" ? (
             <>
               <p>
-                <strong>Versión nueva lista para revisar</strong>
+                <strong>{t("media.revisionReady")}</strong>
               </p>
 
               <div
@@ -73,12 +74,12 @@ export function ImageRevisionEditor({
                 }}
               >
                 <div>
-                  <strong>Original</strong>
+                  <strong>{t("media.original")}</strong>
 
                   {imageUrls[draft.id] ? (
                     <img
                       src={imageUrls[draft.id]}
-                      alt="Imagen original"
+                      alt={t("media.original")}
                       style={{
                         width: "100%",
                         borderRadius: 12,
@@ -89,25 +90,25 @@ export function ImageRevisionEditor({
                       type="button"
                       onClick={() => void handlePreviewImage(draft)}
                     >
-                      Ver original
+                      {t("media.viewOriginal")}
                     </button>
                   )}
                 </div>
 
                 <div>
-                  <strong>Nueva versión</strong>
+                  <strong>{t("media.newVersion")}</strong>
 
                   {revisions[draft.id]?.image_url ? (
                     <img
                       src={revisions[draft.id]!.image_url!}
-                      alt="Versión editada"
+                      alt={t("media.newVersion")}
                       style={{
                         width: "100%",
                         borderRadius: 12,
                       }}
                     />
                   ) : (
-                    <p>No se recibió una vista previa. Actualiza el estado.</p>
+                    <p>{t("media.noPreview")}</p>
                   )}
                 </div>
               </div>
@@ -119,7 +120,7 @@ export function ImageRevisionEditor({
                   disabled={revisionBusyIds.includes(draft.id)}
                   onClick={() => void handleDecideRevision(draft, "accept")}
                 >
-                  ✓ Aceptar nueva versión
+                  {t("media.acceptRevision")}
                 </button>
 
                 <button
@@ -128,19 +129,18 @@ export function ImageRevisionEditor({
                   disabled={revisionBusyIds.includes(draft.id)}
                   onClick={() => void handleDecideRevision(draft, "reject")}
                 >
-                  Conservar original
+                  {t("media.keepOriginal")}
                 </button>
               </div>
             </>
           ) : revisions[draft.id]?.status === "generating" ? (
             <p role="status">
-              La nueva imagen se está generando. No solicites otra hasta
-              confirmar el resultado.
+              {t("media.revisionGenerating")}
             </p>
           ) : (
             <>
               <label htmlFor={`image-instructions-${draft.id}`}>
-                Instrucciones para la IA
+                {t("media.instructionsLabel")}
               </label>
 
               <textarea
@@ -149,7 +149,7 @@ export function ImageRevisionEditor({
                 onChange={(event) =>
                   updateImageInstructions(draft.id, event.target.value)
                 }
-                placeholder="Ejemplo: Mejora la iluminación y cambia el fondo por una mesa elegante."
+                placeholder={t("media.instructionsPlaceholder")}
                 rows={4}
                 maxLength={1000}
                 disabled={revisionBusyIds.includes(draft.id)}
@@ -157,17 +157,23 @@ export function ImageRevisionEditor({
 
               <div className="ai-editor-suggestions">
                 {[
-                  "Mejorar iluminación",
-                  "Cambiar el fondo",
-                  "Estilo más profesional",
+                  ["media.suggestion.lighting", t("media.suggestion.lighting")],
+                  [
+                    "media.suggestion.background",
+                    t("media.suggestion.background"),
+                  ],
+                  [
+                    "media.suggestion.professional",
+                    t("media.suggestion.professional"),
+                  ],
                 ].map((suggestion) => (
                   <button
-                    key={suggestion}
+                    key={suggestion[0]}
                     type="button"
                     disabled={revisionBusyIds.includes(draft.id)}
-                    onClick={() => addImageSuggestion(draft.id, suggestion)}
+                    onClick={() => addImageSuggestion(draft.id, suggestion[1])}
                   >
-                    + {suggestion}
+                    + {suggestion[1]}
                   </button>
                 ))}
               </div>
@@ -182,13 +188,12 @@ export function ImageRevisionEditor({
                 onClick={() => void handleCreateRevision(draft)}
               >
                 {revisionBusyIds.includes(draft.id)
-                  ? "Generando nueva versión..."
-                  : "✦ Generar nueva versión"}
+                  ? t("media.generatingRevision")
+                  : t("media.generateRevision")}
               </button>
 
               <small>
-                La generación con IA puede tener un costo adicional. Se
-                solicitará confirmación antes de continuar.
+                {t("media.costNotice")}
               </small>
             </>
           )}
@@ -199,7 +204,7 @@ export function ImageRevisionEditor({
             disabled={revisionBusyIds.includes(draft.id)}
             onClick={() => void refreshRevision(draft.id)}
           >
-            Actualizar estado
+            {t("media.refreshStatus")}
           </button>
         </div>
       )}

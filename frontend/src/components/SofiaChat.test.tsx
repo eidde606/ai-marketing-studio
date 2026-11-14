@@ -29,10 +29,10 @@ describe("SofiaChat", () => {
     expect((await screen.findByRole("alert")).textContent).toContain(
       "Sin conexión",
     );
-    fireEvent.click(screen.getByRole("button", { name: "Reintentar carga" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading" }));
 
     expect(
-      await screen.findByText(/Soy Sofía/),
+      await screen.findByText(/I'm Sofia/),
     ).toBeTruthy();
     expect(mocks.getLatestSofiaConversation).toHaveBeenCalledTimes(2);
   });
@@ -50,10 +50,10 @@ describe("SofiaChat", () => {
     render(<SofiaChat businessId="business-1" onDraftCreated={vi.fn()} />);
 
     const input = await screen.findByRole("textbox", {
-      name: "Mensaje para Sofía",
+      name: "Message for Sofia",
     });
     fireEvent.change(input, { target: { value: "Quiero promocionar mi tienda" } });
-    fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     expect((await screen.findByRole("alert")).textContent).toContain(
       "Temporal",
@@ -62,7 +62,7 @@ describe("SofiaChat", () => {
       "Quiero promocionar mi tienda",
     );
     fireEvent.click(
-      screen.getByRole("button", { name: "Reintentar mensaje" }),
+      screen.getByRole("button", { name: "Retry message" }),
     );
 
     expect(
@@ -97,8 +97,8 @@ describe("SofiaChat", () => {
     );
 
     expect(await screen.findByText("Empecemos por tu audiencia.")).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Hablar con Sofía" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Historial/ })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Talk with Sofia" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /History/ })).toBeTruthy();
     const chat = container.querySelector(".sofia-chat")!;
     const toolbar = chat.querySelector(".sofia-conversation-toolbar")!;
     const messages = chat.querySelector(".sofia-messages")!;

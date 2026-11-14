@@ -1,9 +1,11 @@
 import { useState } from "react";
 import type { Draft } from "../../../services/draftsApi";
 import { fetchVideoPreview, fetchVideoDownload } from "../services/videoApi";
+import { useLocalization } from "../../../app/localization";
 
 /** Page-local browser media state; deliberately retains the original lifetime. */
 export function useApprovalMedia() {
+  const { t } = useLocalization();
   const [openVideoEditorId, setOpenVideoEditorId] = useState<string | null>(
     null,
   );
@@ -24,7 +26,7 @@ export function useApprovalMedia() {
       await navigator.clipboard.writeText(draft.caption ?? "");
       setCopiedCaptionId(draft.id);
     } catch {
-      window.alert("No se pudo copiar la descripción.");
+      window.alert(t("media.captionCopyError"));
     }
   }
 
@@ -43,7 +45,7 @@ export function useApprovalMedia() {
       window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
     } catch (err) {
       window.alert(
-        err instanceof Error ? err.message : "Error al descargar el video.",
+        err instanceof Error ? err.message : t("media.downloadError"),
       );
     } finally {
       setDownloadBusyId(null);
@@ -59,7 +61,7 @@ export function useApprovalMedia() {
     } catch {
       setCopiedScriptId(null);
       window.alert(
-        "No se pudo copiar el guion. Selecciona el texto para copiarlo.",
+        t("media.scriptCopyError"),
       );
     }
   }
@@ -84,7 +86,7 @@ export function useApprovalMedia() {
       setVideoErrors((current) => ({
         ...current,
         [draft.id]:
-          err instanceof Error ? err.message : "Error al cargar el video.",
+          err instanceof Error ? err.message : t("media.videoPreviewError"),
       }));
     } finally {
       setVideoLoadingId(null);

@@ -26,13 +26,13 @@ describe("TikTokConnection", () => {
 
     render(<TikTokConnection businessId="business-1" />);
 
-    expect(await screen.findByText("Revisar acceso")).toBeTruthy();
-    expect(screen.getByText("Cuenta de prueba — Estado: pending")).toBeTruthy();
+    expect(await screen.findByText("Review access")).toBeTruthy();
+    expect(screen.getByText("Cuenta de prueba — Status: pending")).toBeTruthy();
     expect(mocks.getConnectedTikTokAccounts).toHaveBeenCalledWith(
       "business-1",
     );
-    expect(screen.getByRole("button", { name: "Conectar TikTok" })).toBeTruthy();
-    expect(screen.getByText(/La publicación depende de los permisos/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Connect TikTok" })).toBeTruthy();
+    expect(screen.getByText(/Publishing depends on permissions/)).toBeTruthy();
   });
 
   it("does not display another business's connected status when selection changes", async () => {
@@ -45,16 +45,16 @@ describe("TikTokConnection", () => {
     ]);
     const view = render(<TikTokConnection businessId="business-1" />);
 
-    expect(await screen.findByText("Conectada")).toBeTruthy();
+    expect(await screen.findByText("Connected")).toBeTruthy();
     view.rerender(<TikTokConnection businessId="" />);
 
     await waitFor(() => {
-      expect(screen.queryByText("Conectada")).toBeNull();
+      expect(screen.queryByText("Connected")).toBeNull();
     });
     expect(screen.queryByText(/Cuenta de prueba/)).toBeNull();
     expect(
       (screen.getByRole("button", {
-        name: "Conectar TikTok",
+        name: "Connect TikTok",
       }) as HTMLButtonElement).disabled,
     ).toBe(true);
   });
@@ -66,7 +66,7 @@ describe("TikTokConnection", () => {
 
     expect(await screen.findByRole("alert")).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: "Reintentar verificación" }),
+      screen.getByRole("button", { name: "Retry verification" }),
     ).toBeTruthy();
   });
 });

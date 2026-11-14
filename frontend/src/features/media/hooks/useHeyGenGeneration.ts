@@ -9,6 +9,7 @@ import {
   type Generation,
   type GenerationRequest,
 } from "../services/heygenGenerationApi";
+import { useLocalization } from "../../../app/localization";
 
 type State = {
   checked: boolean;
@@ -29,6 +30,7 @@ export function useHeyGenGeneration(
   collection: DraftCollection,
   operations: DraftOperations,
 ) {
+  const { t } = useLocalization();
   const [states, setStates] = useState<Record<string, State>>({});
   // Workspace lifetime: navigation/recovery must not release an in-flight lock.
   const locks = useRef(new Set<string>());
@@ -95,7 +97,7 @@ export function useHeyGenGeneration(
         return;
       if (
         !window.confirm(
-          "¿Generar este video con HeyGen? Esta acción consume créditos de API y puede tener un costo. No se aprobará ni publicará automáticamente.",
+          t("heygen.confirmPaid"),
         )
       )
         return;
@@ -106,7 +108,7 @@ export function useHeyGenGeneration(
         [scopeKey]: {
           ...(current[scopeKey] ?? empty),
           error:
-            "Espera a que termine la otra operación del borrador antes de recuperar el video.",
+            t("heygen.busyOtherOperation"),
         },
       }));
       return;

@@ -43,6 +43,8 @@ function props(
     businessId: "business-1",
     visibleDrafts: [draft],
     pendingCount: 0,
+    canApprove: true,
+    canPublish: true,
     loadingDrafts: false,
     loadError: null,
     draftMessages: null,
@@ -101,16 +103,16 @@ afterEach(() => {
   vi.useRealTimers();
 });
 it.each([
-  ["text", null, "¿Publicar este texto en Facebook?"],
+  ["text", null, "Publish this text to Facebook?"],
   [
     "image",
     "stored-image",
-    "¿Publicar esta imagen y su descripción en Facebook?",
+    "Publish this image and its caption to Facebook?",
   ],
   [
     "video",
     null,
-    "¿Enviar este video y su descripción a Facebook? Puede tardar en procesarse.",
+    "Send this video and its caption to Facebook? Processing may take a few minutes.",
   ],
 ] as const)(
   "preserves %s publishing confirmation and cancellation",
@@ -118,11 +120,11 @@ it.each([
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     const p = props({ visibleDrafts: [{ ...draft, media_type, image_url }] });
     render(<ApprovalPage {...p} />);
-    fireEvent.click(screen.getByText("Publicar en Facebook"));
+    fireEvent.click(screen.getByText("Publish to Facebook"));
     expect(confirm).toHaveBeenCalledWith(message);
     expect(p.handlePublishFacebook).not.toHaveBeenCalled();
     confirm.mockReturnValue(true);
-    fireEvent.click(screen.getByText("Publicar en Facebook"));
+    fireEvent.click(screen.getByText("Publish to Facebook"));
     expect(p.handlePublishFacebook).toHaveBeenCalledWith(draft.id);
     expect(fetch).not.toHaveBeenCalled();
   },
@@ -131,7 +133,7 @@ it("disables pending publication and retains verification-only UI", () => {
   const p = props({ publishingIds: [draft.id] });
   const view = render(<ApprovalPage {...p} />);
   expect(
-    (screen.getByText("Publicando...") as HTMLButtonElement).disabled,
+    (screen.getByText("Publishing…") as HTMLButtonElement).disabled,
   ).toBe(true);
   view.rerender(
     <ApprovalPage
@@ -146,14 +148,42 @@ it("disables pending publication and retains verification-only UI", () => {
       ]}
     />,
   );
-  expect(screen.queryByText("Publicar en Facebook")).toBeNull();
-  fireEvent.click(screen.getByText("Verificar publicación en Facebook"));
+  expect(screen.queryByText("Publish to Facebook")).toBeNull();
+  fireEvent.click(screen.getByText("Verify Facebook post"));
   expect(p.onVerifyFacebookVideo).toHaveBeenCalledWith(draft.id);
+});
+it("keeps member review available without approval, rejection, or publishing controls", () => {
+const pending = { ...draft, status: "pending" as const };
+const view = render(
+  <ApprovalPage
+    {...props({
+      canApprove: false,
+      canPublish: false,
+      visibleDrafts: [pending],
+    })}
+  />,
+);
+expect(screen.queryByText("✓ Approve")).toBeNull();
+expect(screen.queryByText("Reject")).toBeNull();
+expect(view.container.querySelector(".approval-platform-selection")).toBeNull();
+expect(screen.getByText("Edit")).toBeTruthy();
+
+view.rerender(
+  <ApprovalPage
+    {...props({
+      canApprove: false,
+      canPublish: false,
+      visibleDrafts: [draft],
+    })}
+  />,
+);
+expect(screen.queryByText("Publish to Facebook")).toBeNull();
+expect(screen.getByText("⬇ Download video for TikTok")).toBeTruthy();
 });
 it("shows empty/loading/error states without displaying obsolete drafts", () => {
   const view = render(<ApprovalPage {...props({ visibleDrafts: [] })} />);
   expect(
-    screen.getByText("Todavía no hay borradores para revisar."),
+    screen.getByText("There are no drafts to review yet."),
   ).toBeTruthy();
   view.rerender(
     <ApprovalPage
@@ -164,7 +194,7 @@ it("shows empty/loading/error states without displaying obsolete drafts", () => 
     />,
   );
   expect(screen.queryByText(draft.title)).toBeNull();
-  expect(screen.getByText("— pendientes")).toBeTruthy();
+  expect(screen.getByText("—")).toBeTruthy();
   view.rerender(
     <ApprovalPage
       {...props({
@@ -182,8 +212,8 @@ it("previews and closes video using the authenticated preview endpoint", async (
     json: async () => ({ video_url: "https://example.test/signed.mp4" }),
   } as Response);
   const view = render(<ApprovalPage {...props()} />);
-  fireEvent.click(screen.getByText("🎬 Ver video"));
-  await screen.findByText("Cerrar video");
+  fireEvent.click(screen.getByText("🎬 Preview video"));
+  await screen.findByText("Close video");
   expect(fetch).toHaveBeenCalledWith(
     expect.stringContaining("/drafts/draft%2F1/video-preview"),
     { headers: { Authorization: "Bearer token" } },
@@ -197,7 +227,7 @@ it("previews and closes video using the authenticated preview endpoint", async (
   expect((view.container.querySelector("video") as HTMLVideoElement).controls).toBe(
     true,
   );
-  fireEvent.click(screen.getByText("Cerrar video"));
+  fireEvent.click(screen.getByText("Close video"));
   expect(view.container.querySelector("video")).toBeNull();
   expect(fetch).toHaveBeenCalledTimes(1);
 });
@@ -242,7 +272,7 @@ it("keeps approval information, media, scripts, platform and actions in separate
 it("shows preview failure without retrying", async () => {
   vi.mocked(fetch).mockResolvedValue({ ok: false, status: 503 } as Response);
   render(<ApprovalPage {...props()} />);
-  fireEvent.click(screen.getByText("🎬 Ver video"));
+  fireEvent.click(screen.getByText("🎬 Preview video"));
   expect((await screen.findByRole("alert")).textContent).toBe(
     "No se pudo cargar el video (503).",
   );
@@ -274,7 +304,7 @@ it("downloads a blob, removes the anchor and revokes its URL after 60 seconds", 
     .mockResolvedValueOnce({ ok: true, blob: async () => blob } as Response);
   render(<ApprovalPage {...props()} />);
   await act(async () =>
-    fireEvent.click(screen.getByText("⬇ Descargar video para TikTok")),
+    fireEvent.click(screen.getByText("⬇ Download video for TikTok")),
   );
   expect(fetch).toHaveBeenNthCalledWith(2, "https://example.test/video");
   expect(create).toHaveBeenCalledWith(blob);
@@ -289,7 +319,7 @@ it("blocks unauthenticated downloads and reports the original Spanish error", as
   const alert = vi.spyOn(window, "alert").mockImplementation(() => {});
   render(<ApprovalPage {...props()} />);
   await act(async () =>
-    fireEvent.click(screen.getByText("⬇ Descargar video para TikTok")),
+    fireEvent.click(screen.getByText("⬇ Download video for TikTok")),
   );
   expect(fetch).not.toHaveBeenCalled();
   expect(alert).toHaveBeenCalledWith("Debes iniciar sesión.");
@@ -303,7 +333,7 @@ it("preserves the known late-video-preview behavior across business prop changes
   );
   const p = props();
   const view = render(<ApprovalPage {...p} />);
-  fireEvent.click(screen.getByText("🎬 Ver video"));
+  fireEvent.click(screen.getByText("🎬 Preview video"));
   await act(async () => {});
   view.rerender(
     <ApprovalPage {...p} businessId="business-2" visibleDrafts={[]} />,
