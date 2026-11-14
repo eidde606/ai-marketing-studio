@@ -12,6 +12,7 @@ from app.features.access import service as access
 from app.features.access.permissions import Permission
 from app.features.access.principal import AuthenticatedPrincipal
 from . import repository, adapters, generation_service, execution
+from app.features.entitlements import service as entitlement_service
 from .context import BusinessProfile, Message, OperationContext
 from .schemas import SofiaChatRequest, AIGenerationRequest
 from .context import LanguagePreferences
@@ -52,6 +53,27 @@ def _messages(db, context, conversation_id):
         result.extend(Message(message.role, message.content) for message in batch)
         if len(batch) < 100:
             return result
+
+
+def _replay_sofia_usage(db, context, reservation):
+    if reservation.status == "succeeded" and reservation.result_id:
+        message = repository.get_message_scoped(db, context, reservation.result_id)
+        if message is not None and message.role == "assistant":
+            conversation = _conversation(db, context, message.conversation_id)
+            return {
+                "conversation_id": conversation.id,
+                "reply": message.content,
+                "language": conversation.language,
+            }
+    raise ApplicationError(ErrorKind.CONFLICT, "This request was already processed; use a new idempotency key")
+
+
+def _replay_generation(db, context, reservation):
+    if reservation.status == "succeeded" and reservation.result_id:
+        draft = repository.get_draft_scoped(db, context, reservation.result_id)
+        if draft is not None:
+            return draft
+    raise ApplicationError(ErrorKind.CONFLICT, "This request was already processed; use a new idempotency key")
 
 
 def _run_provider(context, operation, callback, error_message, languages=LanguagePreferences()):
@@ -115,13 +137,28 @@ def sofia_chat(business_id: str, request: SofiaChatRequest, *, db: Session,
         conversation = _conversation(db, context, conversation_id)
         conversation_language = request.conversation_language or conversation.language or conversation_language
         messages = _messages(db, context, conversation_id)
+    reservation, replay = entitlement_service.reserve_usage(
+        db, principal, business_id=business_id, metric="sofia_request",
+        idempotency_key=request.idempotency_key,
+    )
+    if replay:
+        return _replay_sofia_usage(db, context, reservation)
+    if reservation is not None:
+        Transactions(db).commit()
     user_message = Message("user", request.message.strip())
     messages.append(user_message)
     # No locks, ORM instances, or pending writes survive the provider wait.
     Transactions(db).rollback()
-    reply = _run_provider(context, "sofia_chat", lambda: adapters.chat_with_sofia(profile, messages, language=conversation_language),
-                          "Sofía could not respond. Please try again.",
-                          LanguagePreferences(preferences["interface_language"], conversation_language, None))
+    try:
+        reply = _run_provider(context, "sofia_chat", lambda: adapters.chat_with_sofia(profile, messages, language=conversation_language),
+                              "Sofía could not respond. Please try again.",
+                              LanguagePreferences(preferences["interface_language"], conversation_language, None))
+    except ApplicationError:
+        if reservation is not None:
+            entitlement_service.finish_usage(db, reservation.id, succeeded=False)
+        raise
+    if reservation is not None:
+        entitlement_service.finish_usage(db, reservation.id, succeeded=True)
     context = _authorize(db, principal, business_id, write=True, lock=True)
     if request.conversation_id:
         conversation = _conversation(db, context, conversation_id, lock=True)
@@ -129,8 +166,14 @@ def sofia_chat(business_id: str, request: SofiaChatRequest, *, db: Session,
     else:
         repository.add_conversation_scoped(db, context, Conversation(id=conversation_id, language=conversation_language))
     repository.add_message_scoped(db, context, conversation_id, role="user", content=user_message.content)
-    repository.add_message_scoped(db, context, conversation_id, role="assistant", content=reply)
+    assistant_message = repository.add_message_scoped(
+        db, context, conversation_id, role="assistant", content=reply,
+    )
     Transactions(db).commit()
+    if reservation is not None:
+        entitlement_service.finish_usage(
+            db, reservation.id, succeeded=True, result_id=assistant_message.id,
+        )
     return {"conversation_id": conversation_id, "reply": reply, "language": conversation_language}
 
 
@@ -159,10 +202,38 @@ def _generate(business_id, *, db, principal, conversation_id=None, request=None)
         kwargs["campaign_instructions"] = "\n".join(instructions[-10:])
     kwargs.update(conversation_language=conversation_language, marketing_content_language=content_language)
     languages = LanguagePreferences(preferences["interface_language"], conversation_language, content_language)
+    sofia_reservation, sofia_replay = entitlement_service.reserve_usage(
+        db, principal, business_id=business_id, metric="sofia_request",
+        idempotency_key=request.idempotency_key,
+    )
+    leo_reservation, leo_replay = entitlement_service.reserve_usage(
+        db, principal, business_id=business_id, metric="leo_generation",
+        idempotency_key=request.idempotency_key,
+    )
+    if sofia_replay != leo_replay:
+        raise ApplicationError(ErrorKind.CONFLICT, "This request was already processed; use a new idempotency key")
+    if sofia_replay:
+        return _replay_generation(db, context, leo_reservation)
+    reservations = [
+        item for item in (sofia_reservation, leo_reservation) if item is not None
+    ]
+    if reservations:
+        Transactions(db).commit()
     Transactions(db).rollback()
-    generated = _run_provider(context, "conversation_draft" if conversation_id else "generate_content",
-        lambda: generation_service.generate_marketing_content(profile, **kwargs),
-        "Sofía and Leo could not generate the draft", languages)
+    try:
+        generated = _run_provider(context, "conversation_draft" if conversation_id else "generate_content",
+            lambda: generation_service.generate_marketing_content(profile, **kwargs),
+            "Sofía and Leo could not generate the draft", languages)
+    except ApplicationError:
+        if reservations:
+            entitlement_service.finish_usage_batch(
+                db, [item.id for item in reservations], succeeded=False,
+            )
+        raise
+    if reservations:
+        entitlement_service.finish_usage_batch(
+            db, [item.id for item in reservations], succeeded=True,
+        )
     context = _authorize(db, principal, business_id, generation=True, lock=True)
     if conversation_id:
         _conversation(db, context, conversation_id, lock=True)
@@ -174,6 +245,11 @@ def _generate(business_id, *, db, principal, conversation_id=None, request=None)
     draft.publish_destinations = [destination] if destination in {"facebook", "tiktok"} else []
     draft_id = repository.add_draft_scoped(db, context, draft)
     Transactions(db).commit()
+    if reservations:
+        entitlement_service.finish_usage_batch(
+            db, [item.id for item in reservations], succeeded=True,
+            result_id=draft_id,
+        )
     context = _authorize(db, principal, business_id)
     return repository.get_draft_scoped(db, context, draft_id)
 

@@ -7,6 +7,7 @@ class SofiaChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     conversation_id: str | None = None
     conversation_language: Language | None = None
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class AIGenerationRequest(BaseModel):
@@ -14,3 +15,4 @@ class AIGenerationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     conversation_language: Language | None = None
     marketing_content_language: Language | None = None
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=128)

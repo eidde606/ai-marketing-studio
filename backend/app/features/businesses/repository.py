@@ -23,6 +23,22 @@ def get_business_scoped(db: Session, context: TenantAccess):
     return tenant.get(db, context, Business, tenant.business_id(context))
 
 
+def update_business_scoped(db: Session, context: TenantAccess, values: dict):
+    business = get_business_scoped(db, context)
+    if business is None:
+        return None
+    for key, value in values.items():
+        if key not in {
+            "name", "description", "target_audience", "brand_voice", "industry",
+            "products_services", "service_area", "website_url", "marketing_goals",
+            "preferred_platforms", "posting_frequency",
+        }:
+            raise ValueError("Unsupported business field")
+        setattr(business, key, value)
+    db.flush()
+    return business
+
+
 def list_for_principal(db: Session, principal):
     from app.models import BusinessMembership, User
     return db.scalars(select(Business).join(

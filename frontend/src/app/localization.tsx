@@ -41,6 +41,9 @@ const en = {
   "app.accessRetrying": "Checking access…",
   "agent.sofiaRole": "Marketing strategist",
   "agent.leoRole": "Content creator",
+  "agent.miaRole": "Marketing performance analyst",
+  "agent.planned": "Planned",
+  "agent.miaPlanned": "Planned — Marketing Insights",
   "agent.unverified": "Not verified",
   "agent.generated": "Content generated",
   "agent.noActivity": "No activity recorded",
@@ -682,6 +685,15 @@ const en = {
   "auth.hidePassword": "Hide password",
   "auth.processing": "Working…",
   "auth.signIn": "Sign in",
+  "auth.createAccount": "Create account",
+  "auth.createAccountHelp":
+    "Create a secure account to set up your business workspace.",
+  "auth.noAccount": "New to AI Marketing Studio?",
+  "auth.accountCreated": "Your account is ready. Continue to your workspace.",
+  "auth.verifyEmail":
+    "Check your email to verify your address before signing in.",
+  "auth.registrationError":
+    "Account setup could not be completed. If you already have an account, sign in or reset your password.",
   "auth.sendLink": "Send reset link",
   "auth.savePassword": "Save new password",
   "auth.backToSignIn": "Back to sign in",
@@ -742,6 +754,131 @@ const en = {
   "settings.emailUnavailable": "Unavailable",
   "settings.profileNote":
     "Your profile name is private and is used only to personalize your account.",
+  "settings.membershipRole": "Business role",
+  "settings.role.owner": "Owner",
+  "settings.role.admin": "Admin",
+  "settings.role.member": "Member",
+  "settings.businessProfile": "Business profile",
+  "settings.businessProfileHelp":
+    "Keep the information used for your marketing workspace up to date.",
+  "settings.businessNameRequired": "Enter a business name.",
+  "settings.businessEditRestricted":
+    "Only owners and admins can edit this business.",
+  "settings.businessSaveError": "Business information could not be saved.",
+  "settings.businessSaved": "Business information saved.",
+  "trial.loading": "Loading account status…",
+  "trial.loadError": "Account status could not be loaded.",
+  "trial.accountStatus": "Account access",
+  "trial.operatorAccess": "Operator access",
+  "trial.noTrial": "No trial or subscription is active for this workspace.",
+  "trial.active": "Free trial",
+  "trial.expired": "Trial ended",
+  "trial.daysRemaining": "{count} days remaining in your trial.",
+  "trial.expiredHelp":
+    "Your content remains available. A subscription is required to resume AI generation and publishing.",
+  "trial.generationsUsed": "Leo generations used: {used} of {limit}.",
+  "trial.sofiaUsed": "Sofía requests used: {used} of {limit}.",
+  "trial.heygenUsed": "HeyGen generations used: {used} of {limit}.",
+  "trial.campaignsUsed": "Campaigns used: {used} of {limit}.",
+  "trial.feature.leo": "Leo generation",
+  "trial.feature.sofia": "Sofía requests",
+  "trial.feature.facebook": "Facebook publishing",
+  "trial.feature.heygen": "HeyGen video generation",
+  "trial.feature.campaigns": "Campaign creation",
+  "trial.featureAvailable": "Available",
+  "trial.featureUnavailable": "Unavailable",
+  "trial.status.active": "An active subscription is recorded.",
+  "trial.status.past_due": "Subscription access requires attention.",
+  "trial.status.canceled": "This subscription has been canceled.",
+  "trial.status.unavailable": "No subscription entitlement is available.",
+  "trial.status.expired": "The trial has ended.",
+  "trial.status.operator": "Operator access is granted.",
+  "trial.status.trialing": "A trial is in progress.",
+  "trial.subscriptionUnavailable":
+    "Subscription management is not available yet. No payment has been taken.",
+  "onboarding.loading": "Loading your setup…",
+  "onboarding.loadError":
+    "Your saved setup could not be loaded. Refresh and retry.",
+  "onboarding.retry": "Retry loading setup",
+  "onboarding.saveError": "Your progress could not be saved. Try again.",
+  "onboarding.activateError":
+    "Your workspace could not be created. Your saved setup is still available.",
+  "onboarding.stepCount": "Step {step} of {total}",
+  "onboarding.step1Title": "Welcome to your workspace",
+  "onboarding.step1Description":
+    "Choose your interface and AI languages. You can change them later.",
+  "onboarding.step2Title": "Tell us about your business",
+  "onboarding.step2Description":
+    "A few details help Sofía and Leo create more relevant work.",
+  "onboarding.step3Title": "Choose your marketing goals",
+  "onboarding.step3Description": "Select the outcomes you want to focus on.",
+  "onboarding.step4Title": "Describe your audience and platforms",
+  "onboarding.step4Description":
+    "These details are optional and can be updated later.",
+  "onboarding.step5Title": "Connect social accounts later",
+  "onboarding.step5Description":
+    "You can skip this step and connect accounts from Settings.",
+  "onboarding.step6Title": "Review and create your workspace",
+  "onboarding.step6Description": "Your workspace is private to your business.",
+  "onboarding.goalsLegend": "Marketing goals",
+  "onboarding.goalAwareness": "Increase awareness",
+  "onboarding.goalProducts": "Promote products",
+  "onboarding.goalLeads": "Generate leads",
+  "onboarding.goalEngagement": "Increase engagement",
+  "onboarding.goalServices": "Promote services",
+  "onboarding.platformsLegend": "Platforms you may use",
+  "onboarding.socialCapabilities":
+    "Connect supported accounts later from Settings.",
+  "onboarding.socialFacebook":
+    "Facebook: supported publishing for connected Pages.",
+  "onboarding.socialInstagram":
+    "Instagram: connection is available; publishing is not yet supported.",
+  "onboarding.socialTikTok":
+    "TikTok: prepare content for manual export; direct publishing is not available.",
+  "onboarding.socialSkipHelp":
+    "No social accounts are connected during this setup.",
+  "onboarding.skipSocial": "Skip for now",
+  "onboarding.continue": "Continue",
+  "onboarding.next": "Next",
+  "onboarding.back": "Back",
+  "onboarding.finish": "Create workspace",
+  "onboarding.businessNameFallback": "Your business",
+  "onboarding.trialDisclosure":
+    "Trial access is only shown when server-side eligibility and trial controls are enabled. Billing is not available.",
+  "tutorial.stepCount": "Guide {step} of {total}",
+  "tutorial.dashboardTitle": "Your dashboard and navigation",
+  "tutorial.dashboardBody":
+    "Use the dashboard to see your work. The sidebar takes you to campaigns, content, review, results, and settings.",
+  "tutorial.sofiaTitle": "Sofía plans your marketing",
+  "tutorial.sofiaBody":
+    "Sofía helps clarify goals and prepare a structured brief. She does not publish content.",
+  "tutorial.leoTitle": "Leo creates content",
+  "tutorial.leoBody":
+    "Leo turns approved direction into drafts such as captions and scripts. You review every draft before it can be published.",
+  "tutorial.miaTitle": "Mía is planned",
+  "tutorial.miaBody":
+    "Mía is planned as Marketing Insights. Analytics AI is not available yet, and no performance insights are generated by this tutorial.",
+  "tutorial.creationTitle": "Quick Create and guided creation",
+  "tutorial.creationBody":
+    "Quick Create starts with a short instruction. Guided creation uses Sofía's planning conversation before Leo creates a draft.",
+  "tutorial.campaignTitle": "Campaigns are optional",
+  "tutorial.campaignBody":
+    "Create a campaign when you want to group work around an objective. You can also create content without a campaign.",
+  "tutorial.reviewTitle": "Review before approval",
+  "tutorial.reviewBody":
+    "Check drafts in Review. Business permissions determine who can approve or publish.",
+  "tutorial.publishingTitle": "Know the supported destinations",
+  "tutorial.publishingBody":
+    "Facebook Page publishing is supported. TikTok content is exported manually. Instagram can be connected, but publishing is not available.",
+  "tutorial.trialTitle": "Usage and account settings",
+  "tutorial.trialBody":
+    "When enabled, trial dates and AI usage are enforced by the server. Subscription checkout is not available, and no payment details are collected.",
+  "tutorial.skip": "Skip guide",
+  "tutorial.back": "Back",
+  "tutorial.next": "Next",
+  "tutorial.finish": "Finish",
+  "tutorial.replay": "Replay product guide",
+  "tutorial.saveError": "Your guide completion could not be saved. Try again.",
   "settings.socialTitle": "Social accounts",
   "settings.socialDescription":
     "Connections and publishing are managed per business.",
@@ -807,6 +944,9 @@ const es: Record<MessageKey, string> = {
   "app.accessRetrying": "Verificando acceso…",
   "agent.sofiaRole": "Estratega de marketing",
   "agent.leoRole": "Creador de contenido",
+  "agent.miaRole": "Analista de rendimiento de marketing",
+  "agent.planned": "Planeada",
+  "agent.miaPlanned": "Planeada — Marketing Insights",
   "agent.unverified": "Sin verificar",
   "agent.generated": "Contenido generado",
   "agent.noActivity": "Sin actividad registrada",
@@ -1463,6 +1603,16 @@ const es: Record<MessageKey, string> = {
   "auth.hidePassword": "Ocultar contraseña",
   "auth.processing": "Procesando…",
   "auth.signIn": "Iniciar sesión",
+  "auth.createAccount": "Crear cuenta",
+  "auth.createAccountHelp":
+    "Crea una cuenta segura para configurar el espacio de trabajo de tu negocio.",
+  "auth.noAccount": "¿Primera vez en AI Marketing Studio?",
+  "auth.accountCreated":
+    "Tu cuenta está lista. Continúa a tu espacio de trabajo.",
+  "auth.verifyEmail":
+    "Revisa tu correo y verifica la dirección antes de iniciar sesión.",
+  "auth.registrationError":
+    "No se pudo completar la configuración. Si ya tienes una cuenta, inicia sesión o restablece tu contraseña.",
   "auth.sendLink": "Enviar enlace",
   "auth.savePassword": "Guardar nueva contraseña",
   "auth.backToSignIn": "Volver a iniciar sesión",
@@ -1480,6 +1630,135 @@ const es: Record<MessageKey, string> = {
   "auth.passwordSaved": "La contraseña se actualizó correctamente.",
   "auth.signInError":
     "No se pudo iniciar sesión. Revisa tus datos e inténtalo de nuevo.",
+  "settings.membershipRole": "Rol en el negocio",
+  "settings.role.owner": "Propietario",
+  "settings.role.admin": "Administrador",
+  "settings.role.member": "Miembro",
+  "settings.businessProfile": "Perfil del negocio",
+  "settings.businessProfileHelp":
+    "Mantén al día la información de tu espacio de marketing.",
+  "settings.businessNameRequired": "Escribe el nombre del negocio.",
+  "settings.businessEditRestricted":
+    "Solo los propietarios y administradores pueden editar este negocio.",
+  "settings.businessSaveError":
+    "No se pudo guardar la información del negocio.",
+  "settings.businessSaved": "Se guardó la información del negocio.",
+  "trial.loading": "Cargando el estado de la cuenta…",
+  "trial.loadError": "No se pudo cargar el estado de la cuenta.",
+  "trial.accountStatus": "Acceso de la cuenta",
+  "trial.operatorAccess": "Acceso de operador",
+  "trial.noTrial":
+    "No hay una prueba ni una suscripción activa para este espacio.",
+  "trial.active": "Prueba gratuita",
+  "trial.expired": "La prueba terminó",
+  "trial.daysRemaining": "Quedan {count} días de prueba.",
+  "trial.expiredHelp":
+    "Tu contenido sigue disponible. Se requiere una suscripción para reanudar la generación con IA y la publicación.",
+  "trial.generationsUsed": "Generaciones de Leo usadas: {used} de {limit}.",
+  "trial.sofiaUsed": "Solicitudes de Sofía usadas: {used} de {limit}.",
+  "trial.heygenUsed": "Generaciones de HeyGen usadas: {used} de {limit}.",
+  "trial.campaignsUsed": "Campañas usadas: {used} de {limit}.",
+  "trial.feature.leo": "Generación con Leo",
+  "trial.feature.sofia": "Solicitudes de Sofía",
+  "trial.feature.facebook": "Publicación en Facebook",
+  "trial.feature.heygen": "Generación de video con HeyGen",
+  "trial.feature.campaigns": "Creación de campañas",
+  "trial.featureAvailable": "Disponible",
+  "trial.featureUnavailable": "No disponible",
+  "trial.status.active": "Hay una suscripción activa registrada.",
+  "trial.status.past_due": "El acceso de la suscripción requiere atención.",
+  "trial.status.canceled": "Esta suscripción se canceló.",
+  "trial.status.unavailable": "No hay una suscripción disponible.",
+  "trial.status.expired": "La prueba terminó.",
+  "trial.status.operator": "Se concedió acceso de operador.",
+  "trial.status.trialing": "Hay una prueba en curso.",
+  "trial.subscriptionUnavailable":
+    "La administración de suscripciones aún no está disponible. No se ha realizado ningún cobro.",
+  "onboarding.loading": "Cargando la configuración…",
+  "onboarding.loadError":
+    "No se pudo cargar la configuración guardada. Actualiza e inténtalo de nuevo.",
+  "onboarding.retry": "Volver a cargar la configuración",
+  "onboarding.saveError": "No se pudo guardar el progreso. Inténtalo de nuevo.",
+  "onboarding.activateError":
+    "No se pudo crear el espacio. La configuración guardada sigue disponible.",
+  "onboarding.stepCount": "Paso {step} de {total}",
+  "onboarding.step1Title": "Te damos la bienvenida a tu espacio",
+  "onboarding.step1Description":
+    "Elige los idiomas de la interfaz y de la IA. Puedes cambiarlos más adelante.",
+  "onboarding.step2Title": "Cuéntanos sobre tu negocio",
+  "onboarding.step2Description":
+    "Algunos datos ayudan a Sofía y Leo a crear contenido más relevante.",
+  "onboarding.step3Title": "Elige tus objetivos de marketing",
+  "onboarding.step3Description":
+    "Selecciona los resultados en los que quieres enfocarte.",
+  "onboarding.step4Title": "Describe tu audiencia y plataformas",
+  "onboarding.step4Description":
+    "Estos datos son opcionales y puedes actualizarlos más adelante.",
+  "onboarding.step5Title": "Conecta tus cuentas sociales más tarde",
+  "onboarding.step5Description":
+    "Puedes omitir este paso y conectar cuentas desde Configuración.",
+  "onboarding.step6Title": "Revisa y crea tu espacio de trabajo",
+  "onboarding.step6Description": "Tu espacio será privado para tu negocio.",
+  "onboarding.goalsLegend": "Objetivos de marketing",
+  "onboarding.goalAwareness": "Aumentar el reconocimiento",
+  "onboarding.goalProducts": "Promocionar productos",
+  "onboarding.goalLeads": "Generar contactos",
+  "onboarding.goalEngagement": "Aumentar la interacción",
+  "onboarding.goalServices": "Promocionar servicios",
+  "onboarding.platformsLegend": "Plataformas que podrías usar",
+  "onboarding.socialCapabilities":
+    "Más adelante podrás conectar cuentas compatibles desde Configuración.",
+  "onboarding.socialFacebook":
+    "Facebook: publicaciones disponibles en páginas conectadas.",
+  "onboarding.socialInstagram":
+    "Instagram: se puede conectar; la publicación aún no está disponible.",
+  "onboarding.socialTikTok":
+    "TikTok: prepara contenido para exportarlo manualmente; no hay publicación directa.",
+  "onboarding.socialSkipHelp":
+    "No se conecta ninguna cuenta social durante esta configuración.",
+  "onboarding.skipSocial": "Omitir por ahora",
+  "onboarding.continue": "Continuar",
+  "onboarding.next": "Siguiente",
+  "onboarding.back": "Atrás",
+  "onboarding.finish": "Crear espacio",
+  "onboarding.businessNameFallback": "Tu negocio",
+  "onboarding.trialDisclosure":
+    "El acceso de prueba solo se mostrará cuando estén habilitados los controles y la elegibilidad del servidor. La facturación no está disponible.",
+  "tutorial.stepCount": "Guía {step} de {total}",
+  "tutorial.dashboardTitle": "El panel y la navegación",
+  "tutorial.dashboardBody":
+    "Consulta tu trabajo en el panel. La barra lateral te lleva a campañas, contenido, revisión, resultados y configuración.",
+  "tutorial.sofiaTitle": "Sofía planifica tu marketing",
+  "tutorial.sofiaBody":
+    "Sofía ayuda a aclarar objetivos y preparar un resumen estructurado. No publica contenido.",
+  "tutorial.leoTitle": "Leo crea contenido",
+  "tutorial.leoBody":
+    "Leo convierte las instrucciones aprobadas en borradores, como textos y guiones. Tú revisas cada borrador antes de publicarlo.",
+  "tutorial.miaTitle": "Mía está planeada",
+  "tutorial.miaBody":
+    "Mía está planeada como Marketing Insights. El análisis con IA aún no está disponible y esta guía no genera métricas.",
+  "tutorial.creationTitle": "Creación rápida y guiada",
+  "tutorial.creationBody":
+    "La creación rápida empieza con una instrucción breve. La creación guiada usa la conversación de planificación de Sofía antes de que Leo prepare un borrador.",
+  "tutorial.campaignTitle": "Las campañas son opcionales",
+  "tutorial.campaignBody":
+    "Crea una campaña si quieres agrupar trabajo por objetivo. También puedes crear contenido sin una campaña.",
+  "tutorial.reviewTitle": "Revisa antes de aprobar",
+  "tutorial.reviewBody":
+    "Revisa los borradores en Revisión. Los permisos del negocio determinan quién puede aprobar o publicar.",
+  "tutorial.publishingTitle": "Destinos de publicación disponibles",
+  "tutorial.publishingBody":
+    "Se admite la publicación en páginas de Facebook. El contenido de TikTok se exporta manualmente. Instagram se puede conectar, pero no se puede publicar.",
+  "tutorial.trialTitle": "Uso y configuración de la cuenta",
+  "tutorial.trialBody":
+    "Cuando esté habilitado, el servidor aplicará las fechas de prueba y el uso de IA. La compra de suscripciones no está disponible y no se recopilan datos de pago.",
+  "tutorial.skip": "Omitir guía",
+  "tutorial.back": "Atrás",
+  "tutorial.next": "Siguiente",
+  "tutorial.finish": "Finalizar",
+  "tutorial.replay": "Volver a ver la guía",
+  "tutorial.saveError":
+    "No se pudo guardar la finalización de la guía. Inténtalo de nuevo.",
   "language.interface": "Idioma de la interfaz",
   "language.conversation": "Idioma de las conversaciones con IA",
   "language.content": "Idioma del contenido de marketing",

@@ -7,8 +7,27 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import SettingsPage from "./SettingsPage";
+import type { Business } from "../services/businessesApi";
 
 afterEach(cleanup);
+
+function business(id: string, name: string): Business {
+  return {
+    id,
+    name,
+    description: null,
+    target_audience: null,
+    brand_voice: null,
+    industry: null,
+    products_services: null,
+    service_area: null,
+    website_url: null,
+    marketing_goals: null,
+    preferred_platforms: null,
+    posting_frequency: null,
+    created_at: "2026-01-01T00:00:00Z",
+  };
+}
 
 describe("SettingsPage", () => {
   it("loads the configured profile name and keeps email read-only", () => {
@@ -28,9 +47,11 @@ describe("SettingsPage", () => {
     ).toBe("María");
     expect(screen.getByText("user@example.com")).toBeTruthy();
     expect(
-      (screen.getByRole("button", {
-        name: "Save changes",
-      }) as HTMLButtonElement).disabled,
+      (
+        screen.getByRole("button", {
+          name: "Save changes",
+        }) as HTMLButtonElement
+      ).disabled,
     ).toBe(true);
   });
 
@@ -117,9 +138,8 @@ describe("SettingsPage", () => {
     await act(async () => resolve("Ana Pérez"));
 
     expect(
-      document.querySelector(
-        ".settings-profile-feedback[role='status']",
-      )?.textContent,
+      document.querySelector(".settings-profile-feedback[role='status']")
+        ?.textContent,
     ).toBe("Display name updated.");
     expect(
       (screen.getByLabelText("Display name") as HTMLInputElement).value,
@@ -152,9 +172,11 @@ describe("SettingsPage", () => {
     );
     expect((input as HTMLInputElement).value).toBe("Ana");
     expect(
-      (screen.getByRole("button", {
-        name: "Save changes",
-      }) as HTMLButtonElement).disabled,
+      (
+        screen.getByRole("button", {
+          name: "Save changes",
+        }) as HTMLButtonElement
+      ).disabled,
     ).toBe(false);
   });
 
@@ -177,7 +199,9 @@ describe("SettingsPage", () => {
     expect(screen.getByText("Facebook conexión")).toBeTruthy();
     expect(screen.getByText("Instagram conexión")).toBeTruthy();
     expect(screen.getByText("TikTok conexión")).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Social accounts" })).toBeTruthy();
+    expect(
+      screen.getByRole("heading", { name: "Social accounts" }),
+    ).toBeTruthy();
   });
 
   it("explains when no business is selected", () => {
@@ -208,7 +232,37 @@ describe("SettingsPage", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Integrations" }));
-    expect(screen.queryByRole("button", { name: "Connect Facebook" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Connect Facebook" }),
+    ).toBeNull();
     expect(screen.getByText(/can't manage social connections/)).toBeTruthy();
+  });
+
+  it("discards unsaved business profile edits when switching tenants", () => {
+    const save = vi.fn(async () => {});
+    const props = {
+      businessId: "business-1",
+      userDisplayName: "Owner",
+      userEmail: "owner@example.com",
+      onSaveDisplayName: vi.fn(async (name: string) => name),
+      canEditBusiness: true,
+      onSaveBusiness: save,
+      facebookConnection: <div />,
+      tiktokConnection: <div />,
+    };
+    const { rerender } = render(
+      <SettingsPage {...props} business={business("business-1", "First")} />,
+    );
+    const name = screen.getByLabelText(/Business name/);
+    fireEvent.change(name, { target: { value: "Unsaved first" } });
+    expect((name as HTMLInputElement).value).toBe("Unsaved first");
+
+    rerender(
+      <SettingsPage {...props} business={business("business-2", "Second")} />,
+    );
+    expect(
+      (screen.getByLabelText(/Business name/) as HTMLInputElement).value,
+    ).toBe("Second");
+    expect(save).not.toHaveBeenCalled();
   });
 });

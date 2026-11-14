@@ -12,6 +12,7 @@ from app.database import get_db
 from app.errors import ApplicationError
 from app.features.access.principal import AuthenticatedPrincipal, Principal
 from app.features.access import service as access_service
+from app.features.entitlements import service as entitlement_service
 from app.http_errors import http_error
 
 # Load environment variables
@@ -89,13 +90,11 @@ def _verify_supabase_token(
 def get_registration_identity(
     payload: dict = Depends(_verify_supabase_token),
 ) -> Principal:
-    """Explicit registration only; the existing verified-token allowlist stays on.
-
-    JWT verification proves issuer/subject, not email verification. A future
-    public-registration gate requires separate approval and verification policy.
-    """
+    """Provision from a verified identity; public admission stays gated and email-verified."""
     if payload.get("is_anonymous", False):
         raise HTTPException(status_code=403, detail="Application access denied")
+    if entitlement_service.public_registration_enabled() and payload.get("email_verified") is not True:
+        raise HTTPException(status_code=403, detail="Verify your email address before creating an account")
     return Principal(issuer=payload["iss"], subject=payload["sub"])
 
 

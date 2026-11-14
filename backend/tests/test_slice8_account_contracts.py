@@ -57,6 +57,28 @@ def test_registration_retains_allowlist_and_denies_anonymous(auth_client, signed
         assert db.scalar(select(User.id)) is None
 
 
+def test_enabled_registration_gate_requires_verified_email(auth_client, signed_token, monkeypatch):
+    client, engine = auth_client
+    from app.features.entitlements import service as entitlement_service
+
+    monkeypatch.setattr(entitlement_service, "public_registration_enabled", lambda: True)
+    unverified = client.post(
+        "/account/register",
+        json={},
+        headers=headers(signed_token(changes={"email_verified": False})),
+    )
+    assert unverified.status_code == 403
+    with Session(engine) as db:
+        assert db.scalar(select(User.id)) is None
+
+    verified = client.post(
+        "/account/register",
+        json={},
+        headers=headers(signed_token(changes={"email_verified": True})),
+    )
+    assert verified.status_code == 200
+
+
 def test_registration_cannot_reactivate_disabled_user_or_accept_ownership(auth_client, signed_token):
     client, engine = auth_client
     add_user(engine, status="disabled")
@@ -215,6 +237,9 @@ def test_concurrent_registration_and_additive_migration(postgres_database):
             for table in preserved_tables
         } == {table: 1 for table in preserved_tables}
         assert connection.scalar(text("SELECT name FROM businesses WHERE id='legacy'")) == "Keep me"
+        assert connection.scalar(text(
+            "SELECT customer_organization_id FROM businesses WHERE id='legacy'"
+        )) is None
         assert connection.scalar(text("SELECT name FROM campaigns WHERE id='legacy-campaign'")) == "Keep campaign"
         assert connection.scalar(text("SELECT caption FROM drafts WHERE id='legacy-draft'")) == "Keep caption"
         assert connection.scalar(text(
@@ -229,6 +254,10 @@ def test_concurrent_registration_and_additive_migration(postgres_database):
         assert connection.scalar(text("SELECT language FROM conversations WHERE id='legacy-conversation'")) is None
         assert connection.scalar(text("SELECT count(*) FROM user_preferences")) == 0
         assert connection.scalar(text("SELECT count(*) FROM business_preferences")) == 0
+        assert connection.scalar(text("SELECT count(*) FROM customer_organizations")) == 0
+        assert connection.scalar(text("SELECT count(*) FROM customer_entitlements")) == 0
+        assert connection.scalar(text("SELECT count(*) FROM ai_usage_reservations")) == 0
+        assert connection.scalar(text("SELECT count(*) FROM onboarding_progress")) == 0
     barrier = Barrier(2)
     def register(_):
         with Session(engine) as db:

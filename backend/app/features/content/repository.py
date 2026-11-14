@@ -160,6 +160,12 @@ def list_messages_scoped(db: Session, context: TenantAccess, conversation_id: st
         .order_by(ConversationMessage.created_at, ConversationMessage.id), limit=limit, offset=offset)).all()
 
 
+def get_message_scoped(db: Session, context: TenantAccess, message_id: str):
+    return db.scalar(tenant.selection(ConversationMessage, context).where(
+        ConversationMessage.id == message_id,
+    ))
+
+
 def add_message_scoped(db: Session, context: TenantAccess, conversation_id: str, *, role: str, content: str):
     if role not in {"user", "assistant"}:
         raise ValueError("Unsupported conversation role")

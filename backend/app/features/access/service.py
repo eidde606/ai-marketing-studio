@@ -5,6 +5,7 @@ from app.errors import ApplicationError, ErrorKind
 from . import repository
 from .permissions import Permission, allows
 from .principal import AuthenticatedPrincipal, Principal, TenantAccess
+from app.features.entitlements import service as entitlement_service
 
 
 def resolve_principal(db: Session, identity: Principal) -> AuthenticatedPrincipal:
@@ -52,6 +53,7 @@ def require_permission(
         user_id, membership_id, role = membership
     if not allows(role, permission):
         raise ApplicationError(ErrorKind.FORBIDDEN, "Operation not permitted")
+    entitlement_service.assert_mutation_allowed(db, business_id, permission)
     return TenantAccess(user_id, business_id, membership_id, role)
 
 

@@ -10,6 +10,7 @@ from app.errors import ApplicationError, ErrorKind
 from app.features.access import service as access
 from app.features.access.permissions import Permission
 from app.features.access.principal import AuthenticatedPrincipal
+from app.features.entitlements import service as entitlement_service
 from app.storage_service import get_storage_client
 from app.transactions import Transactions
 from . import publishing_provider, repository, service as oauth_service
@@ -146,6 +147,7 @@ async def publish_video(
     context = access.require_permission(
         db, principal, draft.business_id, Permission.PUBLISH, lock=True,
     )
+    entitlement_service.assert_publishing_allowed(db, draft.business_id)
     if not repository.claim_publication_scoped(db, context, draft_id, account.id):
         transactions.rollback()
         raise _failure(

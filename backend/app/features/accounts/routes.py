@@ -5,11 +5,17 @@ from app.database import get_db
 from app.errors import ApplicationError
 from app.http_errors import http_error
 from app.features.access.principal import Principal, AuthenticatedPrincipal
+from app.features.entitlements import service as entitlement_service
 from . import service
 from .schemas import (RegistrationRequest, AccountPreferencesUpdate, BusinessPreferencesUpdate,
                       AccountResponse, AccountPreferences)
 
 router = APIRouter()
+
+
+@router.get("/public/config")
+def public_config():
+    return {"public_registration": entitlement_service.public_registration_enabled()}
 
 
 @router.post("/account/register", response_model=AccountResponse)

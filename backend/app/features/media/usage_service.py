@@ -7,6 +7,7 @@ from app.errors import ApplicationError, ErrorKind
 from app.features.access.permissions import Permission
 from app.features.access.principal import AuthenticatedPrincipal, TenantAccess
 from app.features.access.service import require_permission
+from app.features.entitlements import service as entitlement_service
 from . import repository
 
 
@@ -40,6 +41,12 @@ def usage(db: Session, principal: AuthenticatedPrincipal, business_id: str):
             "period": "lifetime", "unit": "generation_attempts"}
 
 
+def attempt_count(db: Session, principal: AuthenticatedPrincipal, business_id: str) -> int:
+    context = require_permission(db, principal, business_id, Permission.READ)
+    total, _ = repository.generation_usage_scoped(db, context)
+    return total
+
+
 def require_capacity(db: Session, context: TenantAccess, script: str):
     """Called with the business row locked, in the attempt insertion transaction.
 
@@ -51,6 +58,13 @@ def require_capacity(db: Session, context: TenantAccess, script: str):
     if allowance is None:
         raise ApplicationError(ErrorKind.LIMIT_EXCEEDED, "No HeyGen generation allowance is configured for this business")
     total, active = repository.generation_usage_scoped(db, context)
+    entitlement = entitlement_service.entitlement_for_business(db, context.business_id)
+    if entitlement is not None and entitlement.status == "trialing":
+        trial_limit = (entitlement.limits or {}).get("heygen_generations", 0)
+        if type(trial_limit) is not int or trial_limit < 0:
+            raise ApplicationError(ErrorKind.UNAVAILABLE, "Trial video-generation limit configuration is invalid")
+        if total >= trial_limit:
+            raise ApplicationError(ErrorKind.LIMIT_EXCEEDED, "Video generation is unavailable during this trial")
     if total >= allowance.max_generations:
         raise ApplicationError(ErrorKind.LIMIT_EXCEEDED, "The business HeyGen generation allowance is exhausted")
     if active >= allowance.max_concurrent_jobs:

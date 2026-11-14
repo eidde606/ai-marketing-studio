@@ -1,19 +1,36 @@
 import { useRef, useState, type FormEvent, type ReactNode } from "react";
-import { Facebook, Settings2, UserRound } from "lucide-react";
-import { useLocalization } from "../app/localization";
 import {
-  AccountStatusNotice,
-  CapabilityStatus,
-} from "../app/ProductStatus";
+  BookOpen,
+  Building2,
+  Facebook,
+  Settings2,
+  UserRound,
+} from "lucide-react";
+import { useLocalization } from "../app/localization";
+import { AccountStatusNotice, CapabilityStatus } from "../app/ProductStatus";
 import type { FeatureAvailability } from "../services/accountApi";
+import type { Business, BusinessUpdate } from "../services/businessesApi";
 
 type SettingsTab = "account" | "integrations";
+type BusinessProfileState = {
+  businessId: string;
+  values: BusinessUpdate;
+};
+type BusinessErrorState = {
+  businessId: string;
+  message: string;
+};
 
 type Props = {
   businessId: string;
   userDisplayName: string;
   userEmail: string;
   onSaveDisplayName: (displayName: string) => Promise<string>;
+  business?: Business | null;
+  membershipRole?: "owner" | "admin" | "member" | null;
+  canEditBusiness?: boolean;
+  onSaveBusiness?: (values: BusinessUpdate) => Promise<void>;
+  onReplayTutorial?: () => void;
   canManageConnections?: boolean;
   languagePreferences?: ReactNode;
   features?: FeatureAvailability;
@@ -27,6 +44,11 @@ export default function SettingsPage({
   userDisplayName,
   userEmail,
   onSaveDisplayName,
+  business = null,
+  membershipRole = null,
+  canEditBusiness = false,
+  onSaveBusiness = async () => {},
+  onReplayTutorial = () => {},
   canManageConnections = false,
   languagePreferences,
   features,
@@ -48,6 +70,53 @@ export default function SettingsPage({
   const savingRef = useRef(false);
   const changed = displayName !== savedName;
   const maxNameLength = 80;
+  const [businessProfileState, setBusinessProfileState] =
+    useState<BusinessProfileState | null>(null);
+  const [businessSaving, setBusinessSaving] = useState(false);
+  const [businessErrorState, setBusinessErrorState] =
+    useState<BusinessErrorState | null>(null);
+  const [businessSavedFor, setBusinessSavedFor] = useState<string | null>(null);
+  const initialBusinessProfile: BusinessUpdate = business
+    ? {
+        name: business.name,
+        industry: business.industry,
+        description: business.description,
+        website_url: business.website_url,
+        service_area: business.service_area,
+        products_services: business.products_services,
+        target_audience: business.target_audience,
+        marketing_goals: business.marketing_goals,
+        preferred_platforms: business.preferred_platforms,
+        brand_voice: business.brand_voice,
+      }
+    : {};
+  const businessProfile =
+    businessProfileState && businessProfileState.businessId === business?.id
+      ? businessProfileState.values
+      : initialBusinessProfile;
+  const businessError =
+    businessErrorState && businessErrorState.businessId === business?.id
+      ? businessErrorState.message
+      : "";
+  const businessSaved = !!business && businessSavedFor === business.id;
+
+  function updateBusinessProfile<K extends keyof BusinessUpdate>(
+    key: K,
+    value: BusinessUpdate[K],
+  ) {
+    if (!business) return;
+    setBusinessProfileState((current) => ({
+      businessId: business.id,
+      values: {
+        ...(current?.businessId === business.id
+          ? current.values
+          : initialBusinessProfile),
+        [key]: value,
+      },
+    }));
+    setBusinessErrorState(null);
+    setBusinessSavedFor(null);
+  }
 
   async function handleSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -55,7 +124,10 @@ export default function SettingsPage({
 
     const normalized = displayName.trim();
     if (!normalized) {
-      setFeedback({ type: "error", message: t("settings.displayNameRequired") });
+      setFeedback({
+        type: "error",
+        message: t("settings.displayNameRequired"),
+      });
       return;
     }
     if (normalized.length > maxNameLength) {
@@ -85,6 +157,35 @@ export default function SettingsPage({
     } finally {
       savingRef.current = false;
       setSaving(false);
+    }
+  }
+
+  async function handleBusinessSave(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (businessSaving || !business || !canEditBusiness) return;
+    if (!businessProfile.name?.trim()) {
+      setBusinessErrorState({
+        businessId: business.id,
+        message: t("settings.businessNameRequired"),
+      });
+      return;
+    }
+    setBusinessSaving(true);
+    setBusinessErrorState(null);
+    setBusinessSavedFor(null);
+    try {
+      await onSaveBusiness({
+        ...businessProfile,
+        name: businessProfile.name.trim(),
+      });
+      setBusinessSavedFor(business.id);
+    } catch {
+      setBusinessErrorState({
+        businessId: business.id,
+        message: t("settings.businessSaveError"),
+      });
+    } finally {
+      setBusinessSaving(false);
     }
   }
 
@@ -124,7 +225,10 @@ export default function SettingsPage({
         </nav>
 
         {activeTab === "account" ? (
-          <section className="settings-account panel" aria-labelledby="account-title">
+          <section
+            className="settings-account panel"
+            aria-labelledby="account-title"
+          >
             <div className="settings-section-heading">
               <span className="settings-section-icon" aria-hidden="true">
                 <UserRound size={20} />
@@ -187,14 +291,120 @@ export default function SettingsPage({
                 <dt>{t("settings.email")}</dt>
                 <dd>{userEmail || t("settings.emailUnavailable")}</dd>
               </div>
+              {membershipRole && (
+                <div>
+                  <dt>{t("settings.membershipRole")}</dt>
+                  <dd>
+                    {membershipRole === "owner"
+                      ? t("settings.role.owner")
+                      : membershipRole === "admin"
+                        ? t("settings.role.admin")
+                        : t("settings.role.member")}
+                  </dd>
+                </div>
+              )}
             </dl>
             <p className="settings-note" role="note">
               {t("settings.profileNote")}
             </p>
             {languagePreferences}
+            {business && (
+              <section
+                className="settings-business-profile"
+                aria-labelledby="business-profile-title"
+              >
+                <div className="settings-section-heading">
+                  <Building2 size={20} aria-hidden="true" />
+                  <div>
+                    <h3 id="business-profile-title">
+                      {t("settings.businessProfile")}
+                    </h3>
+                    <p>{t("settings.businessProfileHelp")}</p>
+                  </div>
+                </div>
+                <form
+                  className="settings-profile-form"
+                  onSubmit={handleBusinessSave}
+                >
+                  <label htmlFor="settings-business-name">
+                    {t("businessForm.name")} *
+                  </label>
+                  <input
+                    id="settings-business-name"
+                    value={businessProfile.name ?? ""}
+                    maxLength={120}
+                    disabled={!canEditBusiness || businessSaving}
+                    onChange={(event) =>
+                      updateBusinessProfile("name", event.target.value)
+                    }
+                  />
+                  <label htmlFor="settings-business-industry">
+                    {t("businessForm.industry")}
+                  </label>
+                  <input
+                    id="settings-business-industry"
+                    value={businessProfile.industry ?? ""}
+                    disabled={!canEditBusiness || businessSaving}
+                    onChange={(event) =>
+                      updateBusinessProfile("industry", event.target.value)
+                    }
+                  />
+                  <label htmlFor="settings-business-description">
+                    {t("businessForm.descriptionLabel")}
+                  </label>
+                  <textarea
+                    id="settings-business-description"
+                    value={businessProfile.description ?? ""}
+                    disabled={!canEditBusiness || businessSaving}
+                    onChange={(event) =>
+                      updateBusinessProfile("description", event.target.value)
+                    }
+                  />
+                  <label htmlFor="settings-business-website">
+                    {t("businessForm.website")}
+                  </label>
+                  <input
+                    id="settings-business-website"
+                    type="url"
+                    value={businessProfile.website_url ?? ""}
+                    disabled={!canEditBusiness || businessSaving}
+                    onChange={(event) =>
+                      updateBusinessProfile("website_url", event.target.value)
+                    }
+                  />
+                  {!canEditBusiness && (
+                    <p role="note">{t("settings.businessEditRestricted")}</p>
+                  )}
+                  {businessError && <p role="alert">{businessError}</p>}
+                  {businessSaved && (
+                    <p role="status">{t("settings.businessSaved")}</p>
+                  )}
+                  {canEditBusiness && (
+                    <button
+                      className="primary-button"
+                      type="submit"
+                      disabled={businessSaving}
+                    >
+                      {businessSaving ? t("common.saving") : t("common.save")}
+                    </button>
+                  )}
+                </form>
+              </section>
+            )}
+            <button
+              type="button"
+              className="reject-button settings-tutorial-button"
+              onClick={onReplayTutorial}
+            >
+              <BookOpen size={18} aria-hidden="true" />
+              {t("tutorial.replay")}
+            </button>
           </section>
         ) : (
-          <section className="settings-integrations" aria-labelledby="integrations-title">
+          <section
+            className="settings-integrations"
+            aria-labelledby="integrations-title"
+          >
             <header className="settings-integrations-heading">
               <div className="settings-section-icon" aria-hidden="true">
                 <Facebook size={20} />

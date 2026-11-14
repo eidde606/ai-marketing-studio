@@ -3,7 +3,7 @@
   "app.features.access.service:require_permission -> app.features.access.repository.active_membership": 2,
   "app.features.access.service:require_permission -> app.features.access.repository.lock_business_for_authorization": 1,
   "app.features.access.service:resolve_principal -> app.features.access.repository.active_user_id": 1,
-  "app.features.businesses.service:create_business -> app.features.businesses.repository.insert_business_and_owner": 1,
+  "app.features.businesses.service:provision_business -> app.features.businesses.repository.insert_business_and_owner": 1,
   "app.features.businesses.service:list_businesses -> app.features.businesses.repository.list_for_principal": 1,
   "app.features.drafts.service:require_draft -> app.features.drafts.repository.get_draft": 1,
   "app.features.drafts.service:require_pending_draft -> app.features.drafts.repository.lock_draft": 1,

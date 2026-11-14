@@ -11,11 +11,14 @@ import FacebookConnection from "./components/FacebookConnection";
 import TikTokConnection from "./components/TikTokConnection";
 import InstagramConnection from "./components/InstagramConnection";
 import SettingsPage from "./components/SettingsPage";
+import OnboardingWizard from "./components/OnboardingWizard";
+import ProductTutorial from "./components/ProductTutorial";
+import { getSectionLabel, type Section } from "./components/Sidebar";
 import {
-  getSectionLabel,
-  type Section,
-} from "./components/Sidebar";
-import type { Business } from "./services/businessesApi";
+  updateBusiness,
+  type Business,
+  type BusinessUpdate,
+} from "./services/businessesApi";
 import type { Draft } from "./services/draftsApi";
 import { useDraftCollection } from "./features/drafts/hooks/useDraftCollection";
 import { useDraftOperations } from "./features/drafts/hooks/useDraftOperations";
@@ -26,17 +29,17 @@ import { useDraftMedia } from "./features/media/hooks/useDraftMedia";
 import AppShell from "./app/AppShell";
 import LanguagePreferences from "./app/LanguagePreferences";
 import UsageIndicator from "./app/UsageIndicator";
+import TrialStatus from "./app/TrialStatus";
 import { useAuthSession } from "./app/useAuthSession";
 import { useBusinessSelection } from "./app/useBusinessSelection";
 import SofiaChat from "./components/SofiaChat";
-import {
-  LocalizationProvider,
-  useLocalization,
-} from "./app/localization";
+import { LocalizationProvider, useLocalization } from "./app/localization";
 import { ApiError } from "./lib/apiClient";
+import { updateTutorialCompletion } from "./services/onboardingApi";
 
 function formatDraftDate(value: string, locale: "en" | "es"): string {
-  if (!value) return locale === "es" ? "Fecha no disponible" : "Date unavailable";
+  if (!value)
+    return locale === "es" ? "Fecha no disponible" : "Date unavailable";
   const normalized = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value)
     ? value
     : `${value}Z`;
@@ -52,11 +55,7 @@ function formatDraftDate(value: string, locale: "en" | "es"): string {
 
 function getUserDisplayName(session: Session, fallback: string): string {
   const metadata = session.user.user_metadata ?? {};
-  const name = [
-    metadata.display_name,
-    metadata.full_name,
-    metadata.name,
-  ].find(
+  const name = [metadata.display_name, metadata.full_name, metadata.name].find(
     (value): value is string =>
       typeof value === "string" && value.trim().length > 0,
   );
@@ -72,11 +71,7 @@ const App: FC = () => {
   );
 };
 
-function AppWorkspace({
-  auth,
-}: {
-  auth: ReturnType<typeof useAuthSession>;
-}) {
+function AppWorkspace({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
   const { t } = useLocalization();
   if (auth.checkingAuth) {
     return <div className="auth-loading">{t("common.loading")}</div>;
@@ -112,11 +107,7 @@ function WorkspaceAccessState({
         <h1 id="access-heading">
           {denied ? t("app.accessUnavailable") : t("app.starting")}
         </h1>
-        <p>
-          {denied
-            ? t("app.accountNotProvisioned")
-            : t("app.accessRetry")}
-        </p>
+        <p>{denied ? t("app.accountNotProvisioned") : t("app.accessRetry")}</p>
         <div className="workspace-access-state__actions">
           {denied ? (
             <button type="button" onClick={() => void onSignOut()}>
@@ -150,18 +141,9 @@ function AuthenticatedApp({
   onRecoveryComplete: () => void;
   onSaveDisplayName: (displayName: string) => Promise<string>;
 }) {
-  const {
-    account,
-    accountLoading,
-    accountError,
-    refreshAccount,
-    locale,
-    t,
-  } = useLocalization();
-  const userDisplayName = getUserDisplayName(
-    session,
-    t("shell.myAccount"),
-  );
+  const { account, accountLoading, accountError, refreshAccount, locale, t } =
+    useLocalization();
+  const userDisplayName = getUserDisplayName(session, t("shell.myAccount"));
   const [activeSection, setActiveSection] = useState<Section>(() => {
     try {
       const saved = window.localStorage.getItem("ai-marketing-studio:section");
@@ -198,6 +180,7 @@ function AuthenticatedApp({
     }
   }, [activeSection]);
   const [showBusinessForm, setShowBusinessForm] = useState(false);
+  const [tutorialOpen, setTutorialOpen] = useState(false);
 
   // These hooks share one collection and lock owner for the authenticated workspace.
   // Keep them above the recovery return so pending work and edits survive recovery.
@@ -215,7 +198,11 @@ function AuthenticatedApp({
     operations,
   );
   const media = useDraftMedia(selectedBusinessId, collection, operations);
-  const heygen = useHeyGenGeneration(selectedBusinessId, collection, operations);
+  const heygen = useHeyGenGeneration(
+    selectedBusinessId,
+    collection,
+    operations,
+  );
   const {
     setApprovals,
     loadingDrafts,
@@ -310,6 +297,12 @@ function AuthenticatedApp({
             ? t("agent.aiDraftSaved")
             : t("agent.noGenerations"),
     },
+    {
+      name: "Mía",
+      role: t("agent.miaRole"),
+      state: t("agent.planned"),
+      activity: t("agent.miaPlanned"),
+    },
   ];
   const handleSectionChange = (section: Section) => {
     setActiveSection(section);
@@ -319,6 +312,11 @@ function AuthenticatedApp({
     addBusiness(business);
     void refreshAccount();
     setShowBusinessForm(false);
+  };
+  const handleOnboardingComplete = (business: Business) => {
+    addBusiness(business);
+    void refreshAccount();
+    setTutorialOpen(true);
   };
   const draftMessages = (
     <>
@@ -365,6 +363,27 @@ function AuthenticatedApp({
       />
     );
   }
+  if (businessError) {
+    return (
+      <main className="workspace-access-state">
+        <section className="panel" role="alert">
+          <h1>{t("app.accessUnavailable")}</h1>
+          <p>{businessError}</p>
+          <div className="workspace-access-state__actions">
+            <button type="button" onClick={() => void refreshBusinesses()}>
+              {t("common.retry")}
+            </button>
+            <button type="button" onClick={() => void onSignOut()}>
+              {t("shell.signOut")}
+            </button>
+          </div>
+        </section>
+      </main>
+    );
+  }
+  if (businesses.length === 0) {
+    return <OnboardingWizard onCreated={handleOnboardingComplete} />;
+  }
   const selectedBusinessAccess = account?.businesses.find(
     (business) => business.id === selectedBusinessId,
   );
@@ -375,6 +394,8 @@ function AuthenticatedApp({
   const canManageConnections =
     selectedBusinessAccess?.role === "owner" ||
     selectedBusinessAccess?.role === "admin";
+  const selectedBusiness =
+    businesses.find((business) => business.id === selectedBusinessId) ?? null;
   return (
     <AppShell
       activeSection={activeSection}
@@ -501,10 +522,7 @@ function AuthenticatedApp({
               <p>{t("team.description")}</p>
             </div>
           </section>
-          <section
-            className="ai-team-roles"
-            aria-label={t("team.roles")}
-          >
+          <section className="ai-team-roles" aria-label={t("team.roles")}>
             {agents.map((agent) => (
               <article className="ai-team-role" key={agent.name}>
                 <span className="ai-team-role__avatar" aria-hidden="true">
@@ -547,9 +565,7 @@ function AuthenticatedApp({
                   <div className="agent-status">
                     <span
                       className={`status-dot ${
-                        agent.state === t("agent.generated")
-                          ? "available"
-                          : ""
+                        agent.state === t("agent.generated") ? "available" : ""
                       }`}
                     />
                     {agent.state}
@@ -566,17 +582,35 @@ function AuthenticatedApp({
           userDisplayName={userDisplayName}
           userEmail={session.user.email ?? ""}
           onSaveDisplayName={onSaveDisplayName}
+          business={selectedBusiness}
+          membershipRole={selectedBusinessAccess?.role ?? null}
+          canEditBusiness={
+            selectedBusinessAccess?.capabilities.includes("edit_business") ??
+            false
+          }
+          onSaveBusiness={async (values: BusinessUpdate) => {
+            await updateBusiness(selectedBusinessId, values);
+            await refreshBusinesses();
+          }}
+          onReplayTutorial={() => setTutorialOpen(true)}
           canManageConnections={canManageConnections}
           features={account?.features}
           languagePreferences={
             <>
               <LanguagePreferences businessId={selectedBusinessId} />
+              <TrialStatus businessId={selectedBusinessId} />
               <UsageIndicator businessId={selectedBusinessId} />
             </>
           }
-          facebookConnection={<FacebookConnection businessId={selectedBusinessId} />}
-          instagramConnection={<InstagramConnection businessId={selectedBusinessId} />}
-          tiktokConnection={<TikTokConnection businessId={selectedBusinessId} />}
+          facebookConnection={
+            <FacebookConnection businessId={selectedBusinessId} />
+          }
+          instagramConnection={
+            <InstagramConnection businessId={selectedBusinessId} />
+          }
+          tiktokConnection={
+            <TikTokConnection businessId={selectedBusinessId} />
+          }
         />
       ) : (
         <section className="panel placeholder-panel">
@@ -594,6 +628,14 @@ function AuthenticatedApp({
             Volver al resumen
           </button>
         </section>
+      )}
+      {tutorialOpen && (
+        <ProductTutorial
+          onComplete={async () => {
+            await updateTutorialCompletion(true);
+            setTutorialOpen(false);
+          }}
+        />
       )}
     </AppShell>
   );

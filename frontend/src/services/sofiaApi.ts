@@ -12,6 +12,7 @@ export async function sendMessageToSofia(
   businessId: string,
   message: string,
   conversationId: string | null = null,
+  idempotencyKey: string = crypto.randomUUID(),
 ): Promise<SofiaChatResponse> {
   const {
     data: { session },
@@ -33,6 +34,7 @@ export async function sendMessageToSofia(
       body: JSON.stringify({
         message,
         conversation_id: conversationId,
+        idempotency_key: idempotencyKey,
       }),
     },
   );
@@ -95,6 +97,7 @@ export type SofiaGeneratedDraft = {
 export async function generateDraftWithLeo(
   businessId: string,
   conversationId: string,
+  idempotencyKey: string = crypto.randomUUID(),
 ): Promise<SofiaGeneratedDraft> {
   const {
     data: { session },
@@ -111,7 +114,9 @@ export async function generateDraftWithLeo(
       method: "POST",
       headers: {
         Authorization: `Bearer ${session.access_token}`,
+        "Content-Type": "application/json",
       },
+      body: JSON.stringify({ idempotency_key: idempotencyKey }),
     },
   );
 

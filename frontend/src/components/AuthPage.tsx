@@ -1,9 +1,10 @@
 import { Eye, EyeOff, LockKeyhole, Mail, Sparkles } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useLocalization } from "../app/localization";
+import { getPublicConfig, registerAccount } from "../services/accountApi";
 import { supabase } from "../services/supabaseClient";
 
-type AuthMode = "login" | "forgot" | "reset";
+type AuthMode = "login" | "register" | "forgot" | "reset";
 
 type AuthPageProps = {
   recoveryMode?: boolean;
@@ -20,10 +21,25 @@ export default function AuthPage({
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [registrationAvailable, setRegistrationAvailable] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
   const currentMode = recoveryMode ? "reset" : mode;
+
+  useEffect(() => {
+    let active = true;
+    getPublicConfig()
+      .then((config) => {
+        if (active) setRegistrationAvailable(config.public_registration);
+      })
+      .catch(() => {
+        if (active) setRegistrationAvailable(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const switchMode = (nextMode: AuthMode) => {
     setMode(nextMode);
@@ -61,13 +77,28 @@ export default function AuthPage({
         setPassword("");
         onRecoveryComplete?.();
         setMessage(t("auth.passwordSaved"));
+      } else if (currentMode === "register") {
+        if (password.length < 12) throw new Error(t("auth.passwordMin"));
+        const { data, error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: { emailRedirectTo: window.location.origin },
+        });
+        if (error) throw error;
+        if (data.session) {
+          await registerAccount();
+          setMessage(t("auth.accountCreated"));
+        } else {
+          setMessage(t("auth.verifyEmail"));
+        }
       } else {
-        const { error } = await supabase.auth.signInWithPassword({
+        const { data, error } = await supabase.auth.signInWithPassword({
           email,
           password,
         });
 
         if (error) throw error;
+        if (registrationAvailable && data.session) await registerAccount();
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : "";
@@ -76,7 +107,9 @@ export default function AuthPage({
           ? message
           : currentMode === "login"
             ? t("auth.signInError")
-            : t("auth.unknownError"),
+            : currentMode === "register"
+              ? t("auth.registrationError")
+              : t("auth.unknownError"),
       );
     } finally {
       setLoading(false);
@@ -93,7 +126,9 @@ export default function AuthPage({
           id="auth-language"
           value={locale}
           onChange={(event) =>
-            void setInterfaceLanguage(event.target.value as "en" | "es")
+            void setInterfaceLanguage(event.target.value as "en" | "es").catch(
+              () => setError(t("language.updateError")),
+            )
           }
           className="cursor-pointer rounded-md bg-transparent px-2 py-1 text-white outline-none focus-visible:ring-2 focus-visible:ring-violet-300"
         >
@@ -148,16 +183,20 @@ export default function AuthPage({
             <h2 className="text-3xl font-bold tracking-tight text-slate-900">
               {currentMode === "login"
                 ? t("auth.welcome")
-                : currentMode === "forgot"
-                  ? t("auth.recover")
-                  : t("auth.newPassword")}
+                : currentMode === "register"
+                  ? t("auth.createAccount")
+                  : currentMode === "forgot"
+                    ? t("auth.recover")
+                    : t("auth.newPassword")}
             </h2>
             <p className="mt-3 text-sm leading-6 text-slate-500">
               {currentMode === "login"
                 ? t("auth.continue")
-                : currentMode === "forgot"
-                  ? t("auth.recoverHelp")
-                  : t("auth.newPasswordHelp")}
+                : currentMode === "register"
+                  ? t("auth.createAccountHelp")
+                  : currentMode === "forgot"
+                    ? t("auth.recoverHelp")
+                    : t("auth.newPasswordHelp")}
             </p>
           </div>
 
@@ -220,11 +259,15 @@ export default function AuthPage({
                     id="auth-password"
                     type={showPassword ? "text" : "password"}
                     autoComplete={
-                      currentMode === "reset"
+                      currentMode === "reset" || currentMode === "register"
                         ? "new-password"
                         : "current-password"
                     }
-                    minLength={currentMode === "reset" ? 12 : undefined}
+                    minLength={
+                      currentMode === "reset" || currentMode === "register"
+                        ? 12
+                        : undefined
+                    }
                     placeholder="••••••••••••"
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
@@ -274,11 +317,32 @@ export default function AuthPage({
                 ? t("auth.processing")
                 : currentMode === "login"
                   ? t("auth.signIn")
-                  : currentMode === "forgot"
-                    ? t("auth.sendLink")
-                    : t("auth.savePassword")}
+                  : currentMode === "register"
+                    ? t("auth.createAccount")
+                    : currentMode === "forgot"
+                      ? t("auth.sendLink")
+                      : t("auth.savePassword")}
             </button>
           </form>
+
+          {currentMode === "login" && registrationAvailable && (
+            <button
+              type="button"
+              onClick={() => switchMode("register")}
+              className="mt-7 w-full text-center text-sm font-semibold text-violet-700 hover:underline"
+            >
+              {t("auth.noAccount")} {t("auth.createAccount")}
+            </button>
+          )}
+          {currentMode === "register" && (
+            <button
+              type="button"
+              onClick={() => switchMode("login")}
+              className="mt-7 w-full text-center text-sm font-semibold text-violet-700 hover:underline"
+            >
+              {t("auth.backToSignIn")}
+            </button>
+          )}
 
           {currentMode === "forgot" && (
             <button

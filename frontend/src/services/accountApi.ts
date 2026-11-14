@@ -2,6 +2,25 @@ import { apiRequest } from "../lib/apiClient";
 
 export type Language = "en" | "es";
 
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL?.trim() || "http://127.0.0.1:8000";
+
+export async function getPublicConfig(): Promise<{
+  public_registration: boolean;
+}> {
+  const response = await fetch(`${API_BASE_URL}/public/config`);
+  if (!response.ok) throw new Error("Public configuration is unavailable.");
+  return (await response.json()) as { public_registration: boolean };
+}
+
+export function registerAccount(): Promise<AccountResponse> {
+  return apiRequest<AccountResponse>("/account/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+}
+
 export type AccountPreferences = {
   interface_language: Language;
   conversation_language: Language;

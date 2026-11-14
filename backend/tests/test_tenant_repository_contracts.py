@@ -48,6 +48,43 @@ ACCOUNT_IDENTITY_LOOKUPS = {
     "app.features.accounts.service:update_preferences -> app.features.accounts.repository.save_preferences_for_identity": 1,
 }
 
+# Customer-control-plane persistence is keyed by a verified application user or
+# durable organization ID. Business-scoped operations are reached only after
+# access authorization; workspace activation must create its organization before
+# a TenantAccess context exists.
+CUSTOMER_CONTROL_PLANE_LOOKUPS = {
+    "app.features.entitlements.service:activate_trial -> app.features.entitlements.repository.entitlement_for_organization": 1,
+    "app.features.entitlements.service:activate_trial -> app.features.entitlements.repository.insert_entitlement": 1,
+    "app.features.entitlements.service:activate_trial -> app.features.entitlements.repository.organization_by_id": 1,
+    "app.features.entitlements.service:assert_mutation_allowed -> app.features.entitlements.repository.entitlement_for_business": 1,
+    "app.features.entitlements.service:assert_publishing_allowed -> app.features.entitlements.repository.entitlement_for_business": 1,
+    "app.features.entitlements.service:ensure_customer_organization -> app.features.entitlements.repository.insert_organization": 1,
+    "app.features.entitlements.service:ensure_customer_organization -> app.features.entitlements.repository.organization_for_owner": 1,
+    "app.features.entitlements.service:entitlement_for_business -> app.features.entitlements.repository.entitlement_for_business": 1,
+    "app.features.entitlements.service:finish_usage_batch -> app.features.entitlements.repository.update_usage_reservation": 1,
+    "app.features.entitlements.service:prepare_workspace_activation -> app.features.entitlements.repository.count_businesses": 1,
+    "app.features.entitlements.service:prepare_workspace_activation -> app.features.entitlements.repository.entitlement_for_organization": 1,
+    "app.features.entitlements.service:release_usage_before_provider_call -> app.features.entitlements.repository.release_usage_reservation": 1,
+    "app.features.entitlements.service:require_campaign_capacity -> app.features.entitlements.repository.count_campaigns": 1,
+    "app.features.entitlements.service:require_campaign_capacity -> app.features.entitlements.repository.entitlement_for_organization": 1,
+    "app.features.entitlements.service:require_campaign_capacity -> app.features.entitlements.repository.organization_for_business": 1,
+    "app.features.entitlements.service:reserve_usage -> app.features.entitlements.repository.count_usage": 1,
+    "app.features.entitlements.service:reserve_usage -> app.features.entitlements.repository.entitlement_for_business": 1,
+    "app.features.entitlements.service:reserve_usage -> app.features.entitlements.repository.insert_usage_reservation": 1,
+    "app.features.entitlements.service:reserve_usage -> app.features.entitlements.repository.organization_for_business": 1,
+    "app.features.entitlements.service:reserve_usage -> app.features.entitlements.repository.usage_reservation_by_key": 1,
+    "app.features.entitlements.service:usage_for_business -> app.features.entitlements.repository.count_businesses": 1,
+    "app.features.entitlements.service:usage_for_business -> app.features.entitlements.repository.count_campaigns": 1,
+    "app.features.entitlements.service:usage_for_business -> app.features.entitlements.repository.count_usage": 2,
+    "app.features.entitlements.service:usage_for_business -> app.features.entitlements.repository.entitlement_for_business": 1,
+    "app.features.onboarding.service:_lock_user -> app.features.onboarding.repository.lock_active_user": 1,
+    "app.features.onboarding.service:_progress -> app.features.onboarding.repository.add_progress": 1,
+    "app.features.onboarding.service:_progress -> app.features.onboarding.repository.progress_for_user": 1,
+    "app.features.onboarding.service:activate_workspace -> app.features.accounts.repository.save_preferences_for_identity": 1,
+    "app.features.onboarding.service:activate_workspace -> app.features.onboarding.repository.owned_business": 1,
+    "app.features.onboarding.service:get_progress -> app.features.onboarding.repository.progress_for_user": 1,
+}
+
 
 def legacy_calls():
     calls = Counter()
@@ -83,6 +120,7 @@ def test_legacy_repository_call_inventory_does_not_grow():
         | TRUSTED_MEDIA_LOOKUPS
         | INITIAL_PROVISIONING_LOOKUPS
         | ACCOUNT_IDENTITY_LOOKUPS
+        | CUSTOMER_CONTROL_PLANE_LOOKUPS
     ).items():
         assert actual.pop(call, None) == count
     assert actual == json.loads(MANIFEST.read_text())

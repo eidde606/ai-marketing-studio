@@ -8,6 +8,7 @@ from app.models import Campaign, Draft
 from app.features.access.principal import AuthenticatedPrincipal
 from app.features.access.permissions import Permission
 from app.features.access.service import require_permission
+from app.features.entitlements import service as entitlement_service
 from app.transactions import Transactions, rollback_on_failure
 from . import repository
 from .schemas import (
@@ -121,6 +122,7 @@ def create_campaign(business_id: str, request: CampaignCreate, db: Session, *,
                     principal: AuthenticatedPrincipal) -> CampaignResponse:
     context = require_permission(db, principal, business_id, Permission.MANAGE_CAMPAIGNS)
     validate_dates(request.start_date, request.end_date)
+    entitlement_service.require_campaign_capacity(db, business_id)
     campaign_id = repository.add_campaign_scoped(db, context, Campaign(business_id=business_id, **request.model_dump()))
     require_permission(db, principal, business_id, Permission.MANAGE_CAMPAIGNS)
     Transactions(db).commit()

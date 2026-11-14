@@ -107,7 +107,10 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 // --------------------------------------------------
 
 // Get drafts belonging to the selected business.
-export function getDrafts(businessId: string, includeDeletedPublished = false): Promise<Draft[]> {
+export function getDrafts(
+  businessId: string,
+  includeDeletedPublished = false,
+): Promise<Draft[]> {
   return request<Draft[]>(
     `/drafts?business_id=${encodeURIComponent(businessId)}&include_deleted_published=${includeDeletedPublished}`,
   );
@@ -134,10 +137,17 @@ export function updateDraftDestinations(
 }
 
 // Generate AI marketing content.
-export function generateContent(businessId: string): Promise<Draft> {
+export function generateContent(
+  businessId: string,
+  idempotencyKey: string = crypto.randomUUID(),
+): Promise<Draft> {
   return request<Draft>(
     `/businesses/${encodeURIComponent(businessId)}/generate-content`,
-    { method: "POST" },
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ idempotency_key: idempotencyKey }),
+    },
   );
 }
 
@@ -403,5 +413,7 @@ export function verifyFacebookVideo(
 
 // Hide a draft while retaining its publication history.
 export function deleteDraft(id: string): Promise<Draft> {
-  return request<Draft>(`/drafts/${encodeURIComponent(id)}`, { method: "DELETE" });
+  return request<Draft>(`/drafts/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
 }

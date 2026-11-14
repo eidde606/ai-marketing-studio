@@ -5,6 +5,7 @@ from app.errors import ApplicationError, ErrorKind
 from app.features.access.permissions import Permission, allows
 from app.features.access.principal import Principal, AuthenticatedPrincipal
 from app.features.access.service import resolve_principal, require_permission
+from app.features.entitlements import service as entitlement_service
 from app.transactions import Transactions, rollback_on_failure
 from . import repository
 from .schemas import AccountPreferencesUpdate
@@ -25,15 +26,14 @@ def register(db: Session, identity: Principal):
     if user is None:
         try:
             user = repository.insert_identity(db, identity)
-            Transactions(db).commit()
         except IntegrityError:
             Transactions(db).rollback()
             # Concurrent requests converge through the unique issuer/subject key.
             user = _active_user(db, identity)
     elif user.status != "active":
         raise ApplicationError(ErrorKind.FORBIDDEN, "Application access denied")
-    else:
-        Transactions(db).rollback()
+    entitlement_service.ensure_customer_organization(db, user.id)
+    Transactions(db).commit()
     return account(db, resolve_principal(db, identity))
 
 
@@ -56,7 +56,7 @@ def account(db: Session, principal: AuthenticatedPrincipal):
                         "role": row.role,
                         "capabilities": [p.value for p in Permission if allows(row.role, p)]}
                        for row in memberships],
-        "features": {"public_registration": False, "facebook_publishing": True,
+        "features": {"public_registration": entitlement_service.public_registration_enabled(), "facebook_publishing": True,
                      "tiktok_direct_publishing": False, "tiktok_manual_export": True,
                      "instagram_publishing": False, "instagram_connection": True,
                      "mia_analysis": False, "scheduling": False},

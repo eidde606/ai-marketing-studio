@@ -1,5 +1,4 @@
-
-import { supabase } from './supabaseClient';
+import { supabase } from "./supabaseClient";
 
 export type Business = {
   id: string;
@@ -7,6 +6,13 @@ export type Business = {
   description: string | null;
   target_audience: string | null;
   brand_voice: string | null;
+  industry: string | null;
+  products_services: string | null;
+  service_area: string | null;
+  website_url: string | null;
+  marketing_goals: string | null;
+  preferred_platforms: string | null;
+  posting_frequency: string | null;
   created_at: string;
 };
 
@@ -24,8 +30,10 @@ export type BusinessCreate = {
   posting_frequency?: string | null;
 };
 
+export type BusinessUpdate = Partial<BusinessCreate>;
+
 const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL?.trim() || 'http://127.0.0.1:8000';
+  import.meta.env.VITE_API_BASE_URL?.trim() || "http://127.0.0.1:8000";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   // Retrieve the current Supabase session.
@@ -35,19 +43,21 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   } = await supabase.auth.getSession();
 
   if (error || !session?.access_token) {
-    throw new Error('Authentication required. Please sign in.');
+    throw new Error("Authentication required. Please sign in.");
   }
 
   // Include the access token in every API request.
   const headers = new Headers(options?.headers);
 
   const tokenHeader = JSON.parse(
-  atob(session.access_token.split('.')[0].replace(/-/g, '+').replace(/_/g, '/'))
-);
+    atob(
+      session.access_token.split(".")[0].replace(/-/g, "+").replace(/_/g, "/"),
+    ),
+  );
 
-console.log('JWT signing algorithm:', tokenHeader.alg);
+  console.log("JWT signing algorithm:", tokenHeader.alg);
 
-  headers.set('Authorization', `Bearer ${session.access_token}`);
+  headers.set("Authorization", `Bearer ${session.access_token}`);
 
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
@@ -58,7 +68,7 @@ console.log('JWT signing algorithm:', tokenHeader.alg);
     const details = await response.text();
 
     throw new Error(
-      `Request failed with status ${response.status}: ${details || 'Unknown error'}`,
+      `Request failed with status ${response.status}: ${details || "Unknown error"}`,
     );
   }
 
@@ -66,15 +76,26 @@ console.log('JWT signing algorithm:', tokenHeader.alg);
 }
 
 export function getBusinesses(): Promise<Business[]> {
-  return request<Business[]>('/businesses');
+  return request<Business[]>("/businesses");
 }
 
 export function createBusiness(data: BusinessCreate): Promise<Business> {
-  return request<Business>('/businesses', {
-    method: 'POST',
+  return request<Business>("/businesses", {
+    method: "POST",
     headers: {
-      'Content-Type': 'application/json',
+      "Content-Type": "application/json",
     },
+    body: JSON.stringify(data),
+  });
+}
+
+export function updateBusiness(
+  businessId: string,
+  data: BusinessUpdate,
+): Promise<Business> {
+  return request<Business>(`/businesses/${encodeURIComponent(businessId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });
 }

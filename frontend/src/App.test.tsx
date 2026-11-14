@@ -25,6 +25,11 @@ const mocks = vi.hoisted(() => ({
   getBusinessPreferences: vi.fn(),
   updateBusinessPreferences: vi.fn(),
   getHeyGenUsage: vi.fn(),
+  getBusinessEntitlement: vi.fn(),
+  getOnboarding: vi.fn(),
+  saveOnboarding: vi.fn(),
+  activateOnboarding: vi.fn(),
+  updateTutorialCompletion: vi.fn(),
   getBusinesses: vi.fn(),
   getDrafts: vi.fn(),
   getConnectedFacebookAccounts: vi.fn(),
@@ -79,6 +84,14 @@ vi.mock("./services/draftsApi", async (original) => ({
 }));
 vi.mock("./services/facebookApi", () => ({
   getConnectedFacebookAccounts: mocks.getConnectedFacebookAccounts,
+}));
+vi.mock("./services/onboardingApi", async (original) => ({
+  ...(await original<object>()),
+  getBusinessEntitlement: mocks.getBusinessEntitlement,
+  getOnboarding: mocks.getOnboarding,
+  saveOnboarding: mocks.saveOnboarding,
+  activateOnboarding: mocks.activateOnboarding,
+  updateTutorialCompletion: mocks.updateTutorialCompletion,
 }));
 vi.mock("./components/AuthPage", () => ({
   default: ({
@@ -231,6 +244,13 @@ function business(id: string): Business {
     description: null,
     target_audience: null,
     brand_voice: null,
+    industry: null,
+    products_services: null,
+    service_area: null,
+    website_url: null,
+    marketing_goals: null,
+    preferred_platforms: null,
+    posting_frequency: null,
     created_at: "2026-01-01",
   };
 }
@@ -312,6 +332,26 @@ beforeEach(() => {
     remaining_generations: 0,
     period: "lifetime",
     unit: "generation_attempts",
+  });
+  mocks.getBusinessEntitlement.mockResolvedValue({
+    status: "operator_granted",
+    provider_status: null,
+    trial_started_at: null,
+    trial_expires_at: null,
+    days_remaining: null,
+    usage: null,
+    features: {},
+    subscription_management: "unavailable",
+  });
+  mocks.getOnboarding.mockResolvedValue({
+    current_step: 1,
+    business_profile: {},
+    interface_language: "en",
+    conversation_language: "en",
+    marketing_content_language: "en",
+    social_accounts_skipped: false,
+    completed: false,
+    tutorial_completed: false,
   });
   mocks.getBusinesses.mockResolvedValue([business("a"), business("b")]);
   mocks.getDrafts.mockResolvedValue([]);
@@ -487,24 +527,18 @@ it("works without browser storage", async () => {
 it("handles empty businesses", async () => {
   mocks.getBusinesses.mockResolvedValue([]);
   render(<App />);
-  await screen.findByText("Sin negocios");
-  expect(
-    (
-      screen.getByLabelText(
-        /(Seleccionar negocio|Select business)/,
-      ) as HTMLSelectElement
-    )
-      .disabled,
-  ).toBe(true);
+  await screen.findByRole("heading", {
+    name: "Te damos la bienvenida a tu espacio",
+  });
+  expect(screen.getByLabelText("Idioma de la interfaz")).toBeTruthy();
   expect(mocks.getDrafts).not.toHaveBeenCalled();
 });
 it("shows business failures without retries", async () => {
   mocks.getBusinesses.mockRejectedValue(new Error("offline"));
   render(<App />);
-  expect(await screen.findByRole("alert")).toHaveProperty(
-    "textContent",
-    "No se pudieron cargar los negocios.",
-  );
+  expect(
+    await screen.findByText("No se pudieron cargar los negocios."),
+  ).toBeTruthy();
   expect(mocks.getBusinesses).toHaveBeenCalledTimes(1);
 });
 it.each([false, true])(
@@ -531,7 +565,9 @@ it("ignores businesses arriving after logout", async () => {
   const old = deferred<Business[]>();
   mocks.getBusinesses.mockReturnValue(old.promise);
   render(<App />);
-  await screen.findByRole("heading", { name: "Iniciando tu espacio de trabajo…" });
+  await screen.findByRole("heading", {
+    name: "Iniciando tu espacio de trabajo…",
+  });
   act(() => authChange("SIGNED_OUT", null));
   await act(async () => old.resolve([business("a")]));
   expect(mocks.getDrafts).not.toHaveBeenCalled();
@@ -706,7 +742,9 @@ it("does not present unavailable Mía analytics as operational", async () => {
   select("b");
   fireEvent.click(screen.getByRole("button", { name: "Equipo IA" }));
   expect(
-    screen.queryByText("Conecta una página de Facebook para consultar estadísticas"),
+    screen.queryByText(
+      "Conecta una página de Facebook para consultar estadísticas",
+    ),
   ).toBeNull();
   await act(async () => old.resolve([{ id: "old-account" }]));
   expect(
@@ -1132,14 +1170,22 @@ it("retains Facebook video verification interval and cleans it up at logout", as
 });
 
 it.each<{ destinations: ("facebook" | "tiktok")[] }>([
-  { destinations: [] }, { destinations: ["tiktok"] },
+  { destinations: [] },
+  { destinations: ["tiktok"] },
 ])(
   "approves manual-use content without enabling direct publication ($destinations)",
   async ({ destinations }) => {
     const manual = { ...editableDraft, publish_destinations: destinations };
     mocks.getDrafts.mockResolvedValue([manual]);
-    mocks.updateDraftDestinations.mockResolvedValue({ ...manual, publish_destinations: [] });
-    mocks.approveDraft.mockResolvedValue({ ...manual, status: "approved", publish_destinations: [] });
+    mocks.updateDraftDestinations.mockResolvedValue({
+      ...manual,
+      publish_destinations: [],
+    });
+    mocks.approveDraft.mockResolvedValue({
+      ...manual,
+      status: "approved",
+      publish_destinations: [],
+    });
     await openApp();
     fireEvent.click(screen.getByRole("button", { name: /^Aprobaciones/ }));
     fireEvent.click(await screen.findByText("Aprobar a"));

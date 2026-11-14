@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.features.campaigns.routes import router as campaign_router
 from app.features.accounts.routes import router as account_router
+from app.features.onboarding.routes import router as onboarding_router
 from app.features.memberships.routes import router as membership_router
 from app.features.analytics.routes import router as analytics_router
 from app.features.businesses.routes import router as business_router
@@ -56,6 +57,7 @@ def health():
 
 app.include_router(draft_router)
 app.include_router(account_router)
+app.include_router(onboarding_router)
 app.include_router(membership_router)
 app.include_router(business_router)
 app.include_router(campaign_router)
