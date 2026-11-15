@@ -1,4 +1,6 @@
 """Persistence queries for customer entitlements and usage reservations."""
+from datetime import datetime
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -8,6 +10,7 @@ from app.models import (
     Campaign,
     CustomerEntitlement,
     CustomerOrganization,
+    StripeWebhookEvent,
 )
 
 
@@ -61,6 +64,29 @@ def entitlement_for_business(db: Session, business_id: str, *, lock: bool = Fals
     return db.scalar(statement.execution_options(populate_existing=True))
 
 
+def entitlement_by_stripe_customer(db: Session, customer_id: str, *, lock: bool = False):
+    statement = select(CustomerEntitlement).where(
+        CustomerEntitlement.stripe_customer_id == customer_id,
+    )
+    if lock:
+        statement = statement.with_for_update()
+    return db.scalar(statement.execution_options(populate_existing=True))
+
+
+def entitlement_by_stripe_subscription(db: Session, subscription_id: str, *, lock: bool = False):
+    statement = select(CustomerEntitlement).where(
+        CustomerEntitlement.stripe_subscription_id == subscription_id,
+    )
+    if lock:
+        statement = statement.with_for_update()
+    return db.scalar(statement.execution_options(populate_existing=True))
+
+
+def record_stripe_event(db: Session, event_id: str, event_type: str) -> None:
+    db.add(StripeWebhookEvent(event_id=event_id, event_type=event_type))
+    db.flush()
+
+
 def organization_for_business(db: Session, business_id: str, *, lock: bool = False):
     statement = select(CustomerOrganization).join(
         Business, Business.customer_organization_id == CustomerOrganization.id,
@@ -76,12 +102,18 @@ def count_businesses(db: Session, organization_id: str) -> int:
     )) or 0
 
 
-def count_campaigns(db: Session, organization_id: str) -> int:
-    return db.scalar(
-        select(func.count()).select_from(Campaign).join(
-            Business, Business.id == Campaign.business_id,
-        ).where(Business.customer_organization_id == organization_id)
-    ) or 0
+def count_campaigns(
+    db: Session,
+    organization_id: str,
+    *,
+    since: datetime | None = None,
+) -> int:
+    statement = select(func.count()).select_from(Campaign).join(
+        Business, Business.id == Campaign.business_id,
+    ).where(Business.customer_organization_id == organization_id)
+    if since is not None:
+        statement = statement.where(Campaign.created_at >= since)
+    return db.scalar(statement) or 0
 
 
 def usage_reservation_by_key(
@@ -94,12 +126,21 @@ def usage_reservation_by_key(
     ).execution_options(populate_existing=True))
 
 
-def count_usage(db: Session, organization_id: str, metric: str) -> int:
-    return db.scalar(select(func.count()).select_from(AIUsageReservation).where(
+def count_usage(
+    db: Session,
+    organization_id: str,
+    metric: str,
+    *,
+    since: datetime | None = None,
+) -> int:
+    statement = select(func.count()).select_from(AIUsageReservation).where(
         AIUsageReservation.organization_id == organization_id,
         AIUsageReservation.metric == metric,
         AIUsageReservation.status != "failed",
-    )) or 0
+    )
+    if since is not None:
+        statement = statement.where(AIUsageReservation.created_at >= since)
+    return db.scalar(statement) or 0
 
 
 def insert_usage_reservation(

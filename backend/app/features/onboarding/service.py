@@ -68,7 +68,8 @@ def save_progress(db: Session, principal: AuthenticatedPrincipal, request: Onboa
     user = _lock_user(db, principal)
     progress = _progress(db, user.id, create=True)
     progress.current_step = request.current_step
-    progress.data = request.model_dump(exclude_none=True)
+    # Wizard saves must not erase independently persisted tutorial progress.
+    progress.data = {**(progress.data or {}), **request.model_dump(exclude_none=True)}
     Transactions(db).commit()
     return get_progress(db, principal)
 

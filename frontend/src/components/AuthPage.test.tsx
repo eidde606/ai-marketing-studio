@@ -256,3 +256,88 @@ describe("AuthPage registration gate", () => {
     expect(window.location.search).toBe("");
   });
 });
+
+it.each(["duplicate account", "network failure"])(
+  "allows retry after %s without exposing provider details",
+  async (reason) => {
+    vi.mocked(getPublicConfig).mockResolvedValue({
+      public_registration: true,
+      ...unavailableProviders,
+      trial_available: true,
+    });
+    auth.signUp
+      .mockResolvedValueOnce({ data: {}, error: new Error(reason) })
+      .mockResolvedValueOnce({ data: { session: null }, error: null });
+    render(<AuthPage />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "auth.createAccount" }),
+    );
+    fireEvent.change(screen.getByLabelText("auth.email"), {
+      target: { value: "customer@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("auth.password"), {
+      target: { value: "a secure customer password" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "auth.createAccount" }));
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "auth.registrationError",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "auth.createAccount" }));
+    expect(await screen.findByRole("status")).toBeTruthy();
+    expect(auth.signUp).toHaveBeenCalledTimes(2);
+  },
+);
+
+it("uses a generic verification message for an obfuscated duplicate signup", async () => {
+  vi.mocked(getPublicConfig).mockResolvedValue({
+    public_registration: true,
+    ...unavailableProviders,
+    trial_available: true,
+  });
+  auth.signUp.mockResolvedValue({
+    data: { session: null, user: { identities: [] } },
+    error: null,
+  });
+  render(<AuthPage />);
+  fireEvent.click(
+    await screen.findByRole("button", { name: "auth.createAccount" }),
+  );
+  fireEvent.change(screen.getByLabelText("auth.email"), {
+    target: { value: "customer@example.com" },
+  });
+  fireEvent.change(screen.getByLabelText("auth.password"), {
+    target: { value: "a secure customer password" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "auth.createAccount" }));
+  expect(await screen.findByText("auth.verifyEmail")).toBeTruthy();
+  expect(screen.queryByText("auth.accountCreated")).toBeNull();
+});
+
+it("submits email/password login and recovers from invalid credentials", async () => {
+  vi.mocked(getPublicConfig).mockResolvedValue({
+    public_registration: false,
+    ...unavailableProviders,
+    trial_available: false,
+  });
+  auth.signInWithPassword
+    .mockResolvedValueOnce({ error: new Error("invalid credentials") })
+    .mockResolvedValueOnce({ error: null });
+  render(<AuthPage />);
+  await screen.findByText("auth.registrationUnavailable");
+  fireEvent.change(screen.getByLabelText("auth.email"), {
+    target: { value: "customer@example.com" },
+  });
+  fireEvent.change(screen.getByLabelText("auth.password"), {
+    target: { value: "existing-password" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "auth.signIn" }));
+  expect((await screen.findByRole("alert")).textContent).toBe(
+    "auth.signInError",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "auth.signIn" }));
+  await waitFor(() => expect(auth.signInWithPassword).toHaveBeenCalledTimes(2));
+  expect(auth.signInWithPassword).toHaveBeenLastCalledWith({
+    email: "customer@example.com",
+    password: "existing-password",
+  });
+});

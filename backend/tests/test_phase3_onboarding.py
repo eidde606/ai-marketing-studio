@@ -130,3 +130,17 @@ def test_onboarding_activation_requires_a_business_name(isolated_client):
     assert response.status_code == 400
     with Session(engine) as db:
         assert db.scalar(select(func.count()).select_from(Business)) == 0
+
+
+def test_wizard_save_preserves_tutorial_and_omitted_profile(isolated_client):
+    client, _ = isolated_client
+    assert client.put("/account/onboarding", json={
+        "current_step": 2, "business_profile": {"name": "Saved business"},
+        "interface_language": "es",
+    }).status_code == 200
+    client.patch("/account/onboarding/tutorial", json={"completed": False, "current_step": 7})
+    response = client.put("/account/onboarding", json={"current_step": 3})
+    assert response.status_code == 200
+    assert response.json()["tutorial_step"] == 7
+    assert response.json()["business_profile"] == {"name": "Saved business"}
+    assert response.json()["interface_language"] == "es"

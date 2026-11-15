@@ -564,7 +564,10 @@ it("keeps all navigation destinations keyboard-focusable and closes mobile navig
   const mobileNavigation = within(dialog).getByRole("navigation", {
     name: "Navegación principal",
   });
-  expect(within(mobileNavigation).getAllByRole("button")).toHaveLength(7);
+  expect(within(mobileNavigation).getAllByRole("button")).toHaveLength(8);
+  expect(
+    within(mobileNavigation).getByRole("button", { name: "Facturación" }),
+  ).toBeTruthy();
   fireEvent.keyDown(dialog, { key: "Escape" });
   expect(screen.queryByRole("dialog")).toBeNull();
 

@@ -85,6 +85,20 @@ CUSTOMER_CONTROL_PLANE_LOOKUPS = {
     "app.features.onboarding.service:get_progress -> app.features.onboarding.repository.progress_for_user": 1,
 }
 
+# Billing webhooks map verified Stripe identifiers to durable organization
+# entitlements; customer-facing queries run only after business authorization.
+BILLING_CONTROL_PLANE_LOOKUPS = {
+    "app.features.billing.service:_resolve_entitlement -> app.features.entitlements.repository.entitlement_by_stripe_customer": 1,
+    "app.features.billing.service:_resolve_entitlement -> app.features.entitlements.repository.entitlement_by_stripe_subscription": 1,
+    "app.features.billing.service:_resolve_entitlement -> app.features.entitlements.repository.entitlement_for_organization": 1,
+    "app.features.billing.service:_resolve_entitlement -> app.features.entitlements.repository.organization_for_business": 1,
+    "app.features.billing.service:create_checkout -> app.features.entitlements.repository.entitlement_for_business": 1,
+    "app.features.billing.service:create_checkout -> app.features.entitlements.repository.organization_for_business": 1,
+    "app.features.billing.service:create_portal -> app.features.entitlements.repository.entitlement_for_business": 1,
+    "app.features.billing.service:overview -> app.features.entitlements.repository.entitlement_for_business": 1,
+    "app.features.billing.service:process_webhook -> app.features.entitlements.repository.record_stripe_event": 1,
+}
+
 
 def legacy_calls():
     calls = Counter()
@@ -121,6 +135,7 @@ def test_legacy_repository_call_inventory_does_not_grow():
         | INITIAL_PROVISIONING_LOOKUPS
         | ACCOUNT_IDENTITY_LOOKUPS
         | CUSTOMER_CONTROL_PLANE_LOOKUPS
+        | BILLING_CONTROL_PLANE_LOOKUPS
     ).items():
         assert actual.pop(call, None) == count
     assert actual == json.loads(MANIFEST.read_text())

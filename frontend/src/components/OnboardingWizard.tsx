@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useLocalization } from "../app/localization";
 import {
   activateOnboarding,
@@ -61,6 +61,11 @@ export default function OnboardingWizard({ onCreated }: Props) {
   const [loadFailed, setLoadFailed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+
+  useEffect(() => {
+    if (!loading && !loadFailed) headingRef.current?.focus();
+  }, [step, loading, loadFailed]);
 
   useEffect(() => {
     let active = true;
@@ -190,7 +195,9 @@ export default function OnboardingWizard({ onCreated }: Props) {
         <p className="eyebrow">
           {t("onboarding.stepCount", { step, total: 6 })}
         </p>
-        <h1 id="onboarding-title">{t(stepMessages[step - 1][0])}</h1>
+        <h1 id="onboarding-title" ref={headingRef} tabIndex={-1}>
+          {t(stepMessages[step - 1][0])}
+        </h1>
         <p>{t(stepMessages[step - 1][1])}</p>
 
         {step === 1 && (

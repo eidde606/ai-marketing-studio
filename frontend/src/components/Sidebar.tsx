@@ -2,6 +2,7 @@
 import {
   BarChart3,
   Check,
+  CreditCard,
   FileText,
   Home,
   Menu,
@@ -29,6 +30,7 @@ export type Section =
   | 'Equipo IA'
   | 'Aprobaciones'
   | 'Analíticas'
+  | 'Facturación'
   | 'Configuración';
 
 type SidebarProps = {
@@ -52,6 +54,7 @@ const sections: Array<{
   { label: 'Equipo IA', icon: Network },
   { label: 'Aprobaciones', icon: Check },
   { label: 'Analíticas', icon: BarChart3 },
+  { label: 'Facturación', icon: CreditCard },
   { label: 'Configuración', icon: Settings },
 ];
 
@@ -77,6 +80,7 @@ const sectionMessage: Record<Section, Parameters<Translate>[0]> = {
   "Equipo IA": "nav.aiTeam",
   Aprobaciones: "nav.approvals",
   Analíticas: "nav.analytics",
+  Facturación: "nav.billing",
   Configuración: "nav.settings",
 };
 

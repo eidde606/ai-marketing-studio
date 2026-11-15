@@ -25,6 +25,7 @@ class Permission(str, Enum):
     MANAGE_MEMBERS = "manage_members"
     MANAGE_ADMINS = "manage_admins"
     MANAGE_OWNERS = "manage_owners"
+    MANAGE_BILLING = "manage_billing"
     ARCHIVE_BUSINESS = "archive_business"
 
 
@@ -36,6 +37,7 @@ _MEMBER = frozenset({
 _ADMIN = _MEMBER | frozenset({
     Permission.APPROVE_CONTENT, Permission.PUBLISH, Permission.MANAGE_CONNECTIONS,
     Permission.MANAGE_HEYGEN_ASSETS, Permission.EDIT_BUSINESS, Permission.MANAGE_MEMBERS,
+    Permission.MANAGE_BILLING,
 })
 _OWNER = _ADMIN | frozenset({
     Permission.MANAGE_ADMINS, Permission.MANAGE_OWNERS, Permission.ARCHIVE_BUSINESS,

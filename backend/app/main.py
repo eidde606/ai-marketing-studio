@@ -6,6 +6,7 @@ from app.features.accounts.routes import router as account_router
 from app.features.onboarding.routes import router as onboarding_router
 from app.features.memberships.routes import router as membership_router
 from app.features.analytics.routes import router as analytics_router
+from app.features.billing.routes import router as billing_router
 from app.features.businesses.routes import router as business_router
 from app.features.content.routes import router as content_router
 from app.features.drafts.routes import router as draft_router
@@ -68,6 +69,7 @@ app.include_router(facebook_page_router)
 app.include_router(facebook_publishing_router)
 app.include_router(instagram_auth_router)
 app.include_router(analytics_router)
+app.include_router(billing_router)
 
 app.include_router(tiktok_auth_router)
 app.include_router(tiktok_publishing_router)

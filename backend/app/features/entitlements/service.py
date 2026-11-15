@@ -20,6 +20,13 @@ _TRIAL_LIMIT_DEFAULTS = {
     "campaigns": 2,
     "heygen_generations": 0,
 }
+_MONTHLY_LIMIT_DEFAULTS = {
+    "businesses": 1,
+    "leo_generations": 200,
+    "sofia_requests": 100,
+    "campaigns": 20,
+    "heygen_generations": 0,
+}
 _USAGE_LIMITS = {
     "leo_generation": "leo_generations",
     "sofia_request": "sofia_requests",
@@ -56,19 +63,33 @@ def is_operator(principal: AuthenticatedPrincipal) -> bool:
 
 
 def trial_limits() -> dict[str, int]:
-    raw = os.getenv("TRIAL_LIMITS_JSON")
+    return _configured_limits("TRIAL_LIMITS_JSON", _TRIAL_LIMIT_DEFAULTS, "Trial")
+
+
+def monthly_subscription_limits() -> dict[str, int]:
+    return _configured_limits(
+        "STRIPE_MONTHLY_LIMITS_JSON", _MONTHLY_LIMIT_DEFAULTS, "Subscription",
+    )
+
+
+def _configured_limits(
+    environment_key: str,
+    defaults: dict[str, int],
+    label: str,
+) -> dict[str, int]:
+    raw = os.getenv(environment_key)
     if raw is None:
-        return _TRIAL_LIMIT_DEFAULTS.copy()
+        return defaults.copy()
     try:
         parsed = json.loads(raw)
-        if not isinstance(parsed, dict) or set(parsed) != set(_TRIAL_LIMIT_DEFAULTS):
+        if not isinstance(parsed, dict) or set(parsed) != set(defaults):
             raise ValueError
         if any(type(value) is not int or value < 0 for value in parsed.values()):
             raise ValueError
         return parsed
     except (ValueError, TypeError):
         raise ApplicationError(
-            ErrorKind.UNAVAILABLE, "Trial limit configuration is invalid",
+            ErrorKind.UNAVAILABLE, f"{label} limit configuration is invalid",
         ) from None
 
 
@@ -131,14 +152,18 @@ def require_campaign_capacity(db: Session, business_id: str) -> None:
     if organization is None:
         return
     entitlement = repository.entitlement_for_organization(db, organization.id, lock=True)
-    if entitlement is None or entitlement.status != "trialing":
+    if entitlement is None:
         return
-    if effective_status(entitlement) != "trialing":
+    status = effective_status(entitlement)
+    if status not in {"trialing", "active"}:
         raise ApplicationError(ErrorKind.LIMIT_EXCEEDED, "Your trial has ended")
     limit = (entitlement.limits or {}).get("campaigns", 0)
     if type(limit) is not int or limit < 0:
-        raise ApplicationError(ErrorKind.UNAVAILABLE, "Trial campaign limit configuration is invalid")
-    if repository.count_campaigns(db, organization.id) >= limit:
+        raise ApplicationError(ErrorKind.UNAVAILABLE, "Campaign limit configuration is invalid")
+    period_start = entitlement.current_period_start if status == "active" else None
+    if repository.count_campaigns(
+        db, organization.id, since=period_start,
+    ) >= limit:
         raise ApplicationError(ErrorKind.LIMIT_EXCEEDED, "This trial campaign allowance is exhausted")
 
 
@@ -155,6 +180,18 @@ def effective_status(entitlement: CustomerEntitlement, *, now: datetime | None =
         if expiry.tzinfo is None:
             expiry = expiry.replace(tzinfo=timezone.utc)
         return "trialing" if now < expiry else "expired"
+    if entitlement.status == "active" and entitlement.current_period_end is not None:
+        period_end = entitlement.current_period_end
+        if period_end.tzinfo is None:
+            period_end = period_end.replace(tzinfo=timezone.utc)
+        if now >= period_end:
+            return "expired"
+    if entitlement.status == "canceled" and entitlement.current_period_end is not None:
+        period_end = entitlement.current_period_end
+        if period_end.tzinfo is None:
+            period_end = period_end.replace(tzinfo=timezone.utc)
+        if now < period_end:
+            return "active"
     return entitlement.status
 
 
@@ -165,7 +202,10 @@ def assert_mutation_allowed(db: Session, business_id: str, permission: Permissio
     status = effective_status(entitlement)
     if status in {"trialing", "active", "operator_granted"}:
         return
-    if permission in {Permission.READ, Permission.EDIT_BUSINESS, Permission.PUBLISH}:
+    if permission in {
+        Permission.READ, Permission.EDIT_BUSINESS, Permission.PUBLISH,
+        Permission.MANAGE_BILLING,
+    }:
         return
     raise ApplicationError(
         ErrorKind.LIMIT_EXCEEDED,
@@ -196,13 +236,13 @@ def reserve_usage(
     if metric not in _USAGE_LIMITS:
         raise ValueError("Unsupported AI usage metric")
     entitlement = repository.entitlement_for_business(db, business_id)
-    if entitlement is None or entitlement.status != "trialing":
+    if entitlement is None:
         return None, False
     status = effective_status(entitlement)
-    if status != "trialing":
+    if status not in {"trialing", "active"}:
         raise ApplicationError(
             ErrorKind.LIMIT_EXCEEDED,
-            "Your trial has ended. Review account options to continue.",
+            "Your subscription does not allow AI usage. Review billing options to continue.",
         )
     organization = repository.organization_for_business(db, business_id, lock=True)
     if organization is None:
@@ -221,7 +261,8 @@ def reserve_usage(
     limit = limits.get(_USAGE_LIMITS[metric], 0)
     if type(limit) is not int or limit < 0:
         raise ApplicationError(ErrorKind.UNAVAILABLE, "Trial usage configuration is invalid")
-    if repository.count_usage(db, organization.id, metric) >= limit:
+    period_start = entitlement.current_period_start if status == "active" else None
+    if repository.count_usage(db, organization.id, metric, since=period_start) >= limit:
         raise ApplicationError(ErrorKind.LIMIT_EXCEEDED, "This trial usage allowance is exhausted")
     return repository.insert_usage_reservation(
         db,
@@ -268,9 +309,17 @@ def usage_for_business(db: Session, business_id: str):
         return None
     limits = entitlement.limits or {}
     organization_id = entitlement.organization_id
-    campaign_count = repository.count_campaigns(db, organization_id)
-    leo_used = repository.count_usage(db, organization_id, "leo_generation")
-    sofia_used = repository.count_usage(db, organization_id, "sofia_request")
+    effective = effective_status(entitlement)
+    period_start = entitlement.current_period_start if effective == "active" else None
+    campaign_count = repository.count_campaigns(
+        db, organization_id, since=period_start,
+    )
+    leo_used = repository.count_usage(
+        db, organization_id, "leo_generation", since=period_start,
+    )
+    sofia_used = repository.count_usage(
+        db, organization_id, "sofia_request", since=period_start,
+    )
     now = datetime.now(timezone.utc)
     expires_at = entitlement.trial_expires_at
     if expires_at is not None and expires_at.tzinfo is None:
@@ -293,12 +342,12 @@ def usage_for_business(db: Session, business_id: str):
             "heygen_generations": {"used": 0, "limit": limits.get("heygen_generations", 0)},
         },
         "features": {
-            "leo_generation": effective_status(entitlement) == "trialing" and leo_used < limits.get("leo_generations", 0),
-            "sofia_requests": effective_status(entitlement) == "trialing" and sofia_used < limits.get("sofia_requests", 0),
+            "leo_generation": effective in {"trialing", "active"} and leo_used < limits.get("leo_generations", 0),
+            "sofia_requests": effective in {"trialing", "active"} and sofia_used < limits.get("sofia_requests", 0),
             "heygen_generation": False,
             "facebook_publishing": effective_status(entitlement) == "trialing",
             "campaign_creation": (
-                effective_status(entitlement) == "trialing"
+                effective in {"trialing", "active"}
                 and campaign_count < limits.get("campaigns", 0)
             ),
         },

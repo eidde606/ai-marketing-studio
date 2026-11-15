@@ -72,6 +72,30 @@ local callback URL in the Supabase dashboard. The application uses Supabase
 Auth for provider redirects and session handling; it does not store passwords
 or link accounts based on matching email addresses.
 
+## Stripe test-mode billing
+
+Billing is disabled unless `STRIPE_SECRET_KEY` is a test-mode `sk_test_` key,
+`STRIPE_MONTHLY_PRICE_ID` references an active monthly Stripe Price
+(`interval=month`, `interval_count=1`), and the webhook endpoint has its
+`STRIPE_WEBHOOK_SECRET`. Set `FRONTEND_BASE_URL` to the local UI origin. Optional
+`STRIPE_MONTHLY_PLAN_NAME` and `STRIPE_MONTHLY_PRICE_DISPLAY` control the plan
+label shown in the Billing page; the server's Price lookup remains authoritative
+for Checkout. `STRIPE_MONTHLY_LIMITS_JSON` can override the exact limit keys
+`businesses`, `leo_generations`, `sofia_requests`, `campaigns`, and
+`heygen_generations`.
+
+Configure a Stripe **test-mode** webhook at `/webhooks/stripe` for
+`checkout.session.completed`, `customer.subscription.created`,
+`customer.subscription.updated`, `customer.subscription.deleted`, and
+`invoice.payment_failed`. The endpoint accepts only signed test-mode events and
+records event IDs transactionally with entitlement changes. The Billing page
+never receives the Stripe secret key; Checkout and the Customer Portal return
+only validated Stripe-hosted URLs. No live payments are enabled.
+
+Migration `f4bca7d20e19` adds tenant-bound Stripe IDs, billing-period fields, and
+the webhook idempotency ledger. Test it on a disposable local database before
+applying it to any persistent environment.
+
 ## Campaign management
 
 Campaign endpoints require a verified Supabase identity with an active

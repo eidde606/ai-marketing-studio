@@ -2,6 +2,7 @@ import type { Session } from "@supabase/supabase-js";
 import { useEffect, useRef, useState, type FC } from "react";
 import AnalyticsPage from "./components/AnalyticsPage";
 import ApprovalPage from "./components/ApprovalPage";
+import BillingPage from "./components/BillingPage";
 import AuthPage from "./components/AuthPage";
 import BusinessForm from "./components/BusinessForm";
 import ContentPage from "./components/ContentPage";
@@ -245,6 +246,7 @@ function AuthenticatedApp({
         "Equipo IA",
         "Aprobaciones",
         "Analíticas",
+        "Facturación",
         "Configuración",
       ];
       return validSections.find((section) => section === saved) ?? "Resumen";
@@ -754,6 +756,12 @@ function AuthenticatedApp({
           tiktokConnection={
             <TikTokConnection businessId={selectedBusinessId} />
           }
+        />
+      ) : activeSection === "Facturación" ? (
+        <BillingPage
+          key={selectedBusinessId}
+          businessId={selectedBusinessId}
+          membershipRole={selectedBusinessAccess?.role ?? null}
         />
       ) : (
         <section className="panel placeholder-panel">

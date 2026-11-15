@@ -2,6 +2,7 @@ from datetime import date, datetime, timezone
 from uuid import uuid4
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
@@ -76,6 +77,8 @@ class CustomerEntitlement(Base):
     __tablename__ = "customer_entitlements"
     __table_args__ = (
         UniqueConstraint("organization_id", name="uq_customer_entitlements_organization"),
+        UniqueConstraint("stripe_customer_id", name="uq_customer_entitlements_stripe_customer"),
+        UniqueConstraint("stripe_subscription_id", name="uq_customer_entitlements_stripe_subscription"),
         CheckConstraint(
             "status IN ('trialing', 'active', 'past_due', 'canceled', 'expired', 'operator_granted')",
             name="ck_customer_entitlements_status",
@@ -94,6 +97,17 @@ class CustomerEntitlement(Base):
     trial_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     trial_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     payment_provider_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    stripe_customer_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    stripe_subscription_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    stripe_price_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    stripe_event_created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    current_period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    current_period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancel_at_period_end: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false"),
+    )
     limits: Mapped[dict[str, int]] = mapped_column(
         JSON, nullable=False, default=dict, server_default=text("'{}'"),
     )
@@ -104,6 +118,19 @@ class CustomerEntitlement(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc), server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
+class StripeWebhookEvent(Base):
+    """Durable event-ID ledger; processed atomically with entitlement updates."""
+
+    __tablename__ = "stripe_webhook_events"
+
+    event_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    event_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    processed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        server_default=text("CURRENT_TIMESTAMP"),
     )
 
 

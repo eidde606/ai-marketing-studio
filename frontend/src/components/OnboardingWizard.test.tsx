@@ -66,6 +66,9 @@ describe("OnboardingWizard", () => {
       );
     });
     expect(await screen.findByText("onboarding.step3Title")).toBeTruthy();
+    expect(document.activeElement).toBe(
+      screen.getByText("onboarding.step3Title"),
+    );
   });
 
   it("activates the saved workspace and reports it to the application", async () => {
