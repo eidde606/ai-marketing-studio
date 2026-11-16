@@ -3,6 +3,7 @@ import logging
 from dataclasses import fields
 from uuid import uuid4
 
+from openai import AuthenticationError
 from sqlalchemy.orm import Session
 
 from app.errors import ApplicationError, ErrorKind
@@ -19,6 +20,10 @@ from .context import LanguagePreferences
 from app.features.accounts import service as accounts
 
 logger = logging.getLogger(__name__)
+
+
+class _ProviderAuthenticationFailure(ApplicationError):
+    """Provider rejected authentication before billable generation could begin."""
 
 
 def _authorize(db, principal, business_id, *, generation=False, write=False, lock=False):
@@ -81,6 +86,15 @@ def _run_provider(context, operation, callback, error_message, languages=Languag
     execution.before_generation(attribution)
     try:
         result = callback()
+    except ApplicationError:
+        execution.after_generation(attribution, succeeded=False)
+        raise
+    except AuthenticationError:
+        execution.after_generation(attribution, succeeded=False)
+        logger.warning("AI generation failed (AuthenticationError)")
+        raise _ProviderAuthenticationFailure(
+            ErrorKind.UPSTREAM_FAILURE, error_message,
+        ) from None
     except Exception as exc:
         execution.after_generation(attribution, succeeded=False)
         # Provider exceptions may contain prompts or credentials. Never log their text.
@@ -153,6 +167,12 @@ def sofia_chat(business_id: str, request: SofiaChatRequest, *, db: Session,
         reply = _run_provider(context, "sofia_chat", lambda: adapters.chat_with_sofia(profile, messages, language=conversation_language),
                               "Sofía could not respond. Please try again.",
                               LanguagePreferences(preferences["interface_language"], conversation_language, None))
+    except _ProviderAuthenticationFailure:
+        if reservation is not None:
+            entitlement_service.release_usage_for_nonbillable_failure(
+                db, [reservation.id],
+            )
+        raise
     except ApplicationError:
         if reservation is not None:
             entitlement_service.finish_usage(db, reservation.id, succeeded=False)
@@ -166,13 +186,13 @@ def sofia_chat(business_id: str, request: SofiaChatRequest, *, db: Session,
     else:
         repository.add_conversation_scoped(db, context, Conversation(id=conversation_id, language=conversation_language))
     repository.add_message_scoped(db, context, conversation_id, role="user", content=user_message.content)
-    assistant_message = repository.add_message_scoped(
+    assistant_message_id = repository.add_message_scoped(
         db, context, conversation_id, role="assistant", content=reply,
     )
     Transactions(db).commit()
     if reservation is not None:
         entitlement_service.finish_usage(
-            db, reservation.id, succeeded=True, result_id=assistant_message.id,
+            db, reservation.id, succeeded=True, result_id=assistant_message_id,
         )
     return {"conversation_id": conversation_id, "reply": reply, "language": conversation_language}
 
@@ -224,6 +244,12 @@ def _generate(business_id, *, db, principal, conversation_id=None, request=None)
         generated = _run_provider(context, "conversation_draft" if conversation_id else "generate_content",
             lambda: generation_service.generate_marketing_content(profile, **kwargs),
             "Sofía and Leo could not generate the draft", languages)
+    except _ProviderAuthenticationFailure:
+        if reservations:
+            entitlement_service.release_usage_for_nonbillable_failure(
+                db, [item.id for item in reservations],
+            )
+        raise
     except ApplicationError:
         if reservations:
             entitlement_service.finish_usage_batch(

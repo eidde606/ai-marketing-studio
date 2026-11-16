@@ -6,7 +6,10 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.models import BusinessMembership, Conversation, ConversationMessage, Draft
-from tests.tenancy_fixtures import grant_test_owner
+from tests.tenancy_fixtures import (
+    grant_test_active_entitlement,
+    grant_test_owner,
+)
 from tests.test_tenant_repositories import seed_tenants
 from tests.test_ai_destinations import generated_content
 
@@ -17,6 +20,8 @@ def ai_case(isolated_client, monkeypatch):
     seed_tenants(engine)
     with Session(engine) as db:
         grant_test_owner(db, ["a"])
+        grant_test_active_entitlement(db, ["a"], owner_user_id="a")
+        grant_test_active_entitlement(db, ["b"], owner_user_id="b")
         db.commit()
     chat = Mock(return_value="Safe reply")
     generate = Mock(return_value=generated_content("facebook"))
@@ -38,9 +43,15 @@ def test_roles_can_use_ai_without_output_privilege_escalation(ai_case, role):
     client, engine, chat, generate = ai_case
     change_membership(engine, role=role)
     generate.return_value.update(id="b-pending", business_id="b", campaign_id="b-campaign", status="approved")
-    reply = client.post("/businesses/a/sofia/chat", json={"message": "b-message-0 b-campaign b-pending"})
+    reply = client.post("/businesses/a/sofia/chat", json={
+        "message": "b-message-0 b-campaign b-pending",
+        "idempotency_key": "role-chat",
+    })
     assert reply.status_code == 200
-    result = client.post("/businesses/a/generate-content")
+    result = client.post(
+        "/businesses/a/generate-content",
+        json={"idempotency_key": "role-generation"},
+    )
     assert result.status_code == 201
     assert result.json()["business_id"] == "a"
     assert result.json()["status"] == "pending"
@@ -88,7 +99,11 @@ def test_foreign_conversations_messages_and_missing_membership(ai_case):
     assert client.get("/businesses/a/sofia/conversations/b-conversation").status_code == 404
     assert client.get("/businesses/b/sofia/conversations/b-conversation").json()["messages"] == [
         {"role": "user", "content": "b"}] * 3
-    response = client.post("/businesses/a/sofia/chat", json={"message": "new", "conversation_id": "a-conversation"})
+    response = client.post("/businesses/a/sofia/chat", json={
+        "message": "new",
+        "conversation_id": "a-conversation",
+        "idempotency_key": "existing-conversation-chat",
+    })
     assert response.status_code == 200
     assert [m.content for m in chat.call_args.args[1]] == ["a", "a", "a", "new"]
 
@@ -111,13 +126,19 @@ def test_revocation_during_provider_prevents_all_output_persistence(ai_case, wor
         return "reply" if "chat" in workflow else generated_content("facebook")
     chat.side_effect = generate.side_effect = revoke
     if "chat" in workflow:
-        body = {"message": "Must not persist"}
+        body = {
+            "message": "Must not persist",
+            "idempotency_key": f"{workflow}-revocation",
+        }
         if workflow == "existing_chat":
             body["conversation_id"] = "a-conversation"
         response = client.post("/businesses/a/sofia/chat", json=body)
     else:
         path = "generate-content" if workflow == "automatic" else "sofia/conversations/a-conversation/generate-draft"
-        response = client.post(f"/businesses/a/{path}")
+        response = client.post(
+            f"/businesses/a/{path}",
+            json={"idempotency_key": f"{workflow}-revocation"},
+        )
     assert response.status_code == 404
     with Session(engine) as db:
         assert len(db.scalars(select(Conversation)).all()) == 2
@@ -128,7 +149,10 @@ def test_revocation_during_provider_prevents_all_output_persistence(ai_case, wor
 def test_deletion_and_provider_error_do_not_leak(ai_case, caplog):
     client, engine, chat, _ = ai_case
     chat.side_effect = RuntimeError("SECRET PROMPT AND CREDENTIAL")
-    assert client.post("/businesses/a/sofia/chat", json={"message": "test"}).status_code == 502
+    assert client.post("/businesses/a/sofia/chat", json={
+        "message": "test",
+        "idempotency_key": "provider-error",
+    }).status_code == 502
     assert "SECRET" not in caplog.text
     assert client.delete("/businesses/a/sofia/conversations/a-conversation").status_code == 204
     with Session(engine) as db:
@@ -148,8 +172,11 @@ def test_full_history_pagination_and_request_local_attribution(ai_case, monkeypa
     messages = client.get("/businesses/a/sofia/conversations/a-conversation").json()["messages"]
     assert len(messages) == 108
     for business in ("a", "b"):
-        assert client.post(f"/businesses/{business}/sofia/chat", json={"message": "new",
-            "conversation_id": f"{business}-conversation"}).status_code == 200
+        assert client.post(f"/businesses/{business}/sofia/chat", json={
+            "message": "new",
+            "conversation_id": f"{business}-conversation",
+            "idempotency_key": f"history-{business}",
+        }).status_code == 200
         profile, history = chat.call_args.args
         assert profile.name == business
         assert len(history) == (109 if business == "a" else 4)
@@ -170,9 +197,16 @@ def test_deleted_conversation_not_resurrected_after_generation(ai_case, workflow
         return "reply" if workflow == "chat" else generated_content("facebook")
     chat.side_effect = generate.side_effect = delete
     if workflow == "chat":
-        response = client.post("/businesses/a/sofia/chat", json={"message": "new", "conversation_id": "a-conversation"})
+        response = client.post("/businesses/a/sofia/chat", json={
+            "message": "new",
+            "conversation_id": "a-conversation",
+            "idempotency_key": "deleted-chat",
+        })
     else:
-        response = client.post("/businesses/a/sofia/conversations/a-conversation/generate-draft")
+        response = client.post(
+            "/businesses/a/sofia/conversations/a-conversation/generate-draft",
+            json={"idempotency_key": "deleted-draft"},
+        )
     assert response.status_code == 404
     with Session(engine) as db:
         assert db.get(Conversation, "a-conversation") is None

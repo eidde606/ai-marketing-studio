@@ -36,16 +36,25 @@ def active_membership(db: Session, principal: Principal, business_id: str, *, lo
     return db.execute(statement).one_or_none()
 
 
-def visible_draft_business(db: Session, principal: AuthenticatedPrincipal, draft_id: str):
+def visible_draft_business(
+    db: Session,
+    principal: AuthenticatedPrincipal,
+    draft_id: str,
+    *,
+    include_deleted: bool = False,
+):
     """Resolve an ID-only route through active membership, never unrestricted Draft.get."""
     from app.models import Draft
-    return db.scalar(select(Draft.business_id).join(
+    statement = select(Draft.business_id).join(
         BusinessMembership, BusinessMembership.business_id == Draft.business_id,
     ).join(User, User.id == BusinessMembership.user_id).where(
         Draft.id == draft_id, User.id == principal.user_id,
         User.auth_issuer == principal.issuer, User.auth_subject == principal.subject,
         User.status == "active", BusinessMembership.status == "active",
-    ))
+    )
+    if not include_deleted:
+        statement = statement.where(Draft.deleted_at.is_(None))
+    return db.scalar(statement)
 
 
 def lock_business_for_authorization(db: Session, business_id: str):

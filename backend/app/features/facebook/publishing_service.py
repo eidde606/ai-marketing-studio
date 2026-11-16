@@ -294,7 +294,7 @@ async def verify_video(
     principal: AuthenticatedPrincipal,
 ) -> dict[str, str]:
     context = access.require_draft_permission(
-        db, principal, draft_id, Permission.PUBLISH,
+        db, principal, draft_id, Permission.PUBLISH, include_deleted=True,
     )
     draft = repository.get_draft_scoped(
         db, context, draft_id, include_deleted=True,
@@ -322,7 +322,9 @@ async def verify_video(
         raise _failure(ErrorKind.CONFLICT, "Facebook Page is not connected")
 
     access_token = decrypt_token(account.encrypted_access_token)
-    access.require_draft_permission(db, principal, draft_id, Permission.PUBLISH)
+    access.require_draft_permission(
+        db, principal, draft_id, Permission.PUBLISH, include_deleted=True,
+    )
     try:
         result = await get_video_status(
             video_id=draft.facebook_post_id,
@@ -336,7 +338,9 @@ async def verify_video(
 
     status = result.get("status", {})
     video_status = status.get("video_status", "") if isinstance(status, dict) else ""
-    access.require_draft_permission(db, principal, draft_id, Permission.PUBLISH)
+    access.require_draft_permission(
+        db, principal, draft_id, Permission.PUBLISH, include_deleted=True,
+    )
     if video_status == "ready":
         if not repository.save_claimed_publication_scoped(
             db, context, draft_id,
@@ -348,7 +352,9 @@ async def verify_video(
         ):
             raise _failure(ErrorKind.CONFLICT, "Video is no longer awaiting verification")
         Transactions(db).commit()
-        access.require_draft_permission(db, principal, draft_id, Permission.PUBLISH)
+        access.require_draft_permission(
+            db, principal, draft_id, Permission.PUBLISH, include_deleted=True,
+        )
         return {
             "status": "published",
             "facebook_post_id": draft.facebook_post_id,

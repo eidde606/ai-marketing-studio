@@ -215,7 +215,7 @@ async def verify_publication(
     principal: AuthenticatedPrincipal,
 ) -> dict[str, str | None]:
     context = access.require_draft_permission(
-        db, principal, draft_id, Permission.PUBLISH,
+        db, principal, draft_id, Permission.PUBLISH, include_deleted=True,
     )
     draft = repository.get_draft_scoped(
         db, context, draft_id, include_deleted=True,
@@ -241,7 +241,9 @@ async def verify_publication(
     )
 
     try:
-        access.require_draft_permission(db, principal, draft_id, Permission.PUBLISH)
+        access.require_draft_permission(
+            db, principal, draft_id, Permission.PUBLISH, include_deleted=True,
+        )
         result = await publishing_provider.get_tiktok_publish_status(
             access_token=access_token,
             publish_id=draft.tiktok_publish_id,
@@ -264,12 +266,18 @@ async def verify_publication(
         ):
             raise _failure(ErrorKind.CONFLICT, "TikTok publication is no longer awaiting verification")
         Transactions(db).commit()
-        access.require_draft_permission(db, principal, draft_id, Permission.PUBLISH)
+        access.require_draft_permission(
+            db, principal, draft_id, Permission.PUBLISH, include_deleted=True,
+        )
         return {"status": "published"}
     if status == "FAILED":
-        access.require_draft_permission(db, principal, draft_id, Permission.PUBLISH)
+        access.require_draft_permission(
+            db, principal, draft_id, Permission.PUBLISH, include_deleted=True,
+        )
         return {"status": "failed"}
-    access.require_draft_permission(db, principal, draft_id, Permission.PUBLISH)
+    access.require_draft_permission(
+        db, principal, draft_id, Permission.PUBLISH, include_deleted=True,
+    )
     return {
         "status": "processing",
         "tiktok_status": status,

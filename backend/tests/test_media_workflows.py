@@ -6,7 +6,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Business, Draft, ImageRevision
-from tests.tenancy_fixtures import grant_test_owner
+from tests.tenancy_fixtures import (
+    grant_test_active_entitlement,
+    grant_test_owner,
+)
 
 
 @pytest.fixture
@@ -16,7 +19,10 @@ def media_case(isolated_client):
         business = Business(name="Media workflow business")
         db.add(business)
         db.flush()
-        grant_test_owner(db, [business.id])
+        principal = grant_test_owner(db, [business.id])
+        grant_test_active_entitlement(
+            db, [business.id], owner_user_id=principal.user_id,
+        )
         draft = Draft(
             business_id=business.id,
             title="Media draft",
@@ -167,39 +173,31 @@ def test_video_preview_rejects_incomplete_or_cross_business_path(media_case):
     assert invalid.json() == {"detail": "Invalid video storage path"}
 
 
-def test_image_generation_saves_completed_private_storage_path(
+def test_active_customer_image_generation_is_disabled_before_provider_call(
     media_case,
     monkeypatch,
 ):
     case = media_case
-    generate = Mock(return_value=f"businesses/{case.business_id}/generated.png")
-    sign = Mock(return_value="https://storage.test.invalid/image")
+    generate = Mock()
+    sign = Mock()
     monkeypatch.setattr("app.features.media.workflows_service.generate_marketing_image", generate)
     monkeypatch.setattr("app.features.media.workflows_service.get_marketing_image_url", sign)
 
     response = case.client.post(f"/drafts/{case.draft_id}/generate-image")
 
-    assert response.status_code == 200
+    assert response.status_code == 429
     assert response.json() == {
-        "draft_id": case.draft_id,
-        "image_status": "completed",
-        "image_url": "https://storage.test.invalid/image",
+        "detail": "AI image generation and editing are temporarily unavailable.",
     }
-    generate.assert_called_once_with(
-        image_prompt="A product on a blue background",
-        business_id=case.business_id,
-    )
-    assert saved_draft(case).image_url == (
-        f"businesses/{case.business_id}/generated.png"
-    )
-    sign.assert_called_once_with(
-        f"businesses/{case.business_id}/generated.png",
-        context=sign.call_args.kwargs["context"],
-    )
-    assert sign.call_args.kwargs["context"].business_id == case.business_id
+    generate.assert_not_called()
+    sign.assert_not_called()
+    draft = saved_draft(case)
+    assert draft.image_url is None
+    assert draft.image_generation_id is None
+    assert draft.image_started_at is None
 
 
-def test_membership_revocation_during_image_generation_prevents_result_persistence(
+def test_member_cannot_bypass_image_generation_disable(
     media_case, monkeypatch,
 ):
     from app.auth import SUPABASE_ISSUER, get_authenticated_principal
@@ -223,53 +221,51 @@ def test_membership_revocation_during_image_generation_prevents_result_persisten
         )
         db.add(membership)
         db.commit()
+        membership_id = membership.id
         principal = AuthenticatedPrincipal(
             SUPABASE_ISSUER, user.auth_subject, user.id,
         )
-        membership_id = membership.id
 
     previous = app.dependency_overrides[get_authenticated_principal]
     app.dependency_overrides[get_authenticated_principal] = lambda: principal
-
-    def revoke_then_return(**_kwargs):
-        with Session(case.engine) as db:
-            db.get(BusinessMembership, membership_id).status = "revoked"
-            db.commit()
-        return f"businesses/{case.business_id}/generated.png"
-
+    generate = Mock()
     monkeypatch.setattr(
         "app.features.media.workflows_service.generate_marketing_image",
-        revoke_then_return,
+        generate,
     )
     try:
         response = case.client.post(f"/drafts/{case.draft_id}/generate-image")
     finally:
         app.dependency_overrides[get_authenticated_principal] = previous
 
-    assert response.status_code == 404
+    assert response.status_code == 429
+    generate.assert_not_called()
+    with Session(case.engine) as db:
+        assert db.get(BusinessMembership, membership_id).status == "active"
     draft = saved_draft(case)
-    assert draft.image_status == "failed"
     assert draft.image_url is None
 
 
-def test_image_generation_failure_marks_attempt_failed(
+def test_image_generation_does_not_start_or_mutate_attempt_when_disabled(
     media_case,
     monkeypatch,
 ):
     case = media_case
+    provider = Mock(side_effect=RuntimeError("provider unavailable"))
     monkeypatch.setattr(
         "app.features.media.workflows_service.generate_marketing_image",
-        Mock(side_effect=RuntimeError("provider unavailable")),
+        provider,
     )
 
     response = case.client.post(f"/drafts/{case.draft_id}/generate-image")
 
-    assert response.status_code == 502
+    assert response.status_code == 429
     assert response.json() == {
-        "detail": "Image generation failed. Please try again later.",
+        "detail": "AI image generation and editing are temporarily unavailable.",
     }
+    provider.assert_not_called()
     draft = saved_draft(case)
-    assert draft.image_status == "failed"
+    assert draft.image_status in (None, "not_started")
     assert draft.image_started_at is None
     assert draft.image_generation_id is None
     assert draft.image_url is None
@@ -327,18 +323,31 @@ def image_revision_case(media_case, monkeypatch):
     return case
 
 
-def test_image_revision_creation_preserves_original_until_acceptance(
-    image_revision_case,
+def test_active_customer_image_revision_is_disabled_before_provider_calls(
+    image_revision_case, monkeypatch,
 ):
     case = image_revision_case
+    download = Mock()
+    edit = Mock()
+    monkeypatch.setattr(
+        "app.features.media.workflows_service.download_marketing_image",
+        download,
+    )
+    monkeypatch.setattr(
+        "app.features.media.workflows_service.edit_marketing_image",
+        edit,
+    )
     response = case.client.post(
         f"/drafts/{case.draft_id}/image-revisions",
         json={"instructions": "Make the background warmer"},
     )
 
-    assert response.status_code == 201
-    assert response.json()["status"] == "ready"
-    assert response.json()["image_url"] == "https://storage.test.invalid/revision"
+    assert response.status_code == 429
+    assert response.json() == {
+        "detail": "AI image generation and editing are temporarily unavailable.",
+    }
+    download.assert_not_called()
+    edit.assert_not_called()
     assert saved_draft(case).image_url == (
         f"businesses/{case.business_id}/original.png"
     )
@@ -346,19 +355,18 @@ def test_image_revision_creation_preserves_original_until_acceptance(
         revisions = db.scalars(
             select(ImageRevision).where(ImageRevision.draft_id == case.draft_id)
         ).all()
-        assert len(revisions) == 1
-        assert revisions[0].original_image_path.endswith("/original.png")
-        assert revisions[0].revised_image_path.endswith("/revised.png")
+        assert revisions == []
 
 
-def test_failed_image_revision_preserves_original_and_marks_revision_failed(
+def test_image_revision_does_not_call_provider_when_disabled(
     image_revision_case,
     monkeypatch,
 ):
     case = image_revision_case
+    edit = Mock(side_effect=RuntimeError("editor unavailable"))
     monkeypatch.setattr(
         "app.features.media.workflows_service.edit_marketing_image",
-        Mock(side_effect=RuntimeError("editor unavailable")),
+        edit,
     )
 
     response = case.client.post(
@@ -366,16 +374,17 @@ def test_failed_image_revision_preserves_original_and_marks_revision_failed(
         json={"instructions": "Make the background warmer"},
     )
 
-    assert response.status_code == 502
+    assert response.status_code == 429
     assert response.json() == {
-        "detail": "Image editing failed. The original image was not changed.",
+        "detail": "AI image generation and editing are temporarily unavailable.",
     }
+    edit.assert_not_called()
     assert saved_draft(case).image_url.endswith("/original.png")
     with Session(case.engine) as db:
         revision = db.scalar(
             select(ImageRevision).where(ImageRevision.draft_id == case.draft_id)
         )
-        assert revision.status == "failed"
+        assert revision is None
 
 
 def test_accept_and_reject_image_revisions_preserve_expected_source(
@@ -425,11 +434,14 @@ def test_revision_list_is_draft_scoped_and_instructions_trimmed(
     image_revision_case,
 ):
     case = image_revision_case
-    response = case.client.post(
-        f"/drafts/{case.draft_id}/image-revisions",
-        json={"instructions": "  More contrast  "},
-    )
-    assert response.status_code == 201
+    with Session(case.engine) as db:
+        db.add(ImageRevision(
+            draft_id=case.draft_id,
+            original_image_path=f"businesses/{case.business_id}/original.png",
+            instructions="More contrast",
+            status="ready",
+        ))
+        db.commit()
     listing = case.client.get(f"/drafts/{case.draft_id}/image-revisions")
     assert listing.status_code == 200
     assert listing.json()[0]["instructions"] == "More contrast"

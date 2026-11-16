@@ -65,6 +65,7 @@ CUSTOMER_CONTROL_PLANE_LOOKUPS = {
     "app.features.entitlements.service:prepare_workspace_activation -> app.features.entitlements.repository.count_businesses": 1,
     "app.features.entitlements.service:prepare_workspace_activation -> app.features.entitlements.repository.entitlement_for_organization": 1,
     "app.features.entitlements.service:release_usage_before_provider_call -> app.features.entitlements.repository.release_usage_reservation": 1,
+    "app.features.entitlements.service:release_usage_for_nonbillable_failure -> app.features.entitlements.repository.release_usage_reservation": 1,
     "app.features.entitlements.service:require_campaign_capacity -> app.features.entitlements.repository.count_campaigns": 1,
     "app.features.entitlements.service:require_campaign_capacity -> app.features.entitlements.repository.entitlement_for_organization": 1,
     "app.features.entitlements.service:require_campaign_capacity -> app.features.entitlements.repository.organization_for_business": 1,

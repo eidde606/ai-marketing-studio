@@ -10,6 +10,7 @@ from app.features.access.principal import Principal
 from app.features.access.service import require_permission
 from app.features.memberships.service import change_membership
 from app.models import Business, BusinessMembership, User
+from tests.tenancy_fixtures import grant_test_active_entitlement
 
 ISSUER = "https://identity.test.invalid/auth/v1"
 
@@ -54,6 +55,7 @@ def test_unknown_permission_fails_closed():
 def test_multi_business_identity_and_revocation(tenant_engine):
     principal = Principal(ISSUER, "member")
     with Session(tenant_engine) as db:
+        grant_test_active_entitlement(db, ["a"], owner_user_id="owner")
         assert require_permission(db, principal, "a", Permission.USE_SOFIA).role == "member"
         assert require_permission(db, principal, "b", Permission.PUBLISH).role == "owner"
         with pytest.raises(ApplicationError) as error:

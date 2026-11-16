@@ -1,6 +1,9 @@
 from datetime import datetime, timedelta, timezone
 import json
+from unittest.mock import Mock
 
+from httpx import Request, Response
+from openai import AuthenticationError
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -16,9 +19,13 @@ from app.features.media import usage_service as heygen_usage_service
 from app.features.onboarding import service as onboarding_service
 from app.features.onboarding.schemas import OnboardingActivation
 from app.models import (
+    AIUsageReservation,
     Business,
     CustomerEntitlement,
     CustomerOrganization,
+    Conversation,
+    Draft,
+    ImageRevision,
     OnboardingProgress,
 )
 from tests.tenancy_fixtures import grant_test_owner
@@ -28,7 +35,7 @@ def _trial_limits(**overrides):
     limits = {
         "businesses": 1,
         "leo_generations": 20,
-        "sofia_requests": 2,
+        "sofia_requests": 5,
         "campaigns": 2,
         "heygen_generations": 0,
     }
@@ -36,11 +43,13 @@ def _trial_limits(**overrides):
     return limits
 
 
-def _create_trial_business(engine, monkeypatch, **limit_overrides):
+def _create_trial_business(
+    engine, monkeypatch, *, subject="customer-account", **limit_overrides,
+):
     monkeypatch.setenv("TRIALS_ENABLED", "true")
     monkeypatch.setenv("TRIAL_LIMITS_JSON", json.dumps(_trial_limits(**limit_overrides)))
     with Session(engine) as db:
-        principal = grant_test_owner(db, subject="customer-account")
+        principal = grant_test_owner(db, subject=subject)
         db.commit()
     with Session(engine) as db:
         business = business_service.create_business(
@@ -49,6 +58,116 @@ def _create_trial_business(engine, monkeypatch, **limit_overrides):
             principal=principal,
         )
         return principal, business.id
+
+
+def _create_business_without_entitlement(engine):
+    with Session(engine) as db:
+        business = Business(name="Unentitled business")
+        db.add(business)
+        db.flush()
+        principal = grant_test_owner(db, [business.id])
+        db.commit()
+        return principal, business.id
+
+
+def test_ai_permissions_reservations_and_routes_fail_closed_without_entitlement(
+    isolated_client, monkeypatch,
+):
+    client, engine = isolated_client
+    principal, business_id = _create_business_without_entitlement(engine)
+    chat = Mock(return_value="Must not be called")
+    generate = Mock(return_value={})
+    monkeypatch.setattr("app.features.content.adapters.chat_with_sofia", chat)
+    monkeypatch.setattr(
+        "app.features.content.generation_service.generate_marketing_content",
+        generate,
+    )
+
+    with Session(engine) as db:
+        assert require_permission(
+            db, principal, business_id, Permission.READ,
+        ).business_id == business_id
+        for permission in (
+            Permission.USE_SOFIA,
+            Permission.USE_LEO,
+            Permission.GENERATE_MEDIA,
+        ):
+            with pytest.raises(ApplicationError) as denied:
+                require_permission(db, principal, business_id, permission)
+            assert denied.value.kind is ErrorKind.LIMIT_EXCEEDED
+        with pytest.raises(ApplicationError) as reservation_denied:
+            entitlement_service.reserve_usage(
+                db,
+                principal,
+                business_id=business_id,
+                metric="sofia_request",
+                idempotency_key="missing-entitlement",
+            )
+        assert reservation_denied.value.kind is ErrorKind.LIMIT_EXCEEDED
+
+    chat_response = client.post(
+        f"/businesses/{business_id}/sofia/chat",
+        json={"message": "Plan a campaign", "idempotency_key": "missing-entitlement"},
+    )
+    generation_response = client.post(
+        f"/businesses/{business_id}/generate-content",
+        json={"idempotency_key": "missing-entitlement-generation"},
+    )
+
+    assert chat_response.status_code == generation_response.status_code == 429
+    assert chat_response.json() == {
+        "detail": "An active trial or subscription is required to use AI features.",
+    }
+    chat.assert_not_called()
+    generate.assert_not_called()
+    with Session(engine) as db:
+        assert db.scalar(select(func.count()).select_from(AIUsageReservation)) == 0
+        assert db.scalar(select(func.count()).select_from(Conversation)) == 0
+        assert db.scalar(select(func.count()).select_from(Draft)) == 0
+
+
+def test_active_subscription_allows_ai_permission_and_usage_reservation(
+    isolated_client, monkeypatch,
+):
+    _, engine = isolated_client
+    principal, business_id = _create_trial_business(engine, monkeypatch)
+    now = datetime.now(timezone.utc)
+    with Session(engine) as db:
+        entitlement = entitlement_repository.entitlement_for_business(
+            db, business_id,
+        )
+        entitlement.status = "active"
+        entitlement.current_period_start = now - timedelta(days=1)
+        entitlement.current_period_end = now + timedelta(days=29)
+        entitlement.limits = _trial_limits(sofia_requests=1)
+        db.commit()
+
+    with Session(engine) as db:
+        assert require_permission(
+            db, principal, business_id, Permission.USE_SOFIA,
+        ).business_id == business_id
+        reservation, replay = entitlement_service.reserve_usage(
+            db,
+            principal,
+            business_id=business_id,
+            metric="sofia_request",
+            idempotency_key="active-subscription-chat",
+        )
+        assert reservation is not None
+        assert replay is False
+        db.commit()
+        entitlement_service.finish_usage(
+            db, reservation.id, succeeded=True,
+        )
+        with pytest.raises(ApplicationError) as exhausted:
+            entitlement_service.reserve_usage(
+                db,
+                principal,
+                business_id=business_id,
+                metric="sofia_request",
+                idempotency_key="active-subscription-chat-2",
+            )
+        assert exhausted.value.kind is ErrorKind.LIMIT_EXCEEDED
 
 
 def test_trial_starts_on_first_workspace_and_prevents_another_business(isolated_client, monkeypatch):
@@ -131,6 +250,235 @@ def test_expired_trial_preserves_reads_and_business_settings_but_blocks_mutation
             with pytest.raises(ApplicationError) as blocked:
                 require_permission(db, principal, business_id, permission)
             assert blocked.value.kind is ErrorKind.LIMIT_EXCEEDED
+        with pytest.raises(ApplicationError) as reservation_blocked:
+            entitlement_service.reserve_usage(
+                db,
+                principal,
+                business_id=business_id,
+                metric="sofia_request",
+                idempotency_key="expired-trial-request",
+            )
+        assert reservation_blocked.value.kind is ErrorKind.LIMIT_EXCEEDED
+
+
+@pytest.mark.parametrize("status", ["canceled", "past_due", "expired"])
+def test_inactive_entitlements_cannot_reserve_ai_usage(
+    isolated_client, monkeypatch, status,
+):
+    _, engine = isolated_client
+    principal, business_id = _create_trial_business(engine, monkeypatch)
+    with Session(engine) as db:
+        entitlement = entitlement_repository.entitlement_for_business(
+            db, business_id,
+        )
+        entitlement.status = status
+        entitlement.current_period_end = None
+        db.commit()
+        with pytest.raises(ApplicationError) as denied:
+            entitlement_service.reserve_usage(
+                db,
+                principal,
+                business_id=business_id,
+                metric="sofia_request",
+                idempotency_key=f"inactive-{status}",
+            )
+        assert denied.value.kind is ErrorKind.LIMIT_EXCEEDED
+
+
+def test_failed_usage_reservation_never_calls_ai_provider(
+    isolated_client, monkeypatch,
+):
+    client, engine = isolated_client
+    principal, business_id = _create_trial_business(engine, monkeypatch)
+    from app.auth import get_authenticated_principal
+    from app.main import app
+
+    app.dependency_overrides[get_authenticated_principal] = lambda: principal
+    chat = Mock()
+    generate = Mock()
+    monkeypatch.setattr("app.features.content.adapters.chat_with_sofia", chat)
+    monkeypatch.setattr(
+        "app.features.content.generation_service.generate_marketing_content",
+        generate,
+    )
+    monkeypatch.setattr(
+        entitlement_service,
+        "reserve_usage",
+        Mock(side_effect=ApplicationError(
+            ErrorKind.LIMIT_EXCEEDED, "Usage reservation unavailable",
+        )),
+    )
+
+    chat_response = client.post(
+        f"/businesses/{business_id}/sofia/chat",
+        json={"message": "Plan a campaign", "idempotency_key": "failed-reservation-chat"},
+    )
+    generation_response = client.post(
+        f"/businesses/{business_id}/generate-content",
+        json={"idempotency_key": "failed-reservation-generation"},
+    )
+
+    assert chat_response.status_code == generation_response.status_code == 429
+    chat.assert_not_called()
+    generate.assert_not_called()
+    with Session(engine) as db:
+        assert db.scalar(select(func.count()).select_from(Conversation)) == 0
+        assert db.scalar(select(func.count()).select_from(Draft)) == 0
+
+
+def test_exhausted_chat_quota_blocks_direct_api_before_provider_call(
+    isolated_client, monkeypatch,
+):
+    client, engine = isolated_client
+    principal, business_id = _create_trial_business(
+        engine, monkeypatch, sofia_requests=0,
+    )
+    from app.auth import get_authenticated_principal
+    from app.main import app
+
+    app.dependency_overrides[get_authenticated_principal] = lambda: principal
+    provider = Mock()
+    monkeypatch.setattr("app.features.content.adapters.chat_with_sofia", provider)
+
+    response = client.post(
+        f"/businesses/{business_id}/sofia/chat",
+        json={"message": "Plan a campaign", "idempotency_key": "exhausted-chat"},
+    )
+
+    assert response.status_code == 429
+    provider.assert_not_called()
+    with Session(engine) as db:
+        assert db.scalar(select(func.count()).select_from(AIUsageReservation)) == 0
+
+
+@pytest.mark.parametrize("workflow", ["chat", "generation"])
+@pytest.mark.parametrize(
+    "key",
+    [None, "", "   ", "x" * 129],
+    ids=["missing", "empty", "whitespace", "too-long"],
+)
+def test_missing_or_invalid_idempotency_key_denied_before_provider_call(
+    isolated_client, monkeypatch, workflow, key,
+):
+    client, engine = isolated_client
+    principal, business_id = _create_trial_business(engine, monkeypatch)
+    from app.auth import get_authenticated_principal
+    from app.main import app
+
+    app.dependency_overrides[get_authenticated_principal] = lambda: principal
+    chat = Mock()
+    generate = Mock()
+    monkeypatch.setattr("app.features.content.adapters.chat_with_sofia", chat)
+    monkeypatch.setattr(
+        "app.features.content.generation_service.generate_marketing_content",
+        generate,
+    )
+    payload = {"message": "Plan a campaign"} if workflow == "chat" else {}
+    if key is not None:
+        payload["idempotency_key"] = key
+    endpoint = (
+        f"/businesses/{business_id}/sofia/chat"
+        if workflow == "chat"
+        else f"/businesses/{business_id}/generate-content"
+    )
+
+    response = client.post(endpoint, json=payload)
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "A valid idempotency key is required"}
+    chat.assert_not_called()
+    generate.assert_not_called()
+    with Session(engine) as db:
+        assert db.scalar(select(func.count()).select_from(AIUsageReservation)) == 0
+
+
+def test_repeated_chat_request_with_same_key_reuses_billable_operation(
+    isolated_client, monkeypatch,
+):
+    client, engine = isolated_client
+    principal, business_id = _create_trial_business(engine, monkeypatch)
+    from app.auth import get_authenticated_principal
+    from app.main import app
+
+    app.dependency_overrides[get_authenticated_principal] = lambda: principal
+    provider = Mock(return_value="A safe planning reply")
+    monkeypatch.setattr("app.features.content.adapters.chat_with_sofia", provider)
+    request = {
+        "message": "Help me plan",
+        "idempotency_key": "same-billable-chat",
+    }
+
+    first = client.post(f"/businesses/{business_id}/sofia/chat", json=request)
+    retry = client.post(f"/businesses/{business_id}/sofia/chat", json=request)
+
+    assert first.status_code == retry.status_code == 200
+    assert first.json() == retry.json()
+    provider.assert_called_once()
+    with Session(engine) as db:
+        reservations = db.scalars(select(AIUsageReservation).where(
+            AIUsageReservation.business_id == business_id,
+            AIUsageReservation.metric == "sofia_request",
+        )).all()
+        assert len(reservations) == 1
+        assert reservations[0].status == "succeeded"
+        organization = entitlement_repository.organization_for_business(
+            db, business_id,
+        )
+        assert entitlement_repository.count_usage(
+            db, organization.id, "sofia_request",
+        ) == 1
+
+
+def test_repeated_generation_request_with_same_key_reuses_billable_operation(
+    isolated_client, monkeypatch,
+):
+    client, engine = isolated_client
+    principal, business_id = _create_trial_business(engine, monkeypatch)
+    from app.auth import get_authenticated_principal
+    from app.main import app
+
+    app.dependency_overrides[get_authenticated_principal] = lambda: principal
+    provider = Mock(return_value={
+        "title": "A test draft",
+        "caption": "A test caption",
+        "platform": "Facebook",
+        "image_prompt": "A test image prompt",
+        "video_script": "A test video script",
+    })
+    monkeypatch.setattr(
+        "app.features.content.generation_service.generate_marketing_content",
+        provider,
+    )
+    request = {"idempotency_key": "same-billable-generation"}
+
+    first = client.post(
+        f"/businesses/{business_id}/generate-content", json=request,
+    )
+    retry = client.post(
+        f"/businesses/{business_id}/generate-content", json=request,
+    )
+
+    assert first.status_code == retry.status_code == 201
+    assert first.json()["id"] == retry.json()["id"]
+    provider.assert_called_once()
+    with Session(engine) as db:
+        reservations = db.scalars(select(AIUsageReservation).where(
+            AIUsageReservation.business_id == business_id,
+        )).all()
+        assert {reservation.metric for reservation in reservations} == {
+            "sofia_request", "leo_generation",
+        }
+        assert {reservation.status for reservation in reservations} == {"succeeded"}
+        organization = entitlement_repository.organization_for_business(
+            db, business_id,
+        )
+        for metric in ("sofia_request", "leo_generation"):
+            assert entitlement_repository.count_usage(
+                db, organization.id, metric,
+            ) == 1
+        assert db.scalar(select(func.count()).select_from(Draft).where(
+            Draft.business_id == business_id,
+        )) == 1
 
 
 def test_usage_is_idempotent_concurrency_safe_and_conservatively_accounted(isolated_client, monkeypatch):
@@ -185,6 +533,206 @@ def test_usage_is_idempotent_concurrency_safe_and_conservatively_accounted(isola
             db, entitlement_repository.organization_for_business(db, business_id).id,
             "sofia_request",
         ) == 1
+
+
+def test_trial_allows_exactly_five_organization_scoped_sofia_requests(
+    isolated_client, monkeypatch,
+):
+    _, engine = isolated_client
+    principal, business_id = _create_trial_business(engine, monkeypatch)
+    with Session(engine) as db:
+        for index in range(5):
+            reservation, replay = entitlement_service.reserve_usage(
+                db,
+                principal,
+                business_id=business_id,
+                metric="sofia_request",
+                idempotency_key=f"sofia-{index}",
+            )
+            assert reservation is not None
+            assert replay is False
+            db.commit()
+        with pytest.raises(ApplicationError) as exhausted:
+            entitlement_service.reserve_usage(
+                db,
+                principal,
+                business_id=business_id,
+                metric="sofia_request",
+                idempotency_key="sofia-sixth",
+            )
+        assert exhausted.value.kind is ErrorKind.LIMIT_EXCEEDED
+
+
+def test_provider_authentication_failure_refunds_once_and_success_counts(
+    isolated_client, monkeypatch, caplog,
+):
+    client, engine = isolated_client
+    principal, business_id = _create_trial_business(
+        engine, monkeypatch, subject="sofia-provider-auth-customer",
+    )
+    from app.auth import get_authenticated_principal
+    from app.main import app
+
+    app.dependency_overrides[get_authenticated_principal] = lambda: principal
+    provider = Mock()
+    provider.side_effect = AuthenticationError(
+        "sensitive provider response",
+        response=Response(
+            401,
+            request=Request("POST", "https://api.openai.com/v1/responses"),
+        ),
+        body={"detail": "sensitive provider response"},
+    )
+    monkeypatch.setattr("app.features.content.adapters.chat_with_sofia", provider)
+
+    failed = client.post(
+        f"/businesses/{business_id}/sofia/chat",
+        json={"message": "Help me plan", "idempotency_key": "auth-failure"},
+    )
+
+    assert failed.status_code == 502
+    assert failed.json() == {"detail": "Sofía could not respond. Please try again."}
+    assert "sensitive provider response" not in failed.text
+    assert "sensitive provider response" not in caplog.text
+    with Session(engine) as db:
+        reservation = db.scalar(select(AIUsageReservation).where(
+            AIUsageReservation.business_id == business_id,
+            AIUsageReservation.metric == "sofia_request",
+        ))
+        assert reservation is not None
+        assert reservation.status == "failed"
+        organization = entitlement_repository.organization_for_business(
+            db, business_id,
+        )
+        assert entitlement_repository.count_usage(
+            db, organization.id, "sofia_request",
+        ) == 0
+
+    replay = client.post(
+        f"/businesses/{business_id}/sofia/chat",
+        json={"message": "Help me plan", "idempotency_key": "auth-failure"},
+    )
+    assert replay.status_code == 409
+    provider.assert_called_once()
+
+    provider.side_effect = None
+    provider.return_value = "A safe planning reply"
+    succeeded = client.post(
+        f"/businesses/{business_id}/sofia/chat",
+        json={"message": "Help me plan", "idempotency_key": "successful-chat"},
+    )
+    assert succeeded.status_code == 200
+    with Session(engine) as db:
+        organization = entitlement_repository.organization_for_business(
+            db, business_id,
+        )
+        assert entitlement_repository.count_usage(
+            db, organization.id, "sofia_request",
+        ) == 1
+
+
+def test_provider_authentication_failure_releases_both_content_reservations(
+    isolated_client, monkeypatch,
+):
+    client, engine = isolated_client
+    principal, business_id = _create_trial_business(
+        engine, monkeypatch, subject="content-provider-auth-customer",
+    )
+    from app.auth import get_authenticated_principal
+    from app.main import app
+
+    app.dependency_overrides[get_authenticated_principal] = lambda: principal
+    monkeypatch.setattr(
+        "app.features.content.generation_service.generate_marketing_content",
+        Mock(side_effect=AuthenticationError(
+            "provider authentication failed",
+            response=Response(
+                401,
+                request=Request("POST", "https://api.openai.com/v1/responses"),
+            ),
+            body={},
+        )),
+    )
+
+    failed = client.post(
+        f"/businesses/{business_id}/generate-content",
+        json={"idempotency_key": "content-auth-failure"},
+    )
+
+    assert failed.status_code == 502
+    with Session(engine) as db:
+        organization = entitlement_repository.organization_for_business(
+            db, business_id,
+        )
+        reservations = db.scalars(select(AIUsageReservation).where(
+            AIUsageReservation.business_id == business_id,
+        )).all()
+        assert {reservation.metric for reservation in reservations} == {
+            "sofia_request", "leo_generation",
+        }
+        assert {reservation.status for reservation in reservations} == {"failed"}
+        assert entitlement_repository.count_usage(
+            db, organization.id, "sofia_request",
+        ) == 0
+        assert entitlement_repository.count_usage(
+            db, organization.id, "leo_generation",
+        ) == 0
+
+
+def test_trial_disables_image_generation_and_revisions_before_provider_calls(
+    isolated_client, monkeypatch,
+):
+    from unittest.mock import Mock
+
+    client, engine = isolated_client
+    principal, business_id = _create_trial_business(
+        engine, monkeypatch, subject="trial-media-customer",
+    )
+    from app.auth import get_authenticated_principal
+    from app.main import app
+
+    app.dependency_overrides[get_authenticated_principal] = lambda: principal
+    draft_id = "trial-image-draft"
+    with Session(engine) as db:
+        db.add(Draft(
+            id=draft_id,
+            business_id=business_id,
+            title="Trial draft",
+            caption="Caption",
+            platform="facebook",
+            status="pending",
+            image_prompt="A product on a blue background",
+            image_status="completed",
+            image_url=f"businesses/{business_id}/original.png",
+        ))
+        db.commit()
+
+    generate = Mock(return_value=f"businesses/{business_id}/generated.png")
+    edit = Mock(return_value=f"businesses/{business_id}/revised.png")
+    monkeypatch.setattr(
+        "app.features.media.workflows_service.generate_marketing_image", generate,
+    )
+    monkeypatch.setattr(
+        "app.features.media.workflows_service.edit_marketing_image", edit,
+    )
+
+    generated = client.post(f"/drafts/{draft_id}/generate-image")
+    revised = client.post(
+        f"/drafts/{draft_id}/image-revisions",
+        json={"instructions": "Change the background"},
+    )
+
+    assert generated.status_code == 429
+    assert revised.status_code == 429
+    assert generated.json()["detail"] == (
+        "AI image generation and editing are not available during the free trial."
+    )
+    generate.assert_not_called()
+    edit.assert_not_called()
+    with Session(engine) as db:
+        draft = db.get(Draft, draft_id)
+        assert draft.image_url == f"businesses/{business_id}/original.png"
+        assert db.query(ImageRevision).filter_by(draft_id=draft_id).count() == 0
 
 
 def test_trial_heygen_zero_limit_overrides_operator_allowance(isolated_client, monkeypatch):

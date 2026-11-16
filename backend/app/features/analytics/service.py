@@ -23,7 +23,7 @@ def _published_facebook_post(
     reach: bool,
 ):
     context = access.require_draft_permission(
-        db, principal, draft_id, Permission.READ,
+        db, principal, draft_id, Permission.READ, include_deleted=True,
     )
     draft = repository.get_draft_scoped(
         db, context, draft_id, include_deleted=True,
@@ -94,7 +94,9 @@ async def facebook_post_analytics(
             "Facebook analytics service is unavailable",
         ) from exc
 
-    access.require_draft_permission(db, principal, draft_id, Permission.READ)
+    access.require_draft_permission(
+        db, principal, draft_id, Permission.READ, include_deleted=True,
+    )
 
     def metric_count(name: str):
         metric = data.get(name)
@@ -134,7 +136,9 @@ async def facebook_post_reach(
 
     try:
         data = await get_post_reach(draft.facebook_post_id, access_token)
-        access.require_draft_permission(db, principal, draft_id, Permission.READ)
+        access.require_draft_permission(
+            db, principal, draft_id, Permission.READ, include_deleted=True,
+        )
 
         unique_media_viewers = next(
             (

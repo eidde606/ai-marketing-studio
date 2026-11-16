@@ -18,11 +18,17 @@ REQUEST = {
 
 def create_draft(engine):
     from app.models import Business, Draft, HeyGenAssetAccess
-    from tests.tenancy_fixtures import grant_test_owner
+    from tests.tenancy_fixtures import (
+        grant_test_active_entitlement,
+        grant_test_owner,
+    )
 
     with Session(engine) as db:
         db.add(Business(id="business-1", name="Negocio de prueba"))
         principal = grant_test_owner(db, ["business-1"])
+        grant_test_active_entitlement(
+            db, ["business-1"], owner_user_id=principal.user_id,
+        )
         for asset_type, provider_asset_id in (
             ("avatar", "selected-avatar"),
             ("voice", "selected-voice"),
@@ -1719,11 +1725,14 @@ def test_media_reservations_block_other_provider_while_first_is_pending(
     monkeypatch.setattr(generation_service, "generate_video", video_provider)
     if first == "image":
         result = client.post("/drafts/draft-1/generate-image")
+        assert result.status_code == 429
+        assert blocked == []
+        assert calls == []
     else:
         result = client.post(GENERATION_PATH, json=REQUEST)
-    assert result.status_code == 200
-    assert blocked == [409]
-    assert calls == [first]
+        assert result.status_code == 200
+        assert blocked == [409]
+        assert calls == ["video"]
 
 
 @pytest.mark.parametrize("video_status", ["generating", "uploading", "needs_review", "completed"])
@@ -1784,91 +1793,3 @@ def test_stored_video_does_not_bypass_application_membership(completed_provider,
         assert client.get(GENERATION_PATH).status_code == 404
     finally:
         app.dependency_overrides[get_authenticated_principal] = previous
-
-
-@pytest.mark.parametrize("first", ["image", "video"])
-def test_simultaneous_image_and_video_reservations_share_draft_lock(isolated_client, monkeypatch, first):
-    """Model PostgreSQL row-lock scheduling around real reservation SQL.
-
-    SQLite ignores FOR UPDATE. The event hook supplies only that missing lock;
-    both routes, transaction boundaries, and provider-call decisions stay real.
-    """
-    from concurrent.futures import ThreadPoolExecutor
-    from threading import Barrier, Event, Lock
-    from sqlalchemy import event
-    from app.features.media import generation_service
-    from app.features.media import workflows_service
-    from app.models import Draft
-
-    client, engine = isolated_client
-    create_draft(engine)
-    with Session(engine) as db:
-        db.get(Draft, "draft-1").image_prompt = "Una imagen"
-        db.commit()
-    image_lock = workflows_service.repository.lock_draft_scoped
-    video_lock = generation_service.drafts.lock_draft_scoped
-
-    def identify_image(db, context, draft_id):
-        db.info["reservation_kind"] = "image"
-        return image_lock(db, context, draft_id)
-
-    def identify_video(db, context, draft_id):
-        db.info["reservation_kind"] = "video"
-        return video_lock(db, context, draft_id)
-
-    monkeypatch.setattr(workflows_service.repository, "lock_draft_scoped", identify_image)
-    monkeypatch.setattr(generation_service.drafts, "lock_draft_scoped", identify_video)
-    contenders = Barrier(2)
-    first_acquired = Event()
-    row_lock = Lock()
-    loser_finished = Event()
-    paid_calls = []
-
-    def simulate_row_lock(execution):
-        statement = execution.statement
-        if not execution.is_select or getattr(statement, "_for_update_arg", None) is None:
-            return
-        if not any(getattr(table, "name", None) == "drafts" for table in statement.get_final_froms()):
-            return
-        session = execution.session
-        if session.info.get("held_draft_lock"):
-            return
-        if not session.info.get("visited_reservation"):
-            session.info["visited_reservation"] = True
-            contenders.wait(timeout=5)
-            if session.info["reservation_kind"] != first:
-                assert first_acquired.wait(timeout=5)
-        assert row_lock.acquire(timeout=5)
-        session.info["held_draft_lock"] = True
-        first_acquired.set()
-
-    def release_row_lock(session, transaction):
-        if transaction.parent is None and session.info.pop("held_draft_lock", False):
-            row_lock.release()
-
-    def provider(kind, result):
-        paid_calls.append(kind)
-        assert loser_finished.wait(timeout=5)
-        return result
-
-    monkeypatch.setattr(workflows_service, "get_marketing_image_url", lambda *_args, **_kw: "https://storage.test/signed-image")
-    monkeypatch.setattr(workflows_service, "generate_marketing_image", lambda **_kw: provider("image", "businesses/business-1/image.png"))
-    monkeypatch.setattr(generation_service, "generate_video", lambda **_kw: provider("video", {"video_id": "concurrent-video"}))
-
-    def request(kind):
-        response = client.post("/drafts/draft-1/generate-image") if kind == "image" else client.post(GENERATION_PATH, json=REQUEST)
-        if response.status_code == 409:
-            loser_finished.set()
-        return response.status_code
-
-    event.listen(Session, "do_orm_execute", simulate_row_lock)
-    event.listen(Session, "after_transaction_end", release_row_lock)
-    try:
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            image = pool.submit(request, "image")
-            video = pool.submit(request, "video")
-            assert sorted([image.result(timeout=10), video.result(timeout=10)]) == [200, 409]
-    finally:
-        event.remove(Session, "do_orm_execute", simulate_row_lock)
-        event.remove(Session, "after_transaction_end", release_row_lock)
-    assert paid_calls == [first]

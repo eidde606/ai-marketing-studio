@@ -8,7 +8,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.features.content import openai_provider
-from tests.tenancy_fixtures import grant_test_owner
+from tests.tenancy_fixtures import (
+    grant_test_active_entitlement,
+    grant_test_owner,
+)
 from app.models import Business, Conversation, ConversationMessage, Draft
 
 
@@ -47,7 +50,10 @@ def test_ai_platform_maps_only_to_supported_destinations(
                 platform="Facebook",
             ),
         ])
-        grant_test_owner(db, [business.id])
+        principal = grant_test_owner(db, [business.id])
+        grant_test_active_entitlement(
+            db, [business.id], owner_user_id=principal.user_id,
+        )
         db.commit()
         business_id, conversation_id = business.id, conversation.id
 
@@ -61,7 +67,7 @@ def test_ai_platform_maps_only_to_supported_destinations(
         f"/businesses/{business_id}/generate-content" if workflow == "automatic" else
         f"/businesses/{business_id}/sofia/conversations/{conversation_id}/generate-draft"
     )
-    response = client.post(url)
+    response = client.post(url, json={"idempotency_key": "platform-generation"})
     assert response.status_code == (201 if workflow == "automatic" else 200)
     body = response.json()
     assert body["platform"] == platform
@@ -109,7 +115,10 @@ def test_lowercase_tiktok_is_consistent_across_generation_routes(
         db.add(conversation)
         db.flush()
         db.add(ConversationMessage(conversation_id=conversation.id, role="user", content="TikTok"))
-        grant_test_owner(db, [business.id])
+        principal = grant_test_owner(db, [business.id])
+        grant_test_active_entitlement(
+            db, [business.id], owner_user_id=principal.user_id,
+        )
         db.commit()
         business_id, conversation_id = business.id, conversation.id
     generate = Mock(return_value=generated_content("tiktok"))
@@ -121,7 +130,7 @@ def test_lowercase_tiktok_is_consistent_across_generation_routes(
         f"/businesses/{business_id}/generate-content" if workflow == "automatic" else
         f"/businesses/{business_id}/sofia/conversations/{conversation_id}/generate-draft"
     )
-    response = client.post(url)
+    response = client.post(url, json={"idempotency_key": "lowercase-platform-generation"})
     assert response.status_code == (201 if workflow == "automatic" else 200)
     assert response.json()["platform"] == "tiktok"
     assert response.json()["publish_destinations"] == expected

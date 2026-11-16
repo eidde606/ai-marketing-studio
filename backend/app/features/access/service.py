@@ -59,8 +59,11 @@ def require_permission(
 
 def require_draft_permission(db: Session, principal: AuthenticatedPrincipal,
                              draft_id: str, permission: Permission, *,
-                             lock: bool = False) -> TenantAccess:
-    business_id = repository.visible_draft_business(db, principal, draft_id)
+                             lock: bool = False,
+                             include_deleted: bool = False) -> TenantAccess:
+    business_id = repository.visible_draft_business(
+        db, principal, draft_id, include_deleted=include_deleted,
+    )
     if business_id is None:
         raise ApplicationError(ErrorKind.NOT_FOUND, "Draft not found")
     return require_permission(

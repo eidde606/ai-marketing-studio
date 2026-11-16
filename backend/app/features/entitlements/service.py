@@ -16,7 +16,7 @@ from . import repository
 _TRIAL_LIMIT_DEFAULTS = {
     "businesses": 1,
     "leo_generations": 20,
-    "sofia_requests": 0,
+    "sofia_requests": 5,
     "campaigns": 2,
     "heygen_generations": 0,
 }
@@ -31,6 +31,14 @@ _USAGE_LIMITS = {
     "leo_generation": "leo_generations",
     "sofia_request": "sofia_requests",
 }
+_AI_PERMISSIONS = frozenset({
+    Permission.USE_SOFIA,
+    Permission.USE_LEO,
+    Permission.GENERATE_MEDIA,
+})
+_MISSING_AI_ENTITLEMENT = (
+    "An active trial or subscription is required to use AI features."
+)
 
 
 def public_registration_enabled() -> bool:
@@ -198,6 +206,10 @@ def effective_status(entitlement: CustomerEntitlement, *, now: datetime | None =
 def assert_mutation_allowed(db: Session, business_id: str, permission: Permission) -> None:
     entitlement = repository.entitlement_for_business(db, business_id)
     if entitlement is None:
+        if permission in _AI_PERMISSIONS:
+            raise ApplicationError(
+                ErrorKind.LIMIT_EXCEEDED, _MISSING_AI_ENTITLEMENT,
+            )
         return
     status = effective_status(entitlement)
     if status in {"trialing", "active", "operator_granted"}:
@@ -225,6 +237,23 @@ def assert_publishing_allowed(db: Session, business_id: str) -> None:
     )
 
 
+def assert_trial_image_generation_allowed(db: Session, business_id: str) -> None:
+    entitlement = entitlement_for_business(db, business_id)
+    if entitlement is not None and effective_status(entitlement) == "trialing":
+        raise ApplicationError(
+            ErrorKind.LIMIT_EXCEEDED,
+            "AI image generation and editing are not available during the free trial.",
+        )
+
+
+def assert_image_generation_disabled(db: Session, business_id: str) -> None:
+    assert_trial_image_generation_allowed(db, business_id)
+    raise ApplicationError(
+        ErrorKind.LIMIT_EXCEEDED,
+        "AI image generation and editing are temporarily unavailable.",
+    )
+
+
 def reserve_usage(
     db: Session,
     principal: AuthenticatedPrincipal,
@@ -237,7 +266,9 @@ def reserve_usage(
         raise ValueError("Unsupported AI usage metric")
     entitlement = repository.entitlement_for_business(db, business_id)
     if entitlement is None:
-        return None, False
+        raise ApplicationError(
+            ErrorKind.LIMIT_EXCEEDED, _MISSING_AI_ENTITLEMENT,
+        )
     status = effective_status(entitlement)
     if status not in {"trialing", "active"}:
         raise ApplicationError(
@@ -300,6 +331,18 @@ def finish_usage(db: Session, reservation_id: str, *, succeeded: bool, result_id
 def release_usage_before_provider_call(db: Session, reservation_id: str) -> None:
     """Release a reservation only when the provider was definitely not called."""
     if repository.release_usage_reservation(db, reservation_id):
+        Transactions(db).commit()
+
+
+def release_usage_for_nonbillable_failure(
+    db: Session,
+    reservation_ids: list[str],
+) -> None:
+    """Release reservations when a provider rejects authentication before generation."""
+    updated = False
+    for reservation_id in sorted(set(reservation_ids)):
+        updated = repository.release_usage_reservation(db, reservation_id) or updated
+    if updated:
         Transactions(db).commit()
 
 

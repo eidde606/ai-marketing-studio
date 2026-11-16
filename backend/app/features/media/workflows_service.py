@@ -9,6 +9,7 @@ from app.errors import ApplicationError, ErrorKind
 from app.features.access import service as access
 from app.features.access.permissions import Permission
 from app.features.access.principal import AuthenticatedPrincipal, TenantAccess
+from app.features.entitlements import service as entitlement_service
 from app.features.drafts import repository as drafts
 from app.models import Draft, ImageRevision
 from app.storage_service import (
@@ -36,7 +37,9 @@ def _draft(
     *,
     include_deleted: bool = False,
 ) -> tuple[TenantAccess, Draft]:
-    context = access.require_draft_permission(db, principal, draft_id, permission)
+    context = access.require_draft_permission(
+        db, principal, draft_id, permission, include_deleted=include_deleted,
+    )
     draft = drafts.get_draft_scoped(
         db, context, draft_id, include_deleted=include_deleted,
     )
@@ -192,6 +195,9 @@ def generate_image(
     ):
         raise _failure(ErrorKind.CONFLICT, "A video or video operation already exists")
 
+    entitlement_service.assert_image_generation_disabled(
+        db, context.business_id,
+    )
     generation_id = str(uuid4())
     if not repository.reserve_image_generation_scoped(
         db, context, draft_id, generation_id, datetime.now(timezone.utc),
@@ -362,6 +368,9 @@ def create_image_revision(
             "Review or reject it before requesting another.",
         )
 
+    entitlement_service.assert_image_generation_disabled(
+        db, context.business_id,
+    )
     revision = ImageRevision(
         draft_id=draft.id,
         original_image_path=draft.image_url,

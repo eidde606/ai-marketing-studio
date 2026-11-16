@@ -236,6 +236,8 @@ def test_business_context_denies_inactive_memberships(boundary_client, signed_to
 
 
 def test_multi_business_roles_and_revocation(boundary_client, signed_token):
+    from tests.tenancy_fixtures import grant_test_active_entitlement
+
     client, engine = boundary_client
     add_user(engine)
     with Session(engine) as db:
@@ -243,6 +245,9 @@ def test_multi_business_roles_and_revocation(boundary_client, signed_token):
         db.flush()
         db.add_all([BusinessMembership(id=business, business_id=business, user_id="application-user", role=role)
                     for business, role in (("a", "member"), ("b", "admin"))])
+        grant_test_active_entitlement(
+            db, ["a", "b"], owner_user_id="application-user",
+        )
         db.commit()
     # JWT/client-selected roles and tenant IDs are never permission grants.
     token = signed_token(changes={"role": "owner", "user_id": "forged", "business_id": "b"})

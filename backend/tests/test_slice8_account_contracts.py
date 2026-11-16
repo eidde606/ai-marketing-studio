@@ -25,7 +25,10 @@ from app.models import (
 )
 from tests.test_authentication_integration import auth_client, signed_token, signing_keys, headers, add_user
 from tests.test_tenant_foundation_postgres import postgres_database
-from tests.tenancy_fixtures import grant_test_owner
+from tests.tenancy_fixtures import (
+    grant_test_active_entitlement,
+    grant_test_owner,
+)
 from tests.test_ai_destinations import generated_content
 
 
@@ -35,6 +38,8 @@ def seed(engine):
         db.flush()
         actor = grant_test_owner(db, ["a"])
         other = grant_test_owner(db, ["b"], subject="other")
+        grant_test_active_entitlement(db, ["a"], owner_user_id=actor.user_id)
+        grant_test_active_entitlement(db, ["b"], owner_user_id=other.user_id)
         db.commit()
         return actor, other
 
@@ -364,7 +369,10 @@ def test_all_language_combinations_reach_separate_provider_prompts(isolated_clie
     assert client.patch("/businesses/a/preferences", json={"marketing_content_language": content}).status_code == 200
     provider = Mock(side_effect=[SimpleNamespace(output_text="Strategy"), SimpleNamespace(output_text=json.dumps(generated_content("TikTok")))])
     monkeypatch.setattr(openai_provider.client.responses, "create", provider)
-    response = client.post("/businesses/a/generate-content")
+    response = client.post(
+        "/businesses/a/generate-content",
+        json={"idempotency_key": "language-content-generation"},
+    )
     assert response.status_code == 201
     assert response.json()["marketing_content_language"] == content
     assert response.json()["publish_destinations"] == ["tiktok"]
@@ -381,15 +389,29 @@ def test_chat_language_snapshot_and_explicit_output_override(isolated_client, mo
     seed(engine)
     reply = Mock(return_value=SimpleNamespace(output_text="Hola"))
     monkeypatch.setattr(sofia_provider.client.responses, "create", reply)
-    created = client.post("/businesses/a/sofia/chat", json={"message": "Hello", "conversation_language": "es"})
+    created = client.post("/businesses/a/sofia/chat", json={
+        "message": "Hello",
+        "conversation_language": "es",
+        "idempotency_key": "language-chat-create",
+    })
     assert created.status_code == 200
     conversation_id = created.json()["conversation_id"]
     assert "professionally in Spanish" in reply.call_args.kwargs["instructions"]
-    client.post("/businesses/a/sofia/chat", json={"message": "Continue", "conversation_id": conversation_id})
+    client.post("/businesses/a/sofia/chat", json={
+        "message": "Continue",
+        "conversation_id": conversation_id,
+        "idempotency_key": "language-chat-continue",
+    })
     assert "professionally in Spanish" in reply.call_args.kwargs["instructions"]
     provider = Mock(side_effect=[SimpleNamespace(output_text="Strategy"), SimpleNamespace(output_text=json.dumps(generated_content("Instagram")))])
     monkeypatch.setattr(openai_provider.client.responses, "create", provider)
-    response = client.post(f"/businesses/a/sofia/conversations/{conversation_id}/generate-draft", json={"marketing_content_language": "en"})
+    response = client.post(
+        f"/businesses/a/sofia/conversations/{conversation_id}/generate-draft",
+        json={
+            "marketing_content_language": "en",
+            "idempotency_key": "language-conversation-generation",
+        },
+    )
     assert response.status_code == 200
     assert response.json()["publish_destinations"] == []
     assert "Respond only in Spanish" in provider.call_args_list[0].kwargs["instructions"]

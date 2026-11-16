@@ -55,10 +55,14 @@ def require_pending_draft(db: Session, draft_id: str) -> Draft:
 
 
 def _authorized_draft(db, principal, draft_id, permission, *, include_deleted=False):
-    context = require_draft_permission(db, principal, draft_id, permission)
+    context = require_draft_permission(
+        db, principal, draft_id, permission, include_deleted=include_deleted,
+    )
     draft = repository.lock_draft_scoped(db, context, draft_id, include_deleted=include_deleted)
     # READ COMMITTED: membership/role may have changed while the row lock waited.
-    context = require_draft_permission(db, principal, draft_id, permission)
+    context = require_draft_permission(
+        db, principal, draft_id, permission, include_deleted=include_deleted,
+    )
     if draft is None:
         raise DraftError(DraftErrorKind.NOT_FOUND)
     if not include_deleted and draft.status != "pending":
@@ -119,9 +123,13 @@ def delete_draft(draft_id: str, db: Session, *, principal: AuthenticatedPrincipa
     if repository.soft_delete_if_idle_scoped(db, context, draft_id, datetime.now(timezone.utc)) is None:
         Transactions(db).rollback()
         raise DraftError(DraftErrorKind.DELETE_IN_PROGRESS)
-    require_draft_permission(db, principal, draft_id, permission)
+    require_draft_permission(
+        db, principal, draft_id, permission, include_deleted=True,
+    )
     Transactions(db).commit()
-    context = require_draft_permission(db, principal, draft_id, Permission.READ)
+    context = require_draft_permission(
+        db, principal, draft_id, Permission.READ, include_deleted=True,
+    )
     return repository.get_draft_scoped(db, context, draft_id, include_deleted=True)
 
 

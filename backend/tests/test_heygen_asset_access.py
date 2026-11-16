@@ -6,7 +6,10 @@ def test_private_assets_must_be_explicitly_assigned_and_are_exclusive(
     isolated_client,
 ):
     from app.models import Business
-    from tests.tenancy_fixtures import grant_test_owner
+    from tests.tenancy_fixtures import (
+        grant_test_active_entitlement,
+        grant_test_owner,
+    )
 
     client, engine = isolated_client
     with Session(engine) as db:
@@ -16,6 +19,9 @@ def test_private_assets_must_be_explicitly_assigned_and_are_exclusive(
         ])
         db.flush()
         principal = grant_test_owner(db, ["business-a", "business-b"])
+        grant_test_active_entitlement(
+            db, ["business-a", "business-b"], owner_user_id=principal.user_id,
+        )
         db.commit()
 
     assigned = client.post(
@@ -71,7 +77,10 @@ def test_business_cannot_generate_with_another_business_private_assets(
 ):
     from app.features.media import generation_service
     from app.models import Business, Draft, HeyGenAssetAccess
-    from tests.tenancy_fixtures import grant_test_owner
+    from tests.tenancy_fixtures import (
+        grant_test_active_entitlement,
+        grant_test_owner,
+    )
 
     client, engine = isolated_client
     with Session(engine) as db:
@@ -79,6 +88,9 @@ def test_business_cannot_generate_with_another_business_private_assets(
         db.add(Business(id="business-b", name="B"))
         db.flush()
         principal = grant_test_owner(db, ["business-a", "business-b"])
+        grant_test_active_entitlement(
+            db, ["business-a", "business-b"], owner_user_id=principal.user_id,
+        )
         db.add(Draft(
             id="draft-business-b",
             business_id="business-b",
@@ -124,13 +136,19 @@ def test_provider_asset_id_without_assignment_cannot_start_generation(
 ):
     from app.features.media import generation_service
     from app.models import Business, Draft, HeyGenAssetAccess, HeyGenGenerationAttempt
-    from tests.tenancy_fixtures import grant_test_owner
+    from tests.tenancy_fixtures import (
+        grant_test_active_entitlement,
+        grant_test_owner,
+    )
 
     client, engine = isolated_client
     with Session(engine) as db:
         db.add(Business(id="business-1", name="Business"))
         db.flush()
         principal = grant_test_owner(db, ["business-1"])
+        grant_test_active_entitlement(
+            db, ["business-1"], owner_user_id=principal.user_id,
+        )
         db.add(Draft(
             id="draft-1",
             business_id="business-1",

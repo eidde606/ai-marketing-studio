@@ -11,7 +11,7 @@ from app.features.access.principal import Principal
 from app.features.access.service import resolve_principal
 from app.features.access import repository as access_repository
 from app.features.content import service, adapters, generation_service
-from app.features.content.schemas import SofiaChatRequest
+from app.features.content.schemas import AIGenerationRequest, SofiaChatRequest
 from tests.test_tenant_foundation_postgres import postgres_database
 from tests.test_tenant_repositories import ISSUER, seed_tenants
 from tests.test_ai_destinations import generated_content
@@ -35,11 +35,18 @@ def test_revocation_commits_while_provider_waits(postgres_database, monkeypatch,
             try:
                 if "chat" in workflow:
                     service.sofia_chat("a", SofiaChatRequest(message="new",
-                        conversation_id="a-conversation" if workflow == "existing_chat" else None), db=db, principal=principal)
+                        conversation_id="a-conversation" if workflow == "existing_chat" else None,
+                        idempotency_key=f"{workflow}-request"), db=db, principal=principal)
                 elif workflow == "automatic":
-                    service.generate_content("a", db=db, principal=principal)
+                    service.generate_content(
+                        "a", db=db, principal=principal,
+                        request=AIGenerationRequest(idempotency_key=f"{workflow}-request"),
+                    )
                 else:
-                    service.generate_sofia_conversation_draft("a", "a-conversation", db=db, principal=principal)
+                    service.generate_sofia_conversation_draft(
+                        "a", "a-conversation", db=db, principal=principal,
+                        request=AIGenerationRequest(idempotency_key=f"{workflow}-request"),
+                    )
             except ApplicationError as exc:
                 assert not db.in_transaction()
                 return exc.kind
