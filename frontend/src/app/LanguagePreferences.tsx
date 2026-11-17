@@ -1,30 +1,45 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { useLocalization } from "./localization";
+import { FileText, Languages, MessageCircle } from "lucide-react";
+import { useLocalization } from "./useLocalization";
 import {
   getBusinessPreferences,
   updateBusinessPreferences,
   type Language,
 } from "../services/accountApi";
 
+type LanguageDraft = { userId: string; language: Language };
+type Feedback = {
+  scope: string;
+  preference: "interface" | "conversation" | "content";
+  result: "saved" | "error";
+};
+
 export default function LanguagePreferences({
   businessId,
 }: {
   businessId: string;
 }) {
-  const { account, saveAccountPreferences, t } = useLocalization();
-  const [conversationPreference, setConversationPreference] = useState<{
-    userId: string;
-    language: Language;
-  } | null>(null);
+  const {
+    account,
+    accountError,
+    accountLoading,
+    refreshAccount,
+    saveAccountPreferences,
+    setInterfaceLanguage,
+    t,
+  } = useLocalization();
+  const [interfaceDraft, setInterfaceDraft] = useState<LanguageDraft | null>(
+    null,
+  );
+  const [conversationDraft, setConversationDraft] =
+    useState<LanguageDraft | null>(null);
   const [contentLanguage, setContentLanguage] = useState<Language>("en");
   const [contentError, setContentError] = useState(false);
   const [loadedContentBusinessId, setLoadedContentBusinessId] = useState("");
-  const [savingConversation, setSavingConversation] = useState(false);
-  const [savingContent, setSavingContent] = useState(false);
-  const [feedback, setFeedback] = useState<{
-    businessId: string;
-    message: string;
-  } | null>(null);
+  const [savingPreference, setSavingPreference] = useState<
+    "interface" | "conversation" | "content" | null
+  >(null);
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const activeBusinessId = useRef(businessId);
   const contentRequest = useRef(0);
@@ -33,14 +48,17 @@ export default function LanguagePreferences({
     activeBusinessId.current = businessId;
   }, [businessId]);
 
+  const userId = account?.user_id ?? "";
+  const interfaceLanguage =
+    interfaceDraft?.userId === userId
+      ? interfaceDraft.language
+      : (account?.preferences.interface_language ?? "en");
   const conversationLanguage =
-    conversationPreference && conversationPreference.userId === account?.user_id
-      ? conversationPreference.language
+    conversationDraft?.userId === userId
+      ? conversationDraft.language
       : (account?.preferences.conversation_language ?? "en");
   const contentLoading =
     Boolean(businessId) && loadedContentBusinessId !== businessId;
-  const currentFeedback =
-    feedback?.businessId === businessId ? feedback.message : "";
 
   useEffect(() => {
     if (!businessId) return;
@@ -63,49 +81,109 @@ export default function LanguagePreferences({
     };
   }, [businessId, refreshVersion]);
 
+  function showFeedback(
+    preference: Feedback["preference"],
+    result: Feedback["result"],
+    scope = userId,
+  ) {
+    setFeedback({ scope, preference, result });
+  }
+
+  async function saveInterface(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!userId || savingPreference) return;
+    setSavingPreference("interface");
+    setFeedback(null);
+    try {
+      const saved = await setInterfaceLanguage(interfaceLanguage);
+      if (saved) {
+        setInterfaceDraft(null);
+        showFeedback("interface", "saved");
+      } else {
+        showFeedback("interface", "error");
+      }
+    } catch {
+      showFeedback("interface", "error");
+    } finally {
+      setSavingPreference(null);
+    }
+  }
+
   async function saveConversation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setSavingConversation(true);
+    if (!userId || savingPreference) return;
+    setSavingPreference("conversation");
     setFeedback(null);
     try {
       await saveAccountPreferences({
         conversation_language: conversationLanguage,
       });
-      setFeedback({
-        businessId,
-        message: t("language.conversationSaved"),
-      });
+      setConversationDraft(null);
+      showFeedback("conversation", "saved");
     } catch {
-      setFeedback({ businessId, message: t("language.preferenceError") });
+      showFeedback("conversation", "error");
     } finally {
-      setSavingConversation(false);
+      setSavingPreference(null);
     }
   }
 
   async function saveContent(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!businessId) return;
-    setSavingContent(true);
+    if (!businessId || contentError || savingPreference) return;
+    const targetBusinessId = businessId;
+    setSavingPreference("content");
     setFeedback(null);
     try {
-      const preferences = await updateBusinessPreferences(businessId, {
+      const preferences = await updateBusinessPreferences(targetBusinessId, {
         marketing_content_language: contentLanguage,
       });
-      if (activeBusinessId.current === businessId) {
+      if (activeBusinessId.current === targetBusinessId) {
         setContentLanguage(preferences.marketing_content_language);
-        setFeedback({
-          businessId,
-          message: t("language.contentSaved"),
-        });
+        showFeedback("content", "saved", targetBusinessId);
       }
     } catch {
-      if (activeBusinessId.current === businessId) {
-        setFeedback({ businessId, message: t("language.preferenceError") });
+      if (activeBusinessId.current === targetBusinessId) {
+        showFeedback("content", "error", targetBusinessId);
       }
     } finally {
-      setSavingContent(false);
+      setSavingPreference(null);
     }
   }
+
+  function retryContent() {
+    setLoadedContentBusinessId("");
+    setContentError(false);
+    setRefreshVersion((value) => value + 1);
+  }
+
+  function feedbackFor(preference: Feedback["preference"], scope: string) {
+    if (
+      !feedback ||
+      feedback.preference !== preference ||
+      feedback.scope !== scope
+    ) {
+      return null;
+    }
+    const key =
+      feedback.result === "error"
+        ? "language.preferenceError"
+        : preference === "interface"
+          ? "language.interfaceSaved"
+          : preference === "conversation"
+            ? "language.conversationSaved"
+            : "language.contentSaved";
+    return (
+      <p
+        className={`settings-language__feedback settings-language__feedback--${feedback.result}`}
+        role={feedback.result === "error" ? "alert" : "status"}
+      >
+        {t(key)}
+      </p>
+    );
+  }
+
+  const accountUnavailable =
+    accountLoading || !account || Boolean(accountError);
 
   return (
     <section
@@ -119,87 +197,176 @@ export default function LanguagePreferences({
         </div>
       </div>
 
-      <form className="settings-language__form" onSubmit={saveConversation}>
-        <label htmlFor="conversation-language">
-          {t("language.conversation")}
-        </label>
-        <select
-          id="conversation-language"
-          value={conversationLanguage}
-          onChange={(event) =>
-            account &&
-            setConversationPreference({
-              userId: account.user_id,
-              language: event.target.value as Language,
-            })
-          }
-          disabled={savingConversation}
-        >
-          <option value="en">{t("common.english")}</option>
-          <option value="es">{t("common.spanish")}</option>
-        </select>
-        <button type="submit" disabled={savingConversation}>
-          {savingConversation
-            ? t("common.saving")
-            : t("language.saveConversation")}
-        </button>
-      </form>
+      {accountLoading && (
+        <p className="settings-language__notice" role="status">
+          {t("language.accountLoading")}
+        </p>
+      )}
+      {accountError && (
+        <div className="settings-language__notice" role="alert">
+          <p>{t("language.accountError")}</p>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => void refreshAccount()}
+          >
+            {t("common.retry")}
+          </button>
+        </div>
+      )}
 
-      <form className="settings-language__form" onSubmit={saveContent}>
-        <label htmlFor="content-language">{t("language.content")}</label>
-        {contentLoading || loadedContentBusinessId !== businessId ? (
-          <p role="status">{t("language.loadingBusiness")}</p>
-        ) : businessId ? (
-          <>
-            <select
-              id="content-language"
-              value={contentLanguage}
-              onChange={(event) =>
-                setContentLanguage(event.target.value as Language)
-              }
-              disabled={contentError || savingContent}
-              aria-invalid={contentError}
-            >
-              <option value="en">{t("common.english")}</option>
-              <option value="es">{t("common.spanish")}</option>
-            </select>
-            {contentError ? (
-              <div role="alert">
-                <span>{t("language.preferenceError")}</span>
+      <div className="settings-language__grid">
+        <form
+          className="settings-language__card"
+          onSubmit={(event) => void saveInterface(event)}
+        >
+          <span className="settings-language__icon" aria-hidden="true">
+            <Languages size={20} />
+          </span>
+          <div className="settings-language__copy">
+            <label htmlFor="interface-language">
+              {t("language.interface")}
+            </label>
+            <p id="interface-language-help">{t("language.interfaceHelp")}</p>
+          </div>
+          <select
+            id="interface-language"
+            value={interfaceLanguage}
+            onChange={(event) =>
+              userId &&
+              setInterfaceDraft({
+                userId,
+                language: event.target.value as Language,
+              })
+            }
+            disabled={accountUnavailable || savingPreference !== null}
+            aria-describedby="interface-language-help"
+          >
+            <option value="en">{t("common.english")}</option>
+            <option value="es">{t("common.spanish")}</option>
+          </select>
+          <button
+            type="submit"
+            className="primary-button"
+            disabled={
+              accountUnavailable ||
+              savingPreference !== null ||
+              interfaceLanguage === account?.preferences.interface_language
+            }
+          >
+            {savingPreference === "interface"
+              ? t("common.saving")
+              : t("language.saveInterface")}
+          </button>
+          {feedbackFor("interface", userId)}
+        </form>
+
+        <form
+          className="settings-language__card"
+          onSubmit={(event) => void saveConversation(event)}
+        >
+          <span className="settings-language__icon" aria-hidden="true">
+            <MessageCircle size={20} />
+          </span>
+          <div className="settings-language__copy">
+            <label htmlFor="conversation-language">
+              {t("language.conversation")}
+            </label>
+            <p id="conversation-language-help">
+              {t("language.conversationHelp")}
+            </p>
+          </div>
+          <select
+            id="conversation-language"
+            value={conversationLanguage}
+            onChange={(event) =>
+              userId &&
+              setConversationDraft({
+                userId,
+                language: event.target.value as Language,
+              })
+            }
+            disabled={accountUnavailable || savingPreference !== null}
+            aria-describedby="conversation-language-help"
+          >
+            <option value="en">{t("common.english")}</option>
+            <option value="es">{t("common.spanish")}</option>
+          </select>
+          <button
+            type="submit"
+            className="primary-button"
+            disabled={
+              accountUnavailable ||
+              savingPreference !== null ||
+              conversationLanguage ===
+                account?.preferences.conversation_language
+            }
+          >
+            {savingPreference === "conversation"
+              ? t("common.saving")
+              : t("language.saveConversation")}
+          </button>
+          {feedbackFor("conversation", userId)}
+        </form>
+
+        <form
+          className="settings-language__card"
+          onSubmit={(event) => void saveContent(event)}
+        >
+          <span className="settings-language__icon" aria-hidden="true">
+            <FileText size={20} />
+          </span>
+          <div className="settings-language__copy">
+            <label htmlFor="content-language">{t("language.content")}</label>
+            <p id="content-language-help">{t("language.contentHelp")}</p>
+          </div>
+          {contentLoading ? (
+            <p className="settings-language__notice" role="status">
+              {t("language.loadingBusiness")}
+            </p>
+          ) : businessId ? (
+            <>
+              <select
+                id="content-language"
+                value={contentLanguage}
+                onChange={(event) =>
+                  setContentLanguage(event.target.value as Language)
+                }
+                disabled={contentError || savingPreference !== null}
+                aria-describedby="content-language-help"
+                aria-invalid={contentError}
+              >
+                <option value="en">{t("common.english")}</option>
+                <option value="es">{t("common.spanish")}</option>
+              </select>
+              {contentError ? (
                 <button
                   type="button"
-                  onClick={() => {
-                    setLoadedContentBusinessId("");
-                    setContentError(false);
-                    setRefreshVersion((value) => value + 1);
-                  }}
+                  className="secondary-button"
+                  onClick={retryContent}
                 >
                   {t("common.retry")}
                 </button>
-              </div>
-            ) : (
-              <button type="submit" disabled={savingContent}>
-                {savingContent ? t("common.saving") : t("language.saveContent")}
-              </button>
-            )}
-          </>
-        ) : (
-          <p role="status">{t("language.noBusiness")}</p>
-        )}
-      </form>
-
-      {currentFeedback && (
-        <p
-          className="settings-profile-feedback"
-          role={
-            currentFeedback === t("language.preferenceError")
-              ? "alert"
-              : "status"
-          }
-        >
-          {currentFeedback}
-        </p>
-      )}
+              ) : (
+                <button
+                  type="submit"
+                  className="primary-button"
+                  disabled={savingPreference !== null}
+                >
+                  {savingPreference === "content"
+                    ? t("common.saving")
+                    : t("language.saveContent")}
+                </button>
+              )}
+              {feedbackFor("content", businessId)}
+            </>
+          ) : (
+            <p className="settings-language__notice" role="status">
+              {t("language.noBusiness")}
+            </p>
+          )}
+        </form>
+      </div>
     </section>
   );
 }

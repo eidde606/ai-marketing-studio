@@ -14,6 +14,7 @@ class Permission(str, Enum):
     MANAGE_CAMPAIGNS = "manage_campaigns"
     USE_SOFIA = "use_sofia"
     USE_LEO = "use_leo"
+    USE_EDIAN = "use_edian"
     GENERATE_MEDIA = "generate_media"
     UPLOAD_MEDIA = "upload_media"
     SUBMIT_FOR_APPROVAL = "submit_for_approval"
@@ -31,7 +32,8 @@ class Permission(str, Enum):
 
 _MEMBER = frozenset({
     Permission.READ, Permission.EDIT_CONTENT, Permission.MANAGE_CAMPAIGNS,
-    Permission.USE_SOFIA, Permission.USE_LEO, Permission.GENERATE_MEDIA,
+    Permission.USE_SOFIA, Permission.USE_LEO, Permission.USE_EDIAN,
+    Permission.GENERATE_MEDIA,
     Permission.UPLOAD_MEDIA, Permission.SUBMIT_FOR_APPROVAL,
 })
 _ADMIN = _MEMBER | frozenset({

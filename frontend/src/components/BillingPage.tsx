@@ -5,7 +5,8 @@ import {
   CreditCard,
   RefreshCw,
 } from "lucide-react";
-import { useLocalization, type Translate } from "../app/localization";
+import type { Translate } from "../app/localization";
+import { useLocalization } from "../app/useLocalization";
 import {
   createBillingCheckout,
   createBillingPortal,
@@ -32,6 +33,7 @@ const usageKeys: ReadonlyArray<readonly [string, Parameters<Translate>[0]]> = [
   ["businesses", "billing.usage.businesses"],
   ["leo_generations", "billing.usage.leo"],
   ["sofia_requests", "billing.usage.sofia"],
+  ["edian_analyses", "billing.usage.edian"],
   ["campaigns", "billing.usage.campaigns"],
   ["heygen_generations", "billing.usage.heygen"],
 ] as const;
@@ -43,10 +45,11 @@ export default function BillingPage({ businessId, membershipRole }: Props) {
   const [action, setAction] = useState<"checkout" | "portal" | null>(null);
   const [actionError, setActionError] = useState(false);
   const [reload, setReload] = useState(0);
-  const [checkoutReturned] = useState(
-    () =>
-      new URLSearchParams(window.location.search).get("billing") === "success",
+  const [billingReturn] = useState(
+    () => new URLSearchParams(window.location.search).get("billing"),
   );
+  const checkoutReturned = billingReturn === "success";
+  const portalReturned = billingReturn === "returned";
   const canManageRole =
     membershipRole === "owner" || membershipRole === "admin";
 
@@ -172,6 +175,15 @@ export default function BillingPage({ businessId, membershipRole }: Props) {
           </button>
         </section>
       )}
+      {portalReturned && (
+        <section className="billing-notice" role="status">
+          <CheckCircle2 size={19} aria-hidden="true" />
+          <p>{t("billing.portalReturn")}</p>
+          <button type="button" onClick={() => setReload((value) => value + 1)}>
+            {t("common.refresh")}
+          </button>
+        </section>
+      )}
       {needsPayment && (
         <section className="billing-notice is-warning" role="alert">
           <p>{t("billing.paymentFailed")}</p>
@@ -240,9 +252,19 @@ export default function BillingPage({ businessId, membershipRole }: Props) {
           <span className="eyebrow">{t("billing.upgradeEyebrow")}</span>
           <h3>{overview.plan_name}</h3>
           <p className="billing-price">
-            {overview.price_display ?? t("billing.priceInCheckout")}
+            {overview.checkout_available
+              ? (overview.price_display ?? t("billing.priceInCheckout"))
+              : t("billing.comingSoon")}
           </p>
           <p>{t("billing.planDescription")}</p>
+          {overview.checkout_available && manageAllowed && (
+            <aside className="billing-refund-disclosure" role="note">
+              <p>{t("billing.noRefundCheckout")}</p>
+              <a href="/subscriptions">
+                {t("billing.subscriptionPolicy")}
+              </a>
+            </aside>
+          )}
           {overview.usage && (
             <ul className="billing-plan-limits">
               {usageKeys.map(([key, label]) => {
@@ -288,6 +310,11 @@ export default function BillingPage({ businessId, membershipRole }: Props) {
           )}
           {!manageAllowed && (
             <p className="billing-footnote">{t("billing.adminOnly")}</p>
+          )}
+          {overview.portal_available && manageAllowed && (
+            <p className="billing-footnote">
+              {t("billing.portalCancellationNotice")}
+            </p>
           )}
           {manageAllowed &&
             !overview.checkout_available &&

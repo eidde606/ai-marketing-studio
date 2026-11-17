@@ -35,7 +35,7 @@ def assign_private_asset(
             return {"asset_type": asset_type, "provider_asset_id": provider_asset_id}
         raise _failure(
             ErrorKind.CONFLICT,
-            "This HeyGen asset is already assigned or designated as platform stock",
+            "This video asset is already assigned or designated as platform stock",
         )
 
     try:
@@ -50,7 +50,7 @@ def assign_private_asset(
         Transactions(db).rollback()
         raise _failure(
             ErrorKind.CONFLICT,
-            "This HeyGen asset is already assigned to another access scope",
+            "This video asset is already assigned to another access scope",
         ) from exc
     return {"asset_type": asset_type, "provider_asset_id": provider_asset_id}
 
@@ -69,7 +69,7 @@ def remove_private_asset(
         db, context, asset_type, provider_asset_id,
     ):
         Transactions(db).rollback()
-        raise _failure(ErrorKind.NOT_FOUND, "Assigned HeyGen asset not found")
+        raise _failure(ErrorKind.NOT_FOUND, "Assigned video asset not found")
     Transactions(db).commit()
 
 
@@ -91,7 +91,7 @@ def require_generation_assets(
         ) is None:
             raise _failure(
                 ErrorKind.FORBIDDEN,
-                f"The selected HeyGen {asset_type} is not available to this business",
+                f"The selected video {asset_type} is not available to this business",
             )
     return context
 

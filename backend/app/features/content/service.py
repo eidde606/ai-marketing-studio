@@ -3,10 +3,10 @@ import logging
 from dataclasses import fields
 from uuid import uuid4
 
-from openai import AuthenticationError
+from openai import AuthenticationError, RateLimitError
 from sqlalchemy.orm import Session
 
-from app.errors import ApplicationError, ErrorKind
+from app.errors import ApplicationError, ErrorCode, ErrorKind
 from app.models import Conversation, Draft
 from app.transactions import Transactions, rollback_on_failure
 from app.features.access import service as access
@@ -18,6 +18,7 @@ from .context import BusinessProfile, Message, OperationContext
 from .schemas import SofiaChatRequest, AIGenerationRequest
 from .context import LanguagePreferences
 from app.features.accounts import service as accounts
+from .input_limits import MAX_HISTORY_MESSAGES
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +28,14 @@ class _ProviderAuthenticationFailure(ApplicationError):
 
 
 def _authorize(db, principal, business_id, *, generation=False, write=False, lock=False):
-    context = access.require_permission(db, principal, business_id,
-        Permission.USE_SOFIA if write or generation else Permission.READ, lock=lock)
-    if generation:
-        access.require_permission(db, principal, business_id, Permission.USE_LEO)
+    permission = (
+        Permission.USE_LEO
+        if generation
+        else Permission.USE_SOFIA if write else Permission.READ
+    )
+    context = access.require_permission(
+        db, principal, business_id, permission, lock=lock,
+    )
     if write or generation:
         access.require_permission(db, principal, business_id, Permission.EDIT_CONTENT)
     return context
@@ -58,6 +63,15 @@ def _messages(db, context, conversation_id):
         result.extend(Message(message.role, message.content) for message in batch)
         if len(batch) < 100:
             return result
+
+
+def _recent_messages(db, context, conversation_id, *, limit=MAX_HISTORY_MESSAGES):
+    return [
+        Message(message.role, message.content)
+        for message in repository.list_recent_messages_scoped(
+            db, context, conversation_id, limit=limit,
+        )
+    ]
 
 
 def _replay_sofia_usage(db, context, reservation):
@@ -94,6 +108,14 @@ def _run_provider(context, operation, callback, error_message, languages=Languag
         logger.warning("AI generation failed (AuthenticationError)")
         raise _ProviderAuthenticationFailure(
             ErrorKind.UPSTREAM_FAILURE, error_message,
+        ) from None
+    except RateLimitError:
+        execution.after_generation(attribution, succeeded=False)
+        logger.warning("AI generation failed (RateLimitError)")
+        raise ApplicationError(
+            ErrorKind.UPSTREAM_FAILURE,
+            error_message,
+            code=ErrorCode.PROVIDER_RATE_LIMITED,
         ) from None
     except Exception as exc:
         execution.after_generation(attribution, succeeded=False)
@@ -150,7 +172,14 @@ def sofia_chat(business_id: str, request: SofiaChatRequest, *, db: Session,
     if request.conversation_id:
         conversation = _conversation(db, context, conversation_id)
         conversation_language = request.conversation_language or conversation.language or conversation_language
-        messages = _messages(db, context, conversation_id)
+        messages = _recent_messages(
+            db, context, conversation_id, limit=MAX_HISTORY_MESSAGES - 1,
+        )
+    user_message = Message("user", request.message.strip())
+    messages.append(user_message)
+    adapters.validate_sofia_chat_input(
+        profile, messages, language=conversation_language,
+    )
     reservation, replay = entitlement_service.reserve_usage(
         db, principal, business_id=business_id, metric="sofia_request",
         idempotency_key=request.idempotency_key,
@@ -159,13 +188,11 @@ def sofia_chat(business_id: str, request: SofiaChatRequest, *, db: Session,
         return _replay_sofia_usage(db, context, reservation)
     if reservation is not None:
         Transactions(db).commit()
-    user_message = Message("user", request.message.strip())
-    messages.append(user_message)
     # No locks, ORM instances, or pending writes survive the provider wait.
     Transactions(db).rollback()
     try:
         reply = _run_provider(context, "sofia_chat", lambda: adapters.chat_with_sofia(profile, messages, language=conversation_language),
-                              "Sofía could not respond. Please try again.",
+                              "Sebastián could not respond. Please try again.",
                               LanguagePreferences(preferences["interface_language"], conversation_language, None))
     except _ProviderAuthenticationFailure:
         if reservation is not None:
@@ -216,34 +243,31 @@ def _generate(business_id, *, db, principal, conversation_id=None, request=None)
     if conversation_id:
         conversation = _conversation(db, context, conversation_id)
         conversation_language = request.conversation_language or conversation.language or conversation_language
-        instructions = [m.content for m in _messages(db, context, conversation_id) if m.role == "user"]
+        instructions = [
+            message.content
+            for message in _recent_messages(db, context, conversation_id)
+            if message.role == "user"
+        ]
         if not instructions:
             raise ApplicationError(ErrorKind.INVALID_INPUT, "The conversation has no campaign instructions")
         kwargs["campaign_instructions"] = "\n".join(instructions[-10:])
     kwargs.update(conversation_language=conversation_language, marketing_content_language=content_language)
     languages = LanguagePreferences(preferences["interface_language"], conversation_language, content_language)
-    sofia_reservation, sofia_replay = entitlement_service.reserve_usage(
-        db, principal, business_id=business_id, metric="sofia_request",
-        idempotency_key=request.idempotency_key,
-    )
+    generation_service.validate_marketing_content_input(profile, **kwargs)
     leo_reservation, leo_replay = entitlement_service.reserve_usage(
         db, principal, business_id=business_id, metric="leo_generation",
         idempotency_key=request.idempotency_key,
     )
-    if sofia_replay != leo_replay:
-        raise ApplicationError(ErrorKind.CONFLICT, "This request was already processed; use a new idempotency key")
-    if sofia_replay:
+    if leo_replay:
         return _replay_generation(db, context, leo_reservation)
-    reservations = [
-        item for item in (sofia_reservation, leo_reservation) if item is not None
-    ]
+    reservations = [leo_reservation] if leo_reservation is not None else []
     if reservations:
         Transactions(db).commit()
     Transactions(db).rollback()
     try:
         generated = _run_provider(context, "conversation_draft" if conversation_id else "generate_content",
             lambda: generation_service.generate_marketing_content(profile, **kwargs),
-            "Sofía and Leo could not generate the draft", languages)
+            "Sebastián and Valeria could not generate the draft", languages)
     except _ProviderAuthenticationFailure:
         if reservations:
             entitlement_service.release_usage_for_nonbillable_failure(

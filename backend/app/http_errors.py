@@ -23,4 +23,5 @@ def http_error(error: ApplicationError) -> HTTPException:
     return HTTPException(
         status_code=_STATUS[error.kind],
         detail=error.detail,
+        headers={"X-Error-Code": error.code or error.kind.value},
     )

@@ -3,11 +3,12 @@ import os
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import RedirectResponse
+from urllib.parse import urlsplit
 from sqlalchemy.orm import Session
 
 from app.auth import get_authenticated_principal
 from app.database import get_db
-from app.errors import ApplicationError
+from app.errors import ApplicationError, ErrorKind
 from app.features.access.principal import AuthenticatedPrincipal
 from app.http_errors import http_error
 from . import service
@@ -50,16 +51,25 @@ async def tiktok_callback(
             db=db,
         )
     except ApplicationError as exc:
-        raise http_error(exc) from exc
+        result = (
+            "invalid_state"
+            if "Invalid, expired, or previously used" in exc.detail
+            else "authorization_declined"
+            if exc.kind.value == "invalid_input"
+            else "provider_error"
+        )
+    else:
+        result = "connected"
 
-    frontend_url = os.environ["TIKTOK_FRONTEND_REDIRECT_URL"].rstrip("/")
-    if not frontend_url.startswith("https://"):
-        raise RuntimeError("Frontend URL must use HTTPS")
-
-    return RedirectResponse(
-        url=f"{frontend_url}/#tiktok_connected=1",
-        status_code=303,
-    )
+    try:
+        return _redirect_to_frontend(result)
+    except RuntimeError as exc:
+        raise http_error(
+            ApplicationError(
+                ErrorKind.UNAVAILABLE,
+                "TikTok callback redirect is not configured",
+            )
+        ) from exc
 
 
 @router.get("/accounts")
@@ -72,3 +82,46 @@ def get_tiktok_accounts(
         return service.list_accounts(business_id, db=db, principal=principal)
     except ApplicationError as exc:
         raise http_error(exc) from exc
+
+
+@router.delete("/accounts/{account_id}")
+def disconnect_tiktok_account(
+    account_id: str,
+    business_id: str,
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+):
+    try:
+        return service.disconnect_account(
+            account_id,
+            business_id,
+            db=db,
+            principal=principal,
+        )
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
+
+
+def _redirect_to_frontend(result: str) -> RedirectResponse:
+    frontend_url = os.getenv(
+        "TIKTOK_FRONTEND_REDIRECT_URL",
+        os.getenv("FRONTEND_BASE_URL", ""),
+    ).rstrip("/")
+    parsed = urlsplit(frontend_url)
+    if (
+        parsed.scheme not in ("http", "https")
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or (
+            parsed.scheme == "http"
+            and parsed.hostname not in ("localhost", "127.0.0.1")
+        )
+    ):
+        raise RuntimeError("Invalid frontend URL configuration")
+    return RedirectResponse(
+        url=f"{frontend_url}/#tiktok_result={result}",
+        status_code=303,
+    )

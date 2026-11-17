@@ -144,7 +144,7 @@ class AIUsageReservation(Base):
             name="uq_ai_usage_organization_metric_key",
         ),
         CheckConstraint(
-            "metric IN ('sofia_request', 'leo_generation')",
+            "metric IN ('sofia_request', 'leo_generation', 'edian_analysis')",
             name="ck_ai_usage_reservations_metric",
         ),
         CheckConstraint(
@@ -164,6 +164,38 @@ class AIUsageReservation(Base):
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="reserved")
     result_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
+class EdianAnalysis(Base):
+    """Cached Edian output for one unchanged, tenant-scoped metric snapshot."""
+
+    __tablename__ = "edian_analyses"
+    __table_args__ = (
+        UniqueConstraint(
+            "business_id", "input_fingerprint",
+            name="uq_edian_analyses_business_fingerprint",
+        ),
+        CheckConstraint(
+            "status IN ('processing', 'succeeded', 'failed')",
+            name="ck_edian_analyses_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    business_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("businesses.id"), nullable=False,
+    )
+    input_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="processing")
+    result: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
         server_default=text("CURRENT_TIMESTAMP"),
@@ -352,6 +384,28 @@ class Draft(Base):
         nullable=False,
         default="not_published",
         server_default="not_published",
+    )
+
+    instagram_media_id: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
+    instagram_permalink: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
+    instagram_publish_status: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="not_published",
+        server_default="not_published",
+    )
+
+    instagram_published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
     )
 
     tiktok_publish_status: Mapped[str] = mapped_column(
@@ -809,7 +863,7 @@ class InstagramConnection(Base):
 
 
 class Conversation(Base):
-    """A conversation with Sofía for a specific business."""
+    """A conversation with Sebastián for a specific business."""
 
     __tablename__ = "conversations"
     language: Mapped[str | None] = mapped_column(String(2), nullable=True)
@@ -841,7 +895,7 @@ class Conversation(Base):
 
 
 class ConversationMessage(Base):
-    """One message sent by the owner or Sofía."""
+    """One message sent by the owner or Sebastián."""
 
     __tablename__ = "conversation_messages"
 

@@ -3,12 +3,13 @@ import base64
 import os
 from io import BytesIO
 
-from dotenv import load_dotenv
 from openai import OpenAI
 
+from app.environment import load_application_environment
 from app.storage_service import upload_marketing_image
+from .image_processing import image_file_extension, normalize_instagram_jpeg
 
-load_dotenv(".env")
+load_application_environment(".env")
 
 client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
@@ -27,10 +28,11 @@ def _save_generated_image(
     if not image_bytes:
         raise ValueError("Decoded image data is empty.")
 
+    jpeg_bytes = normalize_instagram_jpeg(image_bytes)
     return upload_marketing_image(
-        image_bytes=image_bytes,
+        image_bytes=jpeg_bytes,
         business_id=business_id,
-        content_type="image/png",
+        content_type="image/jpeg",
     )
 
 
@@ -94,7 +96,9 @@ def edit_marketing_image(
 
     # OpenAI accepts image uploads as file-like objects.
     original_image = BytesIO(original_image_bytes)
-    original_image.name = "original.png"
+    original_image.name = (
+        f"original.{image_file_extension(original_image_bytes)}"
+    )
 
     prompt = (
         "Edit the supplied marketing image according to the "

@@ -753,3 +753,62 @@ def update_draft_media_scoped(db: Session, context: TenantAccess, draft_id: str,
         tenant.predicate(Draft, context), Draft.id == draft_id, Draft.deleted_at.is_(None),
         Draft.status == "pending", Draft.video_status == expected_video_status,
     ).values(**values).returning(Draft.id)).scalar_one_or_none() is not None
+
+
+def save_uploaded_image_scoped(
+    db: Session,
+    context: TenantAccess,
+    draft_id: str,
+    storage_path: str,
+    *,
+    expected_image_status: str,
+) -> bool:
+    if expected_image_status not in {"not_started", "failed"}:
+        raise ValueError("Unsupported image status")
+    tenant.validate_storage_path(context, storage_path)
+    return db.execute(
+        update(Draft)
+        .where(
+            tenant.predicate(Draft, context),
+            Draft.id == draft_id,
+            Draft.deleted_at.is_(None),
+            Draft.status == "pending",
+            Draft.media_type != "video",
+            Draft.video_url.is_(None),
+            Draft.video_status.in_(["not_started", "failed"]),
+            Draft.image_status == expected_image_status,
+            Draft.image_url.is_(None),
+        )
+        .values(
+            media_type="image",
+            image_url=storage_path,
+            image_status="completed",
+            image_started_at=None,
+            image_generation_id=None,
+        )
+        .returning(Draft.id)
+    ).scalar_one_or_none() is not None
+
+
+def list_reusable_images_scoped(
+    db: Session,
+    context: TenantAccess,
+    *,
+    exclude_draft_id: str,
+    limit: int = 24,
+) -> list[Draft]:
+    return list(
+        db.scalars(
+            select(Draft)
+            .where(
+                tenant.predicate(Draft, context),
+                Draft.id != exclude_draft_id,
+                Draft.deleted_at.is_(None),
+                Draft.image_status == "completed",
+                Draft.image_url.is_not(None),
+                Draft.media_type == "image",
+            )
+            .order_by(Draft.created_at.desc(), Draft.id.desc())
+            .limit(limit)
+        )
+    )

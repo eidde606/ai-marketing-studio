@@ -1,5 +1,5 @@
 import type { Session } from "@supabase/supabase-js";
-import { useEffect, useRef, useState, type FC } from "react";
+import { useCallback, useEffect, useRef, useState, type FC } from "react";
 import AnalyticsPage from "./components/AnalyticsPage";
 import ApprovalPage from "./components/ApprovalPage";
 import BillingPage from "./components/BillingPage";
@@ -34,13 +34,21 @@ import TrialStatus from "./app/TrialStatus";
 import { useAuthSession } from "./app/useAuthSession";
 import { useBusinessSelection } from "./app/useBusinessSelection";
 import SofiaChat from "./components/SofiaChat";
-import { LocalizationProvider, useLocalization } from "./app/localization";
+import { LocalizationProvider } from "./app/localization";
+import { useLocalization } from "./app/useLocalization";
 import { ApiError } from "./lib/apiClient";
 import {
   getOnboarding,
   updateTutorialCompletion,
 } from "./services/onboardingApi";
 import { getPublicConfig, registerAccount } from "./services/accountApi";
+import {
+  clearFacebookOAuthReturn,
+  restoreFacebookOAuthReturn,
+  type FacebookHandoffContext,
+} from "./app/facebookOAuthReturn";
+import LegalPages from "./features/legal/LegalPages";
+import { resolvePublicLegalPage } from "./features/legal/pagePaths";
 
 function formatDraftDate(value: string, locale: "en" | "es"): string {
   if (!value)
@@ -68,15 +76,49 @@ function getUserDisplayName(session: Session, fallback: string): string {
 }
 
 const App: FC = () => {
-  const auth = useAuthSession();
-  return (
-    <LocalizationProvider userId={auth.session?.user.id ?? null}>
-      <AppWorkspace auth={auth} />
-    </LocalizationProvider>
-  );
+  const legalPage = resolvePublicLegalPage(window.location.pathname);
+  if (legalPage) {
+    return (
+      <LocalizationProvider userId={null}>
+        <LegalPages page={legalPage} />
+      </LocalizationProvider>
+    );
+  }
+  return <AuthenticatedRoot />;
 };
 
-function AppWorkspace({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
+function AuthenticatedRoot() {
+  const auth = useAuthSession();
+  const [facebookOAuthReturn, setFacebookOAuthReturn] = useState(
+    restoreFacebookOAuthReturn,
+  );
+  const clearFacebookReturn = useCallback(() => {
+    clearFacebookOAuthReturn();
+    setFacebookOAuthReturn({ handoff: null, result: null });
+  }, []);
+  return (
+    <LocalizationProvider userId={auth.session?.user.id ?? null}>
+      <AppWorkspace
+        auth={auth}
+        facebookHandoff={facebookOAuthReturn.handoff}
+        facebookCallbackResult={facebookOAuthReturn.result}
+        onFacebookReturnResolved={clearFacebookReturn}
+      />
+    </LocalizationProvider>
+  );
+}
+
+function AppWorkspace({
+  auth,
+  facebookHandoff,
+  facebookCallbackResult,
+  onFacebookReturnResolved,
+}: {
+  auth: ReturnType<typeof useAuthSession>;
+  facebookHandoff: FacebookHandoffContext | null;
+  facebookCallbackResult: string | null;
+  onFacebookReturnResolved: () => void;
+}) {
   const { accountError, accountLoading, refreshAccount, t } = useLocalization();
   const [provisioning, setProvisioning] = useState<
     "idle" | "pending" | "failed"
@@ -173,6 +215,9 @@ function AppWorkspace({ auth }: { auth: ReturnType<typeof useAuthSession> }) {
     <AuthenticatedApp
       key={auth.session.user.id}
       session={auth.session}
+      facebookHandoff={facebookHandoff}
+      facebookCallbackResult={facebookCallbackResult}
+      onFacebookReturnResolved={onFacebookReturnResolved}
       onSignOut={auth.signOut}
       isRecoveringPassword={auth.isRecoveringPassword}
       onRecoveryComplete={auth.completeRecovery}
@@ -222,12 +267,18 @@ function WorkspaceAccessState({
 
 function AuthenticatedApp({
   session,
+  facebookHandoff,
+  facebookCallbackResult,
+  onFacebookReturnResolved,
   onSignOut,
   isRecoveringPassword,
   onRecoveryComplete,
   onSaveDisplayName,
 }: {
   session: Session;
+  facebookHandoff: FacebookHandoffContext | null;
+  facebookCallbackResult: string | null;
+  onFacebookReturnResolved: () => void;
   onSignOut: () => Promise<unknown>;
   isRecoveringPassword: boolean;
   onRecoveryComplete: () => void;
@@ -237,6 +288,7 @@ function AuthenticatedApp({
     useLocalization();
   const userDisplayName = getUserDisplayName(session, t("shell.myAccount"));
   const [activeSection, setActiveSection] = useState<Section>(() => {
+    if (facebookHandoff || facebookCallbackResult) return "Configuración";
     try {
       const saved = window.localStorage.getItem("ai-marketing-studio:section");
       const validSections: Section[] = [
@@ -262,7 +314,21 @@ function AuthenticatedApp({
     businessLoading,
     refreshBusinesses,
     addBusiness,
-  } = useBusinessSelection(session.user.id);
+  } = useBusinessSelection(
+    session.user.id,
+    facebookHandoff?.businessId ?? null,
+  );
+  const [sofiaDrafts, setSofiaDrafts] = useState<Record<string, string>>({});
+  const updateSofiaDraft = useCallback(
+    (message: string) => {
+      if (!selectedBusinessId) return;
+      setSofiaDrafts((current) => ({
+        ...current,
+        [selectedBusinessId]: message,
+      }));
+    },
+    [selectedBusinessId],
+  );
 
   // Save navigation locally; business selection is saved separately per user.
   useEffect(() => {
@@ -277,6 +343,21 @@ function AuthenticatedApp({
   const [tutorialStep, setTutorialStep] = useState(0);
   const [tutorialLoadError, setTutorialLoadError] = useState(false);
   const [tutorialRetry, setTutorialRetry] = useState(0);
+  const [strategyHandoff, setStrategyHandoff] = useState<{
+    businessId: string;
+    message: string;
+  } | null>(null);
+
+  const clearStrategyHandoff = useCallback(() => setStrategyHandoff(null), []);
+  const refreshBusinessesAndClearHandoff = useCallback(async () => {
+    setStrategyHandoff(null);
+    await refreshBusinesses();
+  }, [refreshBusinesses]);
+  const handleWorkspaceSignOut = useCallback(async () => {
+    setStrategyHandoff(null);
+    setSofiaDrafts({});
+    return onSignOut();
+  }, [onSignOut]);
 
   useEffect(() => {
     let active = true;
@@ -299,6 +380,14 @@ function AuthenticatedApp({
 
   // These hooks share one collection and lock owner for the authenticated workspace.
   // Keep them above the recovery return so pending work and edits survive recovery.
+  const canPublishSelectedBusiness = Boolean(
+    account?.businesses.some(
+      (business) =>
+        business.id === selectedBusinessId &&
+        (business.role === "owner" || business.role === "admin") &&
+        business.capabilities.includes("publish"),
+    ),
+  );
   const collection = useDraftCollection(selectedBusinessId, session.user.id);
   const operations = useDraftOperations(selectedBusinessId);
   const draftActions = useDraftActions(
@@ -311,6 +400,8 @@ function AuthenticatedApp({
     selectedBusinessId,
     collection,
     operations,
+    canPublishSelectedBusiness,
+    activeSection === "Aprobaciones",
   );
   const media = useDraftMedia(selectedBusinessId, collection, operations);
   const heygen = useHeyGenGeneration(
@@ -348,10 +439,14 @@ function AuthenticatedApp({
   const {
     draftDestinations,
     setDraftDestinations,
+    facebookPublisher,
+    instagramPublisher,
+    publisherStatusLoading,
     publishError,
     handleApprove,
     handlePublishTikTok,
     handlePublishFacebook,
+    handlePublishInstagram,
     handleVerifyTikTok,
     handleVerifyFacebookVideo,
   } = approvalActions;
@@ -368,6 +463,8 @@ function AuthenticatedApp({
     revisionErrors,
     toggleImageEditor,
     handleGenerateImage,
+    handleUploadImage,
+    handleReuseImage,
     handlePreviewImage,
     refreshRevision,
     handleCreateRevision,
@@ -379,7 +476,7 @@ function AuthenticatedApp({
     visibleDrafts.some((draft) => draft.source === "ai");
   const agents = [
     {
-      name: "Sofía",
+      name: "Sebastián",
       role: t("agent.sofiaRole"),
       state:
         loadingDrafts || loadError
@@ -396,7 +493,7 @@ function AuthenticatedApp({
             : t("agent.noGenerations"),
     },
     {
-      name: "Leo",
+      name: "Valeria",
       role: t("agent.leoRole"),
       state:
         loadingDrafts || loadError
@@ -413,9 +510,9 @@ function AuthenticatedApp({
             : t("agent.noGenerations"),
     },
     {
-      name: "Mía",
+      name: "Edian",
       role: t("agent.miaRole"),
-      state: t("agent.planned"),
+      state: t("agent.available"),
       activity: t("agent.miaPlanned"),
     },
   ];
@@ -424,17 +521,23 @@ function AuthenticatedApp({
     setShowBusinessForm(false);
   };
   const handleBusinessCreated = (business: Business) => {
+    setStrategyHandoff(null);
     addBusiness(business);
     void refreshAccount();
     setShowBusinessForm(false);
   };
   const handleOnboardingComplete = (business: Business) => {
+    setStrategyHandoff(null);
     addBusiness(business);
     void refreshAccount();
     setTutorialStep(0);
     setTutorialOpen(true);
   };
-  const replayTutorial = async () => {
+  const resumeTutorial = () => {
+    setTutorialLoadError(false);
+    setTutorialOpen(true);
+  };
+  const restartTutorial = async () => {
     try {
       const progress = await updateTutorialCompletion(false, 0);
       setTutorialStep(progress.current_step);
@@ -483,9 +586,10 @@ function AuthenticatedApp({
         denied={denied}
         loading={accountLoading || businessLoading}
         onRetry={async () => {
+          setStrategyHandoff(null);
           await Promise.all([refreshAccount(), refreshBusinesses()]);
         }}
-        onSignOut={onSignOut}
+        onSignOut={handleWorkspaceSignOut}
       />
     );
   }
@@ -496,10 +600,13 @@ function AuthenticatedApp({
           <h1>{t("app.accessUnavailable")}</h1>
           <p>{businessError}</p>
           <div className="workspace-access-state__actions">
-            <button type="button" onClick={() => void refreshBusinesses()}>
+            <button
+              type="button"
+              onClick={() => void refreshBusinessesAndClearHandoff()}
+            >
               {t("common.retry")}
             </button>
-            <button type="button" onClick={() => void onSignOut()}>
+            <button type="button" onClick={() => void handleWorkspaceSignOut()}>
               {t("shell.signOut")}
             </button>
           </div>
@@ -508,15 +615,25 @@ function AuthenticatedApp({
     );
   }
   if (businesses.length === 0) {
+    if (facebookHandoff) {
+      return (
+        <main className="workspace-access-state">
+          <section className="panel" role="alert">
+            <h1>{t("app.accessUnavailable")}</h1>
+            <p>{t("facebook.handoffBusinessUnavailable")}</p>
+            <button type="button" onClick={() => void handleWorkspaceSignOut()}>
+              {t("facebook.handoffSignOut")}
+            </button>
+          </section>
+        </main>
+      );
+    }
     return <OnboardingWizard onCreated={handleOnboardingComplete} />;
   }
   const selectedBusinessAccess = account?.businesses.find(
     (business) => business.id === selectedBusinessId,
   );
-  const canPublish =
-    (selectedBusinessAccess?.role === "owner" ||
-      selectedBusinessAccess?.role === "admin") &&
-    selectedBusinessAccess.capabilities.includes("publish");
+  const canPublish = canPublishSelectedBusiness;
   const canManageConnections =
     selectedBusinessAccess?.role === "owner" ||
     selectedBusinessAccess?.role === "admin";
@@ -529,14 +646,18 @@ function AuthenticatedApp({
       pendingCount={pendingCount}
       businesses={businesses}
       selectedBusinessId={selectedBusinessId}
-      onBusinessChange={setSelectedBusinessId}
+      onBusinessChange={(businessId) => {
+        setStrategyHandoff(null);
+        setSelectedBusinessId(businessId);
+      }}
       onAddBusiness={() => setShowBusinessForm(true)}
-      onSignOut={onSignOut}
+      onSignOut={handleWorkspaceSignOut}
       onRefreshAccess={async () => {
+        setStrategyHandoff(null);
         await Promise.all([refreshAccount(), refreshBusinesses()]);
       }}
       businessError={businessError}
-      onRetryBusinessLoad={refreshBusinesses}
+      onRetryBusinessLoad={refreshBusinessesAndClearHandoff}
       userDisplayName={userDisplayName}
       userEmail={session.user.email ?? ""}
     >
@@ -555,6 +676,23 @@ function AuthenticatedApp({
           </button>
         </p>
       )}
+      {facebookHandoff &&
+        !businessLoading &&
+        businesses.length > 0 &&
+        !businesses.some(
+          (business) => business.id === facebookHandoff.businessId,
+        ) && (
+          <div className="workspace-message--error" role="alert">
+            <p>{t("facebook.handoffBusinessUnavailable")}</p>
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => void handleWorkspaceSignOut()}
+            >
+              {t("facebook.handoffSignOut")}
+            </button>
+          </div>
+        )}
       {showBusinessForm ? (
         <BusinessForm
           onCreated={handleBusinessCreated}
@@ -600,9 +738,17 @@ function AuthenticatedApp({
       ) : activeSection === "Analíticas" ? (
         <AnalyticsPage
           key={selectedBusinessId}
+          businessId={selectedBusinessId}
           drafts={historyDrafts}
           loading={loadingDrafts}
           error={loadError}
+          onDiscussWithSebastian={(message) => {
+            setStrategyHandoff({
+              businessId: selectedBusinessId,
+              message,
+            });
+            setActiveSection("Equipo IA");
+          }}
         />
       ) : activeSection === "Aprobaciones" ? (
         <ApprovalPage
@@ -617,6 +763,9 @@ function AuthenticatedApp({
           visibleDrafts={visibleDrafts}
           draftDestinations={draftDestinations}
           setDraftDestinations={setDraftDestinations}
+          facebookPublisher={facebookPublisher}
+          instagramPublisher={instagramPublisher}
+          publisherStatusLoading={publisherStatusLoading}
           approvingIds={approvingIds}
           publishingIds={publishingIds}
           busyDraftIds={busyDraftIds}
@@ -639,12 +788,15 @@ function AuthenticatedApp({
           canApprove={canPublish}
           handleApprove={handleApprove}
           handlePublishFacebook={handlePublishFacebook}
+          handlePublishInstagram={handlePublishInstagram}
           onVerifyFacebookVideo={handleVerifyFacebookVideo}
           handlePublishTikTok={handlePublishTikTok}
           onVerifyTikTok={handleVerifyTikTok}
           handleReject={handleReject}
           handleSaveEdit={handleSaveEdit}
           handleGenerateImage={handleGenerateImage}
+          handleUploadImage={handleUploadImage}
+          handleReuseImage={handleReuseImage}
           handlePreviewImage={handlePreviewImage}
           handleCreateRevision={handleCreateRevision}
           handleDecideRevision={handleDecideRevision}
@@ -684,6 +836,24 @@ function AuthenticatedApp({
             <SofiaChat
               key={selectedBusinessId}
               businessId={selectedBusinessId}
+              draftMessage={
+                Object.prototype.hasOwnProperty.call(
+                  sofiaDrafts,
+                  selectedBusinessId,
+                )
+                  ? sofiaDrafts[selectedBusinessId]
+                  : undefined
+              }
+              onDraftChange={updateSofiaDraft}
+              initialMessage={
+                strategyHandoff?.businessId === selectedBusinessId
+                  ? strategyHandoff.message
+                  : null
+              }
+              onInitialMessageConsumed={clearStrategyHandoff}
+              onViewPlans={() => setActiveSection("Facturación")}
+              onContinueWithValeria={handleGenerateContent}
+              generationError={generationError}
               onDraftCreated={(draft) => {
                 if (!isCurrentBusiness()) return;
                 setApprovals((current) => [draft as Draft, ...current]);
@@ -723,6 +893,9 @@ function AuthenticatedApp({
         </div>
       ) : activeSection === "Configuración" ? (
         <SettingsPage
+          showIntegrationsOnMount={
+            Boolean(facebookHandoff) || Boolean(facebookCallbackResult)
+          }
           businessId={selectedBusinessId}
           userDisplayName={userDisplayName}
           userEmail={session.user.email ?? ""}
@@ -735,9 +908,10 @@ function AuthenticatedApp({
           }
           onSaveBusiness={async (values: BusinessUpdate) => {
             await updateBusiness(selectedBusinessId, values);
-            await refreshBusinesses();
+            await refreshBusinessesAndClearHandoff();
           }}
-          onReplayTutorial={() => void replayTutorial()}
+          onResumeTutorial={resumeTutorial}
+          onRestartTutorial={() => void restartTutorial()}
           canManageConnections={canManageConnections}
           features={account?.features}
           languagePreferences={
@@ -748,13 +922,24 @@ function AuthenticatedApp({
             </div>
           }
           facebookConnection={
-            <FacebookConnection businessId={selectedBusinessId} />
+            <FacebookConnection
+              businessId={selectedBusinessId}
+              handoff={facebookHandoff}
+              callbackResult={facebookCallbackResult}
+              canManageConnections={canManageConnections}
+              onHandoffResolved={onFacebookReturnResolved}
+            />
           }
           instagramConnection={
             <InstagramConnection businessId={selectedBusinessId} />
           }
           tiktokConnection={
-            <TikTokConnection businessId={selectedBusinessId} />
+            <TikTokConnection
+              businessId={selectedBusinessId}
+              directPublishingEnabled={
+                account?.features.tiktok_direct_publishing ?? false
+              }
+            />
           }
         />
       ) : activeSection === "Facturación" ? (
@@ -789,11 +974,16 @@ function AuthenticatedApp({
             const progress = await updateTutorialCompletion(false, step);
             setTutorialStep(progress.current_step);
           }}
-          onComplete={async (step) => {
-            const progress = await updateTutorialCompletion(true, step);
+          onPause={async (step) => {
+            const progress = await updateTutorialCompletion(false, step);
             setTutorialStep(progress.current_step);
             setTutorialOpen(false);
           }}
+          onComplete={async (step) => {
+            const progress = await updateTutorialCompletion(true, step);
+            setTutorialStep(progress.current_step);
+          }}
+          onDismiss={() => setTutorialOpen(false)}
         />
       )}
     </AppShell>

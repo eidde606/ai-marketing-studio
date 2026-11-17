@@ -31,6 +31,7 @@ from .schemas import (
     HeyGenGenerationResponse,
     HeyGenVoice,
     HeyGenVoicePage,
+    ImageReuseRequest,
     ImageRevisionRequest,
     VoiceType,
 )
@@ -70,6 +71,69 @@ def upload_draft_video(
             principal,
             draft,
             video_bytes,
+        )
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
+
+
+@router.post("/drafts/{draft_id}/upload-image")
+def upload_draft_image(
+    draft_id: str,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    try:
+        _context, draft = workflows_service.prepare_manual_image_upload(
+            db, principal, draft_id,
+        )
+        image_bytes = file.file.read(
+            workflows_service.MAX_MANUAL_IMAGE_SIZE + 1,
+        )
+        if len(image_bytes) > workflows_service.MAX_MANUAL_IMAGE_SIZE:
+            raise http_error(
+                ApplicationError(
+                    ErrorKind.TOO_LARGE,
+                    "Image exceeds the 20 MB limit",
+                )
+            )
+        return workflows_service.save_manual_image_upload(
+            db,
+            principal,
+            draft,
+            image_bytes,
+        )
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
+
+
+@router.get("/drafts/{draft_id}/reusable-images")
+def get_reusable_images(
+    draft_id: str,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+    db: Session = Depends(get_db),
+):
+    try:
+        return workflows_service.list_reusable_images(
+            db, principal, draft_id,
+        )
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
+
+
+@router.post("/drafts/{draft_id}/reuse-image")
+def reuse_draft_image(
+    draft_id: str,
+    request: ImageReuseRequest,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+    db: Session = Depends(get_db),
+):
+    try:
+        return workflows_service.reuse_image(
+            db,
+            principal,
+            draft_id,
+            request.source_draft_id,
         )
     except ApplicationError as exc:
         raise http_error(exc) from exc
@@ -196,21 +260,21 @@ def _raise_provider_error(exc: Exception) -> None:
     if isinstance(exc, HeyGenConfigurationError):
         raise HTTPException(
             status_code=503,
-            detail="HeyGen is not configured",
+            detail="AI Video Studio is not configured",
         ) from exc
     if isinstance(exc, httpx.HTTPStatusError):
         raise HTTPException(
             status_code=502,
-            detail="HeyGen could not return the requested assets",
+            detail="The video service could not return the requested assets",
         ) from exc
     if isinstance(exc, httpx.RequestError):
         raise HTTPException(
             status_code=502,
-            detail="HeyGen connection failed",
+            detail="The video service connection failed",
         ) from exc
     raise HTTPException(
         status_code=502,
-        detail="HeyGen returned an invalid asset response",
+        detail="The video service returned an invalid asset response",
     ) from exc
 
 

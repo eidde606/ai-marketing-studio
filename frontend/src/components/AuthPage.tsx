@@ -1,8 +1,9 @@
 import { Eye, EyeOff, LockKeyhole, Mail, Sparkles } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
-import { useLocalization } from "../app/localization";
+import { useLocalization } from "../app/useLocalization";
 import { getPublicConfig } from "../services/accountApi";
 import { supabase } from "../services/supabaseClient";
+import LegalFooter from "../features/legal/LegalFooter";
 
 type AuthMode = "login" | "register" | "forgot" | "reset";
 type RegistrationState = "loading" | "enabled" | "disabled" | "unavailable";
@@ -432,6 +433,25 @@ export default function AuthPage({
               </p>
             )}
 
+            {currentMode === "register" && (
+              <p className="text-sm leading-6 text-slate-600">
+                {t("auth.policyDisclosure")}{" "}
+                <a
+                  className="font-semibold text-violet-700 underline underline-offset-2 hover:text-violet-900"
+                  href="/privacy"
+                >
+                  {t("legal.link.privacy")}
+                </a>
+                {" · "}
+                <a
+                  className="font-semibold text-violet-700 underline underline-offset-2 hover:text-violet-900"
+                  href="/terms"
+                >
+                  {t("legal.link.terms")}
+                </a>
+              </p>
+            )}
+
             <button
               type="submit"
               disabled={loading}
@@ -570,6 +590,7 @@ export default function AuthPage({
           <p className="mt-12 text-center text-xs text-slate-400">
             {t("auth.accessibility")}
           </p>
+          <LegalFooter className="legal-footer--auth" />
         </div>
       </section>
     </main>

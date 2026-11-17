@@ -20,14 +20,15 @@ class Allowance(BaseModel):
 
 def _allowance(business_id: str) -> Allowance | None:
     try:
-        configuration = json.loads(os.getenv("HEYGEN_BUSINESS_ALLOWANCES", "{}"))
+        raw_configuration = os.getenv("HEYGEN_BUSINESS_ALLOWANCES", "{}").strip()
+        configuration = json.loads(raw_configuration or "{}")
         if not isinstance(configuration, dict):
             raise ValueError("Expected a business mapping")
         raw = configuration.get(business_id)
         return Allowance.model_validate(raw) if raw is not None else None
     except (ValueError, TypeError, ValidationError):
         # Never expose environment contents in an error or allow on bad config.
-        raise ApplicationError(ErrorKind.UNAVAILABLE, "HeyGen allowance configuration is invalid") from None
+        raise ApplicationError(ErrorKind.UNAVAILABLE, "AI video allowance configuration is invalid") from None
 
 
 def usage(db: Session, principal: AuthenticatedPrincipal, business_id: str):
@@ -56,7 +57,7 @@ def require_capacity(db: Session, context: TenantAccess, script: str):
     """
     allowance = _allowance(context.business_id)
     if allowance is None:
-        raise ApplicationError(ErrorKind.LIMIT_EXCEEDED, "No HeyGen generation allowance is configured for this business")
+        raise ApplicationError(ErrorKind.LIMIT_EXCEEDED, "No AI video generation allowance is configured for this business")
     total, active = repository.generation_usage_scoped(db, context)
     entitlement = entitlement_service.entitlement_for_business(db, context.business_id)
     if entitlement is not None and entitlement.status == "trialing":
@@ -66,8 +67,8 @@ def require_capacity(db: Session, context: TenantAccess, script: str):
         if total >= trial_limit:
             raise ApplicationError(ErrorKind.LIMIT_EXCEEDED, "Video generation is unavailable during this trial")
     if total >= allowance.max_generations:
-        raise ApplicationError(ErrorKind.LIMIT_EXCEEDED, "The business HeyGen generation allowance is exhausted")
+        raise ApplicationError(ErrorKind.LIMIT_EXCEEDED, "The business AI video generation allowance is exhausted")
     if active >= allowance.max_concurrent_jobs:
-        raise ApplicationError(ErrorKind.LIMIT_EXCEEDED, "Wait for an existing HeyGen job to finish or resolve its status")
+        raise ApplicationError(ErrorKind.LIMIT_EXCEEDED, "Wait for the existing video job to finish or resolve its status")
     if len(script) > allowance.max_script_characters:
-        raise ApplicationError(ErrorKind.LIMIT_EXCEEDED, "The script exceeds this business's HeyGen allowance")
+        raise ApplicationError(ErrorKind.LIMIT_EXCEEDED, "The script exceeds this business's AI video allowance")

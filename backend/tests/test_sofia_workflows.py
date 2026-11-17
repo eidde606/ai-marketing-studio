@@ -110,7 +110,7 @@ def test_chat_failure_rolls_back_only_pending_messages(
     )
     result = client.post("/businesses/a/sofia/chat", json=request)
     assert result.status_code == 502
-    assert result.json() == {"detail": "Sofía could not respond. Please try again."}
+    assert result.json() == {"detail": "Sebastián could not respond. Please try again."}
     with Session(engine) as db:
         assert len(db.scalars(select(Conversation)).all()) == int(existing)
         messages = db.scalars(select(ConversationMessage)).all()
@@ -137,7 +137,7 @@ def test_conversation_generation_failure_does_not_create_draft(
         json={"idempotency_key": "generation-failure"},
     )
     assert result.status_code == 502
-    assert result.json() == {"detail": "Sofía and Leo could not generate the draft"}
+    assert result.json() == {"detail": "Sebastián and Valeria could not generate the draft"}
     with Session(engine) as db:
         assert db.scalars(select(Draft)).all() == []
         assert len(db.scalars(select(ConversationMessage)).all()) == 1

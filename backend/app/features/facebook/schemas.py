@@ -4,11 +4,13 @@ from pydantic import BaseModel
 
 class FacebookPageSelection(BaseModel):
     selection_token: str
+    business_id: str
     page_id: str
 
 
 class FacebookHandoffRequest(BaseModel):
     handoff_token: str
+    business_id: str
 
 
 class FacebookRecoveryRequest(BaseModel):

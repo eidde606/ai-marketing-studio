@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { useLocalization } from "../app/localization";
+import { useLocalization } from "../app/useLocalization";
 import {
   activateOnboarding,
   getOnboarding,

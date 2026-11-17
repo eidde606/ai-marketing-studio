@@ -8,11 +8,14 @@ export type ApprovalPageProps = {
   handleDelete: (id: string) => Promise<void>;
   deletingIds: string[];
   businessId: string;
-  draftDestinations: Record<string, { facebook: boolean; tiktok: boolean }>;
+  draftDestinations: Record<string, { facebook: boolean; instagram: boolean }>;
 
   setDraftDestinations: Dispatch<
-    SetStateAction<Record<string, { facebook: boolean; tiktok: boolean }>>
+    SetStateAction<Record<string, { facebook: boolean; instagram: boolean }>>
   >;
+  facebookPublisher: string | null;
+  instagramPublisher: string | null;
+  publisherStatusLoading: boolean;
   loadingDrafts: boolean;
   loadError: string | null;
   pendingCount: number;
@@ -40,6 +43,7 @@ export type ApprovalPageProps = {
   formatDraftDate: (date: string) => string;
   handleApprove: (id: string) => Promise<void>;
   handlePublishFacebook: (id: string) => Promise<void>;
+  handlePublishInstagram: (id: string) => Promise<void>;
   handlePublishTikTok: (
     id: string,
     accountId: string,
@@ -56,6 +60,8 @@ export type ApprovalPageProps = {
   handleReject: (id: string) => Promise<void>;
   handleSaveEdit: (id: string) => Promise<void>;
   handleGenerateImage: (draft: Draft) => Promise<void>;
+  handleUploadImage: (draft: Draft, file: File) => Promise<boolean>;
+  handleReuseImage: (draft: Draft, sourceDraftId: string) => Promise<boolean>;
   handlePreviewImage: (draft: Draft) => Promise<void>;
   handleCreateRevision: (draft: Draft) => Promise<void>;
   handleDecideRevision: (

@@ -1,24 +1,107 @@
-import { useEffect, useMemo, useState } from "react";
-import { BarChart3, MessageCircle, Share2, ThumbsUp } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  ArrowRight,
+  BarChart3,
+  MessageCircle,
+  Share2,
+  ThumbsUp,
+} from "lucide-react";
 import {
   getFacebookAnalytics,
   type Draft,
   type FacebookAnalytics,
 } from "../services/draftsApi";
-import { useLocalization } from "../app/localization";
+import {
+  analyzeWithEdian,
+  type EdianAnalysis,
+} from "../services/edianAnalyticsApi";
+import { ApiError } from "../lib/apiClient";
+import { useLocalization } from "../app/useLocalization";
 
 type Props = {
+  businessId: string;
   drafts: Draft[];
   loading: boolean;
   error: string | null;
+  onDiscussWithSebastian?: (summary: string) => void;
 };
 
-function metricValue(value: number, hasData: boolean, locale: string): string {
-  return hasData ? value.toLocaleString(locale) : "—";
+type EngagementMetric = "reactions" | "comments" | "shares";
+
+function metricValue(
+  analytics: FacebookAnalytics[],
+  metric: EngagementMetric,
+  locale: string,
+): string {
+  const available = analytics
+    .map((post) => post[metric])
+    .filter((value): value is number => typeof value === "number");
+  return available.length
+    ? available
+        .reduce((total, value) => total + value, 0)
+        .toLocaleString(locale)
+    : "—";
 }
 
-export default function AnalyticsPage({ drafts, loading, error }: Props) {
+function postMetric(value: number | null, locale: string): string {
+  return typeof value === "number" ? value.toLocaleString(locale) : "—";
+}
+
+function hasMetric(analytics: FacebookAnalytics[], metric: EngagementMetric) {
+  return analytics.some((post) => typeof post[metric] === "number");
+}
+
+function strategyHandoffMessage(
+  analysis: EdianAnalysis,
+  t: ReturnType<typeof useLocalization>["t"],
+  locale: string,
+) {
+  const observedPosts =
+    analysis.observed?.posts_analyzed ?? analysis.posts_analyzed;
+  const lines = [
+    t("analytics.strategyHandoffIntro"),
+    t("analytics.edianObservedPosts", { count: observedPosts }),
+    ...(["reactions", "comments", "shares"] as const).map((metric) => {
+      const observed = analysis.observed?.metrics[metric];
+      return `- ${t(`analytics.${metric}`)}: ${postMetric(observed?.total ?? null, locale)} (${t(
+        "analytics.edianMetricCoverage",
+        {
+          available: observed?.posts_with_data ?? 0,
+          count: observedPosts,
+        },
+      )})`;
+    }),
+  ];
+
+  if (analysis.interpretation?.summary) {
+    lines.push(
+      t("analytics.strategyHandoffSummary", {
+        summary: analysis.interpretation.summary,
+      }),
+    );
+  }
+  const recommendations =
+    analysis.interpretation?.recommendations.slice(0, 2) ?? [];
+  if (recommendations.length > 0) {
+    lines.push(
+      t("analytics.strategyHandoffRecommendations", {
+        recommendations: recommendations.join("; "),
+      }),
+    );
+  }
+  lines.push(t("analytics.strategyHandoffQuestion"));
+  return lines.join("\n");
+}
+
+export default function AnalyticsPage({
+  businessId,
+  drafts,
+  loading,
+  error,
+  onDiscussWithSebastian,
+}: Props) {
   const { locale, t } = useLocalization();
+  const interfaceLocale = locale === "es" ? "es" : "en";
   const publishedDrafts = useMemo(
     () =>
       drafts.filter(
@@ -35,14 +118,25 @@ export default function AnalyticsPage({ drafts, loading, error }: Props) {
   );
   const [analyticsFailure, setAnalyticsFailure] = useState<{
     requestKey: string;
+    code: string | null;
   } | null>(null);
   const [unavailableCount, setUnavailableCount] = useState(0);
   const [retryCount, setRetryCount] = useState(0);
+  const [edianAnalysis, setEdianAnalysis] = useState<EdianAnalysis | null>(
+    null,
+  );
+  const [edianLoading, setEdianLoading] = useState(false);
+  const [edianError, setEdianError] = useState<string | null>(null);
+  const edianRequestInFlight = useRef(false);
   const requestKey = `${JSON.stringify(publishedDrafts.map((draft) => draft.id))}:${retryCount}`;
   const analyticsLoading = completedRequestKey !== requestKey;
   const analyticsError =
     analyticsFailure?.requestKey === requestKey
-      ? t("analytics.loadError")
+      ? t(
+          analyticsFailure.code === "facebook_provider_error"
+            ? "analytics.providerError"
+            : "analytics.loadError",
+        )
       : null;
 
   useEffect(() => {
@@ -56,40 +150,83 @@ export default function AnalyticsPage({ drafts, loading, error }: Props) {
         if (cancelled) return;
         const values: FacebookAnalytics[] = [];
         let failures = 0;
+        let errorCode: string | null = null;
         for (const result of results) {
           if (result.status === "fulfilled") values.push(result.value);
-          else failures += 1;
+          else {
+            failures += 1;
+            if (
+              result.reason instanceof ApiError &&
+              result.reason.code === "facebook_provider_error"
+            ) {
+              errorCode = result.reason.code;
+            }
+          }
         }
         setAnalytics(values);
         setUnavailableCount(failures);
+        setAnalyticsFailure(errorCode ? { requestKey, code: errorCode } : null);
         setCompletedRequestKey(requestKey);
       })
       .catch(() => {
         if (!cancelled) {
           setAnalyticsFailure({
             requestKey,
+            code: null,
           });
           setCompletedRequestKey(requestKey);
         }
-      })
+      });
 
     return () => {
       cancelled = true;
     };
   }, [publishedDrafts, loading, error, requestKey]);
 
-  const totals = analytics.reduce(
-    (result, post) => ({
-      reactions: result.reactions + post.reactions,
-      comments: result.comments + post.comments,
-      shares: result.shares + post.shares,
-    }),
-    { reactions: 0, comments: 0, shares: 0 },
-  );
   const analyticsByDraft = new Map(
     analytics.map((item) => [item.draft_id, item]),
   );
-  const hasMetrics = analytics.length > 0;
+  const postsWithMetrics = analytics.filter(
+    (post) =>
+      typeof post.reactions === "number" ||
+      typeof post.comments === "number" ||
+      typeof post.shares === "number",
+  ).length;
+  const permissionRequiredCount = analytics.filter(
+    (post) =>
+      post.authorization_status === "permission_required" ||
+      Object.values(post.metric_status ?? {}).includes("permission_required"),
+  ).length;
+  const reauthorizationRequired = analytics.some(
+    (post) => post.authorization_status === "reauthorization_required",
+  );
+  const unavailablePosts = analytics.filter(
+    (post) => post.post_status === "unavailable",
+  ).length;
+  const handleEdianAnalysis = async () => {
+    if (edianRequestInFlight.current || !businessId) return;
+    edianRequestInFlight.current = true;
+    setEdianLoading(true);
+    setEdianError(null);
+    setEdianAnalysis(null);
+    try {
+      const result = await analyzeWithEdian(
+        businessId,
+        interfaceLocale,
+        crypto.randomUUID(),
+      );
+      setEdianAnalysis(result);
+    } catch (requestError) {
+      setEdianError(
+        requestError instanceof ApiError && requestError.status === 429
+          ? t("analytics.quotaError")
+          : t("analytics.interpretError"),
+      );
+    } finally {
+      edianRequestInFlight.current = false;
+      setEdianLoading(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -103,7 +240,9 @@ export default function AnalyticsPage({ drafts, loading, error }: Props) {
   if (error) {
     return (
       <div className="analytics-workspace" data-guide-target="mia-analytics">
-        <p className="workspace-state workspace-state--error" role="alert">{error}</p>
+        <p className="workspace-state workspace-state--error" role="alert">
+          {error}
+        </p>
       </div>
     );
   }
@@ -131,16 +270,11 @@ export default function AnalyticsPage({ drafts, loading, error }: Props) {
         </button>
       </section>
 
-      <section
-        className="analytics-source-note"
-        role="note"
-      >
+      <section className="analytics-source-note" role="note">
         <span className="analytics-source-note__icon">
           <BarChart3 size={18} aria-hidden="true" />
         </span>
-        <p>
-          {t("analytics.sourceNote")}
-        </p>
+        <p>{t("analytics.sourceNote")}</p>
       </section>
 
       {analyticsLoading ? (
@@ -148,7 +282,9 @@ export default function AnalyticsPage({ drafts, loading, error }: Props) {
           {t("analytics.querying")}
         </p>
       ) : analyticsError ? (
-        <p className="workspace-state workspace-state--error" role="alert">{analyticsError}</p>
+        <p className="workspace-state workspace-state--error" role="alert">
+          {analyticsError}
+        </p>
       ) : (
         <>
           <section
@@ -168,9 +304,13 @@ export default function AnalyticsPage({ drafts, loading, error }: Props) {
                 <ThumbsUp size={18} aria-hidden="true" />
               </span>
               <small>{t("analytics.reactions")}</small>
-              <strong>{metricValue(totals.reactions, hasMetrics, locale)}</strong>
+              <strong>{metricValue(analytics, "reactions", locale)}</strong>
               <span>
-                {t(hasMetrics ? "analytics.accessibleTotal" : "analytics.noData")}
+                {t(
+                  hasMetric(analytics, "reactions")
+                    ? "analytics.accessibleTotal"
+                    : "analytics.noData",
+                )}
               </span>
             </article>
             <article className="analytics-metric">
@@ -178,9 +318,13 @@ export default function AnalyticsPage({ drafts, loading, error }: Props) {
                 <MessageCircle size={18} aria-hidden="true" />
               </span>
               <small>{t("analytics.comments")}</small>
-              <strong>{metricValue(totals.comments, hasMetrics, locale)}</strong>
+              <strong>{metricValue(analytics, "comments", locale)}</strong>
               <span>
-                {t(hasMetrics ? "analytics.accessibleTotal" : "analytics.noData")}
+                {t(
+                  hasMetric(analytics, "comments")
+                    ? "analytics.accessibleTotal"
+                    : "analytics.noData",
+                )}
               </span>
             </article>
             <article className="analytics-metric">
@@ -188,9 +332,13 @@ export default function AnalyticsPage({ drafts, loading, error }: Props) {
                 <Share2 size={18} aria-hidden="true" />
               </span>
               <small>{t("analytics.shares")}</small>
-              <strong>{metricValue(totals.shares, hasMetrics, locale)}</strong>
+              <strong>{metricValue(analytics, "shares", locale)}</strong>
               <span>
-                {t(hasMetrics ? "analytics.accessibleTotal" : "analytics.noData")}
+                {t(
+                  hasMetric(analytics, "shares")
+                    ? "analytics.accessibleTotal"
+                    : "analytics.noData",
+                )}
               </span>
             </article>
           </section>
@@ -205,6 +353,184 @@ export default function AnalyticsPage({ drafts, loading, error }: Props) {
               )}
             </p>
           )}
+          {reauthorizationRequired && (
+            <p className="analytics-provider-notice" role="alert">
+              {t("analytics.reauthorizationRequired")}
+            </p>
+          )}
+          {permissionRequiredCount > 0 && (
+            <p className="analytics-provider-notice" role="alert">
+              {t(
+                permissionRequiredCount === 1
+                  ? "analytics.permissionRequiredOne"
+                  : "analytics.permissionRequiredMany",
+                { count: permissionRequiredCount },
+              )}
+            </p>
+          )}
+          {unavailablePosts > 0 && (
+            <p className="analytics-warning" role="status">
+              {t(
+                unavailablePosts === 1
+                  ? "analytics.postUnavailableOne"
+                  : "analytics.postUnavailableMany",
+                { count: unavailablePosts },
+              )}
+            </p>
+          )}
+
+          <section className="edian-analysis" aria-labelledby="edian-title">
+            <div className="edian-analysis__heading">
+              <div>
+                <span className="eyebrow">{t("analytics.edianEyebrow")}</span>
+                <h3 id="edian-title">Edian</h3>
+                <p>{t("analytics.edianDescription")}</p>
+              </div>
+              <button
+                type="button"
+                className="primary-button"
+                disabled={edianLoading || analyticsLoading || !businessId}
+                onClick={() => void handleEdianAnalysis()}
+              >
+                {edianLoading
+                  ? t("analytics.edianLoading")
+                  : t("analytics.edianAction")}
+              </button>
+            </div>
+            {edianLoading && (
+              <p className="workspace-state" role="status">
+                {t("analytics.edianLoading")}
+              </p>
+            )}
+            {edianError && (
+              <p
+                className="workspace-state workspace-state--error"
+                role="alert"
+              >
+                {edianError}
+              </p>
+            )}
+            {edianAnalysis?.locale === interfaceLocale &&
+              (edianAnalysis.status === "unavailable" ? (
+                <p className="analytics-warning" role="status">
+                  {t("analytics.integrationUnavailable")}
+                </p>
+              ) : edianAnalysis.status === "no_data" ? (
+                <p className="analytics-empty" role="status">
+                  {t(
+                    edianAnalysis.posts_analyzed === 0
+                      ? "analytics.noFacebookPosts"
+                      : "analytics.edianNoMetrics",
+                  )}
+                </p>
+              ) : (
+                <>
+                  {edianAnalysis.observed && (
+                    <section
+                      className="edian-analysis__observed"
+                      aria-labelledby="edian-observed-title"
+                    >
+                      <h4 id="edian-observed-title">
+                        {t("analytics.observed")}
+                      </h4>
+                      <p>
+                        {t("analytics.edianObservedPosts", {
+                          count: edianAnalysis.posts_analyzed,
+                        })}
+                      </p>
+                      <dl>
+                        {(["reactions", "comments", "shares"] as const).map(
+                          (metric) => (
+                            <div key={metric}>
+                              <dt>{t(`analytics.${metric}`)}</dt>
+                              <dd>
+                                {postMetric(
+                                  edianAnalysis.observed?.metrics[metric]
+                                    .total ?? null,
+                                  locale,
+                                )}
+                              </dd>
+                              <small>
+                                {t("analytics.edianMetricCoverage", {
+                                  available:
+                                    edianAnalysis.observed?.metrics[metric]
+                                      .posts_with_data ?? 0,
+                                  count: edianAnalysis.posts_analyzed,
+                                })}
+                              </small>
+                            </div>
+                          ),
+                        )}
+                      </dl>
+                    </section>
+                  )}
+                  {edianAnalysis.interpretation && (
+                    <section
+                      className="edian-analysis__recommendations"
+                      aria-labelledby="edian-recommendations-title"
+                    >
+                      <h4 id="edian-recommendations-title">
+                        {t("analytics.recommendations")}
+                      </h4>
+                      <p>{edianAnalysis.interpretation.summary}</p>
+                      {edianAnalysis.interpretation.recommendations.length >
+                        0 && (
+                        <ul>
+                          {edianAnalysis.interpretation.recommendations.map(
+                            (recommendation, index) => (
+                              <li key={`${index}-${recommendation}`}>
+                                {recommendation}
+                              </li>
+                            ),
+                          )}
+                        </ul>
+                      )}
+                      {onDiscussWithSebastian && (
+                        <section
+                          className="edian-action"
+                          aria-labelledby="edian-action-title"
+                        >
+                          <div className="edian-action__copy">
+                            <span
+                              className="edian-action__icon"
+                              aria-hidden="true"
+                            >
+                              <MessageCircle size={18} />
+                            </span>
+                            <div>
+                              <h4 id="edian-action-title">
+                                {t("analytics.actionTitle")}
+                              </h4>
+                              <p>{t("analytics.actionDescription")}</p>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            className="edian-action__button"
+                            onClick={() =>
+                              onDiscussWithSebastian(
+                                strategyHandoffMessage(
+                                  edianAnalysis,
+                                  t,
+                                  interfaceLocale,
+                                ),
+                              )
+                            }
+                          >
+                            <MessageCircle size={17} aria-hidden="true" />
+                            <span>{t("analytics.discussWithSebastian")}</span>
+                            <ArrowRight size={17} aria-hidden="true" />
+                          </button>
+                        </section>
+                      )}
+                    </section>
+                  )}
+                  {edianAnalysis.reused && (
+                    <small role="status">{t("analytics.cachedAnalysis")}</small>
+                  )}
+                </>
+              ))}
+          </section>
 
           <section className="analytics-posts">
             <header className="analytics-posts__header">
@@ -212,7 +538,9 @@ export default function AnalyticsPage({ drafts, loading, error }: Props) {
                 <span className="eyebrow">{t("analytics.detail")}</span>
                 <h3>{t("analytics.postsAnalyzed")}</h3>
               </div>
-              <span>{t("analytics.withData", { count: analytics.length })}</span>
+              <span>
+                {t("analytics.withData", { count: postsWithMetrics })}
+              </span>
             </header>
             {publishedDrafts.length === 0 ? (
               <div className="analytics-empty">
@@ -220,7 +548,7 @@ export default function AnalyticsPage({ drafts, loading, error }: Props) {
                 <strong>{t("analytics.noFacebookPosts")}</strong>
                 <p>{t("analytics.postsWillAppear")}</p>
               </div>
-            ) : analytics.length === 0 ? (
+            ) : postsWithMetrics === 0 ? (
               <div className="analytics-empty">
                 <strong>{t("analytics.noAvailableMetrics")}</strong>
                 <p>
@@ -242,13 +570,16 @@ export default function AnalyticsPage({ drafts, loading, error }: Props) {
                       </div>
                       <div className="analytics-post__metrics">
                         <span>
-                          {item.reactions} {t("analytics.reactions").toLocaleLowerCase(locale)}
+                          {postMetric(item.reactions, locale)}{" "}
+                          {t("analytics.reactions").toLocaleLowerCase(locale)}
                         </span>
                         <span>
-                          {item.comments} {t("analytics.comments").toLocaleLowerCase(locale)}
+                          {postMetric(item.comments, locale)}{" "}
+                          {t("analytics.comments").toLocaleLowerCase(locale)}
                         </span>
                         <span>
-                          {item.shares} {t("analytics.shares").toLocaleLowerCase(locale)}
+                          {postMetric(item.shares, locale)}{" "}
+                          {t("analytics.shares").toLocaleLowerCase(locale)}
                         </span>
                       </div>
                       {item.permalink_url && (

@@ -87,5 +87,6 @@ export function getBusinessEntitlement(
 ): Promise<BusinessEntitlement> {
   return apiRequest<BusinessEntitlement>(
     `/businesses/${encodeURIComponent(businessId)}/entitlement`,
+    { cache: "no-store" },
   );
 }

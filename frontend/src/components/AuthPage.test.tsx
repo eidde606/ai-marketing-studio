@@ -15,7 +15,7 @@ const auth = vi.hoisted(() => ({
   signInWithOAuth: vi.fn(),
 }));
 
-vi.mock("../app/localization", () => ({
+vi.mock("../app/useLocalization", () => ({
   useLocalization: () => ({
     locale: "en",
     setInterfaceLanguage: vi.fn().mockResolvedValue(undefined),
@@ -59,7 +59,9 @@ describe("AuthPage registration gate", () => {
     });
     expect(createAccount.hasAttribute("disabled")).toBe(true);
     expect(screen.getByText("auth.noAccount")).toBeTruthy();
-    expect(screen.getByText("auth.registrationUnavailable")).toBeTruthy();
+    expect(
+      await screen.findByText("auth.registrationUnavailable"),
+    ).toBeTruthy();
     expect(screen.getByText("auth.trialUnavailable")).toBeTruthy();
     expect(screen.getByRole("button", { name: "auth.signIn" })).toBeTruthy();
   });
@@ -81,6 +83,9 @@ describe("AuthPage registration gate", () => {
     expect(screen.getByText("auth.registerTrialHelp")).toBeTruthy();
     expect(screen.getByLabelText("auth.email")).toBeTruthy();
     expect(screen.getByLabelText("auth.password")).toBeTruthy();
+    expect(screen.getByText(/auth\.policyDisclosure/)).toBeTruthy();
+    expect(document.querySelector('form a[href="/privacy"]')).toBeTruthy();
+    expect(document.querySelector('form a[href="/terms"]')).toBeTruthy();
   });
 
   it("fails closed with an unavailable state if registration config cannot load", async () => {

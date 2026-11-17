@@ -16,6 +16,7 @@ VIDEO_BYTES = b"\x00\x00\x00\x18ftyp" + b"x" * (MIN_VIDEO_SIZE - 8)
 
 @pytest.fixture
 def tiktok_case(isolated_client, monkeypatch):
+    monkeypatch.setenv("TIKTOK_DIRECT_PUBLISHING_ENABLED", "1")
     client, engine = isolated_client
     with Session(engine) as db:
         business = Business(name="TikTok publishing business")
@@ -141,8 +142,102 @@ def test_tiktok_video_publication_saves_uncertain_state_and_blocks_duplicate(
     case.publisher.assert_awaited_once()
 
 
+def test_tiktok_provider_calls_send_bearer_tokens_only_to_api_host(monkeypatch):
+    import asyncio
+
+    from app.features.tiktok import publishing_provider
+
+    responses = [
+        {"error": {"code": "ok"}, "data": {"privacy_level_options": ["PUBLIC_TO_EVERYONE"]}},
+        {"error": {"code": "ok"}, "data": {"publish_id": "pull-publish"}},
+        {
+            "error": {"code": "ok"},
+            "data": {
+                "publish_id": "file-publish",
+                "upload_url": "https://upload.test.invalid/signed",
+            },
+        },
+        {"error": {"code": "ok"}, "data": {"publish_id": "photo-publish"}},
+        {"error": {"code": "ok"}, "data": {"status": "PROCESSING_UPLOAD"}},
+    ]
+    calls = []
+
+    class FakeResponse:
+        is_error = False
+        status_code = 200
+        text = ""
+
+        def __init__(self, payload=None):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, url, **kwargs):
+            calls.append(("POST", url, kwargs.get("headers", {})))
+            return FakeResponse(responses.pop(0))
+
+        async def put(self, url, **kwargs):
+            calls.append(("PUT", url, kwargs.get("headers", {})))
+            return FakeResponse()
+
+    monkeypatch.setattr(publishing_provider.httpx, "AsyncClient", FakeClient)
+
+    async def run():
+        token = "mock-access-token"
+        await publishing_provider.get_creator_info(token)
+        await publishing_provider.publish_tiktok_video(
+            token,
+            "https://media.test.invalid/video.mp4",
+            "Caption",
+            "PUBLIC_TO_EVERYONE",
+        )
+        await publishing_provider.publish_tiktok_video_file(
+            token,
+            VIDEO_BYTES,
+            "Caption",
+            "PUBLIC_TO_EVERYONE",
+        )
+        await publishing_provider.publish_tiktok_photo(
+            token,
+            "https://media.test.invalid/photo.jpg",
+            "Caption",
+            "PUBLIC_TO_EVERYONE",
+        )
+        await publishing_provider.get_tiktok_publish_status(token, "publish-id")
+
+    asyncio.run(run())
+    api_calls = [
+        (url, headers)
+        for _method, url, headers in calls
+        if url.startswith(publishing_provider.TIKTOK_API_URL)
+    ]
+    assert len(api_calls) == 5
+    for url, headers in api_calls:
+        authorization = headers["Authorization"]
+        assert authorization.startswith("Bearer ") and authorization.endswith(
+            "access-token",
+        )
+        assert "mock-access-token" not in url
+    upload_call = next(call for call in calls if call[0] == "PUT")
+    assert "Authorization" not in upload_call[2]
+
+
 def test_tiktok_video_submission_timeout_requires_review_and_blocks_retry(
-    tiktok_case,
+    tiktok_case, caplog,
 ):
     case = tiktok_case
     case.publisher.side_effect = httpx.ReadTimeout("submission outcome unknown")
@@ -158,6 +253,7 @@ def test_tiktok_video_submission_timeout_requires_review_and_blocks_retry(
     assert draft.tiktok_publish_id is None
     assert draft.tiktok_account_id == case.account_id
     assert publish(case).status_code == 409
+    assert "submission outcome unknown" not in caplog.text
     case.publisher.assert_awaited_once()
 
 
@@ -182,6 +278,29 @@ def test_tiktok_creator_settings_uses_business_scoped_connected_account(
     )
     assert missing.status_code == 409
     assert missing.json() == {"detail": "Connect TikTok first"}
+
+
+def test_tiktok_direct_publishing_is_disabled_without_explicit_approval(
+    tiktok_case,
+    monkeypatch,
+):
+    case = tiktok_case
+    monkeypatch.delenv("TIKTOK_DIRECT_PUBLISHING_ENABLED", raising=False)
+
+    creator_info = case.client.get(
+        f"/drafts/{case.draft_id}/tiktok-creator-info",
+        params={"account_id": case.account_id},
+    )
+    publication = publish(case)
+
+    assert creator_info.status_code == 503
+    assert publication.status_code == 503
+    assert creator_info.json() == publication.json() == {
+        "detail": "TikTok direct publishing requires provider approval",
+    }
+    assert read_draft(case).tiktok_publish_status == "not_published"
+    case.creator_info.assert_not_awaited()
+    case.publisher.assert_not_awaited()
 
 
 @pytest.mark.parametrize(

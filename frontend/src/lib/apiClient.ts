@@ -7,6 +7,7 @@ export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly code: string | null = null,
   ) {
     super(message);
     this.name = "ApiError";
@@ -39,9 +40,28 @@ export async function apiRequest<T>(
     throw new ApiError(
       typeof body?.detail === "string" ? body.detail : fallbackError,
       response.status,
+      response.headers.get("X-Error-Code"),
     );
   }
 
   // Network and JSON parsing errors propagate unchanged. Never retry here.
+  return response.json() as Promise<T>;
+}
+
+/** Send a deliberately unauthenticated request to a public backend endpoint. */
+export async function publicApiRequest<T>(
+  path: string,
+  options?: RequestInit,
+  fallbackError = "No se pudo completar la solicitud.",
+): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, options);
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new ApiError(
+      typeof body?.detail === "string" ? body.detail : fallbackError,
+      response.status,
+      response.headers.get("X-Error-Code"),
+    );
+  }
   return response.json() as Promise<T>;
 }

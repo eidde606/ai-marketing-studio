@@ -73,7 +73,7 @@ function renderDashboard(drafts: Draft[] = [], canApprove = true) {
       canApprove={canApprove}
       agents={[
         {
-          name: "Sofía",
+          name: "Sebastián",
           role: "Estratega de marketing",
           state: "Disponible",
           activity: "Sin actividad registrada",
@@ -129,13 +129,11 @@ describe("DashboardOverview", () => {
     expect(
       await screen.findByRole("heading", { name: "Welcome, Mi cuenta" }),
     ).toBeTruthy();
+    expect(await screen.findByText("Campaña campaign-1")).toBeTruthy();
     expect(document.querySelector(".dashboard-kpi strong")?.textContent).toBe(
       "1",
     );
-    expect(screen.getByText("Campaña campaign-1")).toBeTruthy();
-    expect(
-      screen.getAllByText("1 of 2 posts published · 50%"),
-    ).toHaveLength(2);
+    expect(screen.getAllByText("1 of 2 posts published · 50%")).toHaveLength(2);
     await waitFor(() => {
       expect(screen.getByText("42")).toBeTruthy();
     });
@@ -153,9 +151,7 @@ describe("DashboardOverview", () => {
       "0",
     );
     expect(
-      screen.getByText(
-        "Confirmed publications will appear here.",
-      ),
+      screen.getByText("Confirmed publications will appear here."),
     ).toBeTruthy();
   });
 

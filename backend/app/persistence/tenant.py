@@ -9,12 +9,12 @@ from sqlalchemy.orm import Session, raiseload
 
 from app.features.access.principal import TenantAccess, TrustedTenantContext
 from app.models import (
-    Business, Campaign, Conversation, ConversationMessage, Draft,
+    Business, Campaign, Conversation, ConversationMessage, Draft, EdianAnalysis,
     FacebookOAuthState, HeyGenGenerationAttempt, ImageRevision,
     InstagramConnection, InstagramOAuthState, SocialAccount, TikTokOAuthState,
 )
 
-_DIRECT = frozenset({Campaign, Conversation, Draft, FacebookOAuthState,
+_DIRECT = frozenset({Campaign, Conversation, Draft, EdianAnalysis, FacebookOAuthState,
                      InstagramConnection, InstagramOAuthState, SocialAccount,
                      TikTokOAuthState})
 

@@ -1,11 +1,13 @@
-import { Instagram } from "lucide-react";
+import { Instagram, Unlink } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
+  disconnectInstagramConnection,
   getInstagramConnection,
   startInstagramConnection,
   type InstagramConnection as InstagramConnectionData,
 } from "../services/instagramApi";
-import { useLocalization } from "../app/localization";
+import { useLocalization } from "../app/useLocalization";
+import ConfirmationDialog from "./ui/ConfirmationDialog";
 
 type Props = { businessId: string };
 
@@ -35,6 +37,7 @@ export default function InstagramConnection({ businessId }: Props) {
   useEffect(() => {
     tRef.current = t;
   }, [t]);
+
   const [snapshot, setSnapshot] = useState<{
     businessId: string;
     retry: number;
@@ -42,18 +45,31 @@ export default function InstagramConnection({ businessId }: Props) {
     error: string;
   } | null>(null);
   const [connecting, setConnecting] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
+  const [disconnectTarget, setDisconnectTarget] = useState<{
+    businessId: string;
+    accountName: string;
+    pageName: string;
+  } | null>(null);
+  const [disconnectError, setDisconnectError] = useState("");
+  const disconnectLock = useRef(false);
+  const [actionNotice, setActionNotice] = useState("");
   const [retry, setRetry] = useState(0);
   const [actionError, setActionError] = useState<{
     businessId: string;
     message: string;
+    state: "attention" | "unavailable" | "configuration";
   } | null>(null);
   const [callbackCode] = useState(() => {
     const match = window.location.hash.match(/^#instagram_result=([^&]+)/);
     return match?.[1] ?? "";
   });
+
   const notice = callbackCode
-    ? t(callbackMessageKeys[callbackCode as keyof typeof callbackMessageKeys] ??
-        "instagram.callback.received")
+    ? t(
+        callbackMessageKeys[callbackCode as keyof typeof callbackMessageKeys] ??
+          "instagram.callback.received",
+      )
     : "";
   const currentSnapshot =
     snapshot?.businessId === businessId && snapshot.retry === retry
@@ -64,7 +80,11 @@ export default function InstagramConnection({ businessId }: Props) {
   const error =
     actionError?.businessId === businessId
       ? actionError.message
-      : currentSnapshot?.error ?? "";
+      : (currentSnapshot?.error ?? "");
+  const actionState =
+    actionError?.businessId === businessId ? actionError.state : null;
+  const activeDisconnectTarget =
+    disconnectTarget?.businessId === businessId ? disconnectTarget : null;
 
   useEffect(() => {
     let active = true;
@@ -77,9 +97,10 @@ export default function InstagramConnection({ businessId }: Props) {
         window.location.pathname + window.location.search,
       );
     }
-    if (!businessId) return () => {
-      active = false;
-    };
+    if (!businessId)
+      return () => {
+        active = false;
+      };
     void getInstagramConnection(businessId)
       .then((result) => {
         if (active) {
@@ -112,31 +133,85 @@ export default function InstagramConnection({ businessId }: Props) {
   async function connect() {
     if (!businessId || connecting) return;
     setConnecting(true);
+    setActionNotice("");
     setActionError(null);
     try {
       const authorizationUrl = await startInstagramConnection(businessId);
       window.location.assign(authorizationUrl);
     } catch (cause) {
+      const detail = cause instanceof Error ? cause.message : "";
+      const pageRequired =
+        detail === "Conecta primero una página de Facebook para este negocio.";
+      const multiplePagesRequired =
+        detail ===
+        "Desconecta las páginas adicionales de Facebook de este negocio antes de conectar Instagram.";
+      const configurationRequired =
+        detail ===
+        "La conexión de Instagram no está configurada en el servidor.";
       setActionError({
         businessId,
-        message:
-          cause instanceof Error
-            ? cause.message
-            : tRef.current("instagram.connectError"),
+        message: pageRequired
+          ? tRef.current("instagram.facebookRequired")
+          : multiplePagesRequired
+            ? tRef.current("instagram.facebookMultiplePages")
+            : configurationRequired
+              ? tRef.current("instagram.configurationRequired")
+              : tRef.current("instagram.connectError"),
+        state: configurationRequired
+          ? "configuration"
+          : pageRequired || multiplePagesRequired
+            ? "attention"
+            : "unavailable",
       });
       setConnecting(false);
     }
   }
 
+  async function disconnect() {
+    const target = disconnectTarget;
+    if (
+      !target ||
+      target.businessId !== businessId ||
+      disconnecting ||
+      disconnectLock.current
+    ) {
+      return;
+    }
+
+    disconnectLock.current = true;
+    setDisconnecting(true);
+    setActionError(null);
+    setDisconnectError("");
+    setActionNotice("");
+    try {
+      await disconnectInstagramConnection(target.businessId);
+      setActionNotice(tRef.current("instagram.disconnected"));
+      setRetry((value) => value + 1);
+      setDisconnectTarget(null);
+    } catch {
+      setDisconnectError(tRef.current("instagram.disconnectError"));
+    } finally {
+      disconnectLock.current = false;
+      setDisconnecting(false);
+    }
+  }
+
   const status = connection?.status ?? "not_connected";
   const connected = status === "connected_and_authorized";
+  const statusUnavailable =
+    Boolean(currentSnapshot?.error) ||
+    (Boolean(actionState) && actionState === "unavailable");
   const statusClass = loading
     ? "social-status--loading"
-    : connected
-      ? "social-status--connected"
-      : status === "not_connected"
-        ? "social-status--disconnected"
-        : "social-status--attention";
+    : statusUnavailable || actionState === "configuration"
+      ? "social-status--unavailable"
+      : actionState
+        ? "social-status--attention"
+        : connected
+          ? "social-status--connected"
+          : status === "not_connected"
+            ? "social-status--disconnected"
+            : "social-status--attention";
 
   return (
     <section className="panel facebook-connection social-integration social-integration--instagram">
@@ -154,7 +229,13 @@ export default function InstagramConnection({ businessId }: Props) {
         <span className={`social-status ${statusClass}`} role="status">
           {loading
             ? t("instagram.status.loading")
-            : t(statusTranslationKeys[status])}
+            : actionState === "configuration"
+              ? t("instagram.status.configuration")
+              : statusUnavailable
+                ? t("instagram.status.unavailable")
+                : actionState
+                  ? t("instagram.status.attention")
+                  : t(statusTranslationKeys[status])}
         </span>
       </div>
 
@@ -175,26 +256,48 @@ export default function InstagramConnection({ businessId }: Props) {
             </p>
           )}
           {connection?.missing_permissions.length ? (
-            <p>
-              {t("instagram.missingPermissions", {
-                permissions: connection.missing_permissions.join(", "),
-              })}
-            </p>
+            <p>{t("instagram.permissionHelp")}</p>
           ) : null}
         </div>
-        <button
-          type="button"
-          className="facebook-connect-button"
-          onClick={() => void connect()}
-          disabled={!businessId || loading || connecting}
-        >
-          <Instagram size={18} aria-hidden="true" />
-          {connecting
-            ? t("instagram.opening")
-            : connection?.username || connected
-              ? t("instagram.reconnect")
-              : t("instagram.connect")}
-        </button>
+        <div className="social-connection-actions">
+          <button
+            type="button"
+            className="facebook-connect-button"
+            onClick={() => void connect()}
+            disabled={!businessId || loading || connecting}
+          >
+            <Instagram size={18} aria-hidden="true" />
+            {connecting
+              ? t("instagram.opening")
+              : connection?.username || connected
+                ? t("instagram.reconnect")
+                : t("instagram.connect")}
+          </button>
+          {(connection?.username ||
+            connection?.status === "connected_and_authorized" ||
+            connection?.status === "linked_not_api_authorized" ||
+            connection?.status === "reauthorization_required") && (
+            <button
+              type="button"
+              className="outline-button social-disconnect-button"
+              onClick={() =>
+                setDisconnectTarget({
+                  businessId,
+                  accountName: connection?.username
+                    ? `@${connection.username}`
+                    : t("instagram.account"),
+                  pageName:
+                    connection?.facebook_page_name ||
+                    t("instagram.connectedPageFallback"),
+                })
+              }
+              disabled={disconnecting || connecting || loading}
+            >
+              <Unlink size={16} aria-hidden="true" />
+              {t("instagram.disconnect")}
+            </button>
+          )}
+        </div>
       </div>
 
       {loading && (
@@ -205,6 +308,11 @@ export default function InstagramConnection({ businessId }: Props) {
       {notice && (
         <p className="facebook-connection-message" role="status">
           {notice}
+        </p>
+      )}
+      {actionNotice && (
+        <p className="facebook-connection-message" role="status">
+          {actionNotice}
         </p>
       )}
       {error && (
@@ -226,6 +334,28 @@ export default function InstagramConnection({ businessId }: Props) {
           {t("instagram.noBusiness")}
         </p>
       )}
+      <ConfirmationDialog
+        open={activeDisconnectTarget !== null}
+        title={t("instagram.disconnectDialogTitle")}
+        description={t("instagram.disconnectDialogDescription", {
+          account: activeDisconnectTarget?.accountName ?? "",
+          page: activeDisconnectTarget?.pageName ?? "",
+        })}
+        cancelLabel={t("common.cancel")}
+        confirmLabel={t("instagram.confirmDisconnect")}
+        pendingLabel={t("instagram.disconnecting")}
+        busy={disconnecting}
+        error={disconnectError}
+        destructive
+        icon={Unlink}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDisconnectTarget(null);
+            setDisconnectError("");
+          }
+        }}
+        onConfirm={() => void disconnect()}
+      />
     </section>
   );
 }

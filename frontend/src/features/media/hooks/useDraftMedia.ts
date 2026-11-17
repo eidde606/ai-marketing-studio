@@ -7,14 +7,28 @@ import {
   getDrafts,
   getImageRevisions,
   rejectImageRevision,
+  reuseDraftImage,
+  uploadDraftImage,
   type Draft,
   type ImageRevision,
 } from "../../../services/draftsApi";
 import { useDraftImages } from "../../../hooks/useDraftImages";
 import type { DraftCollection } from "../../drafts/hooks/useDraftCollection";
 import type { DraftOperations } from "../../drafts/hooks/useDraftOperations";
-import { useLocalization } from "../../../app/localization";
+import { useLocalization } from "../../../app/useLocalization";
 import { useRef } from "react";
+
+function apiErrorDetail(error: unknown): string | undefined {
+  if (!(error instanceof Error)) return undefined;
+  const separator = error.message.indexOf(": ");
+  if (separator < 0) return undefined;
+  try {
+    const payload = JSON.parse(error.message.slice(separator + 2));
+    return typeof payload.detail === "string" ? payload.detail : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export function useDraftMedia(
   selectedBusinessId: string,
@@ -47,14 +61,12 @@ export function useDraftMedia(
   const { setApprovals, selectedBusinessRef, isCurrentBusiness } = collection;
   const { imageLocks } = operations;
   useEffect(() => {
-    /* eslint-disable react-hooks/set-state-in-effect */
     setImageUrls({});
     setImageErrors({});
     setImageInstructions({});
     setShowImageEditor({});
     setRevisions({});
     setRevisionErrors({});
-    /* eslint-enable react-hooks/set-state-in-effect */
   }, [selectedBusinessId, setImageInstructions, setShowImageEditor]);
   const toggleImageEditor = (draftId: string) => {
     if (!showImageEditor[draftId]) void refreshRevision(draftId);
@@ -73,12 +85,7 @@ export function useDraftMedia(
       !["not_started", "failed"].includes(draft.image_status)
     )
       return;
-    if (
-      !window.confirm(
-        tRef.current("media.confirmGenerate"),
-      )
-    )
-      return;
+    if (!window.confirm(tRef.current("media.confirmGenerate"))) return;
     const businessId = draft.business_id;
     imageLocks.current.add(draft.id);
     setImageBusyIds((current) => [...current, draft.id]);
@@ -122,8 +129,7 @@ export function useDraftMedia(
         if (isCurrentBusiness() && selectedBusinessRef.current === businessId) {
           setImageErrors((current) => ({
             ...current,
-            [draft.id]:
-              tRef.current("media.generationUncertain"),
+            [draft.id]: tRef.current("media.generationUncertain"),
           }));
         }
       }
@@ -160,6 +166,158 @@ export function useDraftMedia(
           [draft.id]: tRef.current("media.imageLoadError"),
         }));
       }
+    } finally {
+      imageLocks.current.delete(draft.id);
+      setImageBusyIds((current) =>
+        current.filter((value) => value !== draft.id),
+      );
+    }
+  };
+  const handleUploadImage = async (
+    draft: Draft,
+    file: File,
+  ): Promise<boolean> => {
+    if (
+      imageLocks.current.has(draft.id) ||
+      operations.busyDraftIds.includes(draft.id) ||
+      draft.status !== "pending" ||
+      draft.image_url ||
+      draft.media_type === "video" ||
+      draft.video_url ||
+      !["not_started", "failed"].includes(draft.video_status) ||
+      !["not_started", "failed"].includes(draft.image_status)
+    )
+      return false;
+    const businessId = draft.business_id;
+    if (!businessId) return false;
+    imageLocks.current.add(draft.id);
+    setImageBusyIds((current) => [...current, draft.id]);
+    setImageErrors((current) => {
+      const next = { ...current };
+      delete next[draft.id];
+      return next;
+    });
+    try {
+      const result = await uploadDraftImage(draft.id, file);
+      if (isCurrentBusiness() && selectedBusinessRef.current === businessId) {
+        setImageUrls((current) => ({
+          ...current,
+          [draft.id]: result.image_url,
+        }));
+        setApprovals((current) =>
+          current.map((item) =>
+            item.id === draft.id
+              ? {
+                  ...item,
+                  media_type: "image",
+                  image_status: "completed",
+                  image_url: result.image_url,
+                }
+              : item,
+          ),
+        );
+        try {
+          const refreshedDrafts = await getDrafts(businessId, true);
+          if (
+            isCurrentBusiness() &&
+            selectedBusinessRef.current === businessId
+          ) {
+            setApprovals(refreshedDrafts);
+          }
+        } catch (refreshError) {
+          console.error(
+            "Drafts could not be refreshed after image upload:",
+            refreshError,
+          );
+        }
+      }
+      return true;
+    } catch (error) {
+      console.error("Image upload failed:", error);
+      if (isCurrentBusiness() && selectedBusinessRef.current === businessId) {
+        setImageErrors((current) => ({
+          ...current,
+          [draft.id]:
+            apiErrorDetail(error) ?? tRef.current("media.imageUploadError"),
+        }));
+      }
+      return false;
+    } finally {
+      imageLocks.current.delete(draft.id);
+      setImageBusyIds((current) =>
+        current.filter((value) => value !== draft.id),
+      );
+    }
+  };
+  const handleReuseImage = async (
+    draft: Draft,
+    sourceDraftId: string,
+  ): Promise<boolean> => {
+    const businessId = draft.business_id;
+    if (
+      !businessId ||
+      imageLocks.current.has(draft.id) ||
+      operations.busyDraftIds.includes(draft.id) ||
+      draft.status !== "pending" ||
+      draft.image_url ||
+      draft.media_type === "video" ||
+      draft.video_url ||
+      !["not_started", "failed"].includes(draft.video_status) ||
+      !["not_started", "failed"].includes(draft.image_status)
+    )
+      return false;
+    imageLocks.current.add(draft.id);
+    setImageBusyIds((current) => [...current, draft.id]);
+    setImageErrors((current) => {
+      const next = { ...current };
+      delete next[draft.id];
+      return next;
+    });
+    try {
+      const result = await reuseDraftImage(draft.id, sourceDraftId);
+      if (isCurrentBusiness() && selectedBusinessRef.current === businessId) {
+        setImageUrls((current) => ({
+          ...current,
+          [draft.id]: result.image_url,
+        }));
+        setApprovals((current) =>
+          current.map((item) =>
+            item.id === draft.id
+              ? {
+                  ...item,
+                  media_type: "image",
+                  image_status: "completed",
+                  image_url: result.image_url,
+                }
+              : item,
+          ),
+        );
+        try {
+          const refreshedDrafts = await getDrafts(businessId, true);
+          if (
+            isCurrentBusiness() &&
+            selectedBusinessRef.current === businessId
+          ) {
+            setApprovals(refreshedDrafts);
+          }
+        } catch (refreshError) {
+          console.error(
+            "Drafts could not be refreshed after image reuse:",
+            refreshError,
+          );
+        }
+      }
+      return true;
+    } catch (error) {
+      console.error("Image reuse failed:", error);
+      if (isCurrentBusiness() && selectedBusinessRef.current === businessId) {
+        setImageErrors((current) => ({
+          ...current,
+          [draft.id]:
+            apiErrorDetail(error) ?? tRef.current("media.imageReuseError"),
+        }));
+      }
+      return false;
     } finally {
       imageLocks.current.delete(draft.id);
       setImageBusyIds((current) =>
@@ -205,12 +363,7 @@ export function useDraftMedia(
       revisions[draft.id]?.status === "generating"
     )
       return;
-    if (
-      !window.confirm(
-        tRef.current("media.confirmRevision"),
-      )
-    )
-      return;
+    if (!window.confirm(tRef.current("media.confirmRevision"))) return;
     const businessId = draft.business_id;
     imageLocks.current.add(draft.id);
     setRevisionBusyIds((ids) => [...ids, draft.id]);
@@ -227,8 +380,7 @@ export function useDraftMedia(
         if (!isCurrentBusiness()) return;
         setRevisionErrors((current) => ({
           ...current,
-          [draft.id]:
-            tRef.current("media.revisionUncertain"),
+          [draft.id]: tRef.current("media.revisionUncertain"),
         }));
       }
     } finally {
@@ -288,8 +440,7 @@ export function useDraftMedia(
       if (isCurrentBusiness() && selectedBusinessRef.current === businessId) {
         setRevisionErrors((current) => ({
           ...current,
-          [draft.id]:
-            tRef.current("media.revisionDecisionError"),
+          [draft.id]: tRef.current("media.revisionDecisionError"),
         }));
       }
     } finally {
@@ -311,6 +462,8 @@ export function useDraftMedia(
     revisionErrors,
     toggleImageEditor,
     handleGenerateImage,
+    handleUploadImage,
+    handleReuseImage,
     handlePreviewImage,
     refreshRevision,
     handleCreateRevision,

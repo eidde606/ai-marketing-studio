@@ -1,6 +1,6 @@
 import type { Dispatch, SetStateAction } from "react";
 import type { Draft } from "../../../services/draftsApi";
-import { useLocalization } from "../../../app/localization";
+import { useLocalization } from "../../../app/useLocalization";
 type Props = {
   draft: Draft;
   editTitle: string;

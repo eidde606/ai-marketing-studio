@@ -8,8 +8,29 @@ from app.errors import ApplicationError
 from app.features.access.principal import AuthenticatedPrincipal
 from app.http_errors import http_error
 from . import service
+from . import edian_service
+from .schemas import EdianAnalysisRequest
 
 router = APIRouter()
+
+
+@router.post("/businesses/{business_id}/analytics/edian")
+async def analyze_business_with_edian(
+    business_id: str,
+    request: EdianAnalysisRequest,
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+):
+    try:
+        return await edian_service.analyze_business(
+            business_id,
+            locale=request.locale,
+            idempotency_key=request.idempotency_key,
+            db=db,
+            principal=principal,
+        )
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
 
 
 @router.get("/drafts/{draft_id}/analytics/facebook")

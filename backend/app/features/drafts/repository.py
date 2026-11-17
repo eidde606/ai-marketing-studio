@@ -30,6 +30,7 @@ def list_drafts(
         visibility = or_(
             visibility,
             Draft.facebook_publish_status == "published",
+            Draft.instagram_publish_status == "published",
             Draft.tiktok_publish_status == "published",
             Draft.published_at.is_not(None),
         )
@@ -79,6 +80,7 @@ def _soft_delete_if_idle_statement(draft_id, deleted_at):
             Draft.id == draft_id,
             Draft.deleted_at.is_(None),
             Draft.facebook_publish_status != "publishing",
+            Draft.instagram_publish_status != "publishing",
             Draft.tiktok_publish_status != "publishing",
             Draft.image_status != "generating",
             Draft.video_status.not_in(["generating", "uploading"]),
@@ -114,6 +116,7 @@ def list_drafts_scoped(db: Session, context: TenantAccess, *, include_deleted_pu
     visibility = Draft.deleted_at.is_(None)
     if include_deleted_published:
         visibility = or_(visibility, Draft.facebook_publish_status == "published",
+                         Draft.instagram_publish_status == "published",
                          Draft.tiktok_publish_status == "published", Draft.published_at.is_not(None))
     return db.scalars(tenant.page(tenant.selection(Draft, context).where(visibility)
         .order_by(Draft.created_at.desc(), Draft.id.desc()), limit=limit, offset=offset)).all()

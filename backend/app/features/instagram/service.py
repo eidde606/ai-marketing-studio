@@ -1,5 +1,7 @@
+import base64
 import hashlib
 import logging
+import os
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -10,7 +12,8 @@ from app.errors import ApplicationError, ErrorKind
 from app.features.access import service as access
 from app.features.access.permissions import Permission
 from app.features.access.principal import AuthenticatedPrincipal
-from app.features.instagram import provider, repository
+from app.frontend_origins import resolve_frontend_origin
+from app.features.instagram import diagnostics, provider, repository
 from app.features.instagram.provider import MetaAPIError, TokenExchangeError
 from app.models import InstagramConnection, InstagramOAuthState
 from app.token_service import encrypt_token
@@ -26,6 +29,27 @@ STATUS_MESSAGES = {
 }
 
 logger = logging.getLogger(__name__)
+
+
+def _log_oauth_diagnostics(result: dict) -> None:
+    logger.info(
+        "Instagram OAuth diagnostic: token_type=%s token_valid=%s "
+        "app_id_match=%s debug_scopes=%s permissions=%s page_ids=%s "
+        "page_tasks=%s page_result_count=%s authorized_page_id=%s "
+        "authorized_page_match=%s page_list_complete=%s errors=%s",
+        result["token_type"],
+        result["token_valid"],
+        result["app_id_match"],
+        result["debug_scopes"],
+        result["permissions"],
+        result["page_ids"],
+        result["page_tasks"],
+        result["page_result_count"],
+        result["authorized_page_id"],
+        result["authorized_page_match"],
+        result["page_list_complete"],
+        result["errors"],
+    )
 
 
 class BusinessNotFoundError(Exception):
@@ -56,9 +80,13 @@ def start_connection(
     db: Session,
     business_id: str,
     principal: AuthenticatedPrincipal,
+    *,
+    frontend_origin: str | None = None,
 ) -> str:
     try:
-        return _start_connection(db, business_id, principal)
+        return _start_connection(
+            db, business_id, principal, frontend_origin=frontend_origin,
+        )
     except ApplicationError as exc:
         if exc.kind is ErrorKind.NOT_FOUND:
             raise BusinessNotFoundError(
@@ -83,15 +111,27 @@ def _start_connection(
     db: Session,
     business_id: str,
     principal: AuthenticatedPrincipal,
+    *,
+    frontend_origin: str | None,
 ) -> str:
     context = access.require_permission(
         db, principal, business_id, Permission.MANAGE_CONNECTIONS, lock=True,
     )
-    page = repository.get_facebook_page_scoped(db, context)
-    if page is None:
+    pages = repository.get_connected_facebook_pages_scoped(db, context)
+    if not pages:
         raise ValueError("Conecta primero una página de Facebook para este negocio.")
+    if len(pages) > 1:
+        raise ValueError(
+            "Desconecta las páginas adicionales de Facebook de este negocio antes de conectar Instagram."
+        )
+    page = pages[0]
 
-    state = secrets.token_urlsafe(32)
+    state = _encode_oauth_state(
+        resolve_frontend_origin(
+            frontend_origin,
+            os.getenv("FRONTEND_BASE_URL", ""),
+        ),
+    )
     try:
         authorization_url = provider.build_login_url(state)
     except RuntimeError as exc:
@@ -120,7 +160,7 @@ def _start_connection(
 def consume_callback_state(
     db: Session,
     state: str,
-) -> tuple[InstagramOAuthState, AuthenticatedPrincipal] | None:
+) -> tuple[InstagramOAuthState, AuthenticatedPrincipal, str | None] | None:
     now = datetime.now(timezone.utc)
     state_hash = hashlib.sha256(state.encode()).hexdigest()
     identity = repository.oauth_state_identity(db, state_hash, now)
@@ -146,7 +186,31 @@ def consume_callback_state(
             state_hash=state_hash,
         ),
         principal,
+        _decode_oauth_state_origin(state),
     )
+
+
+def _encode_oauth_state(frontend_origin: str) -> str:
+    encoded_origin = base64.urlsafe_b64encode(
+        frontend_origin.encode("utf-8"),
+    ).decode("ascii").rstrip("=")
+    return f"v1.{encoded_origin}.{secrets.token_urlsafe(32)}"
+
+
+def _decode_oauth_state_origin(state: str) -> str | None:
+    parts = state.split(".", 2)
+    if len(parts) != 3 or parts[0] != "v1" or not parts[2]:
+        return None
+    try:
+        encoded_origin = parts[1] + "=" * (-len(parts[1]) % 4)
+        origin = base64.b64decode(
+            encoded_origin,
+            altchars=b"-_",
+            validate=True,
+        ).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return None
+    return origin
 
 
 def _save_status(
@@ -237,6 +301,23 @@ async def complete_authorization(
         _log_provider_failure("token exchange", exc)
         _save_status(db, authorization.business_id, principal, status="discovery_error")
         return "discovery_error"
+
+    if diagnostics.requested_but_unsafe():
+        logger.warning(
+            "Instagram OAuth diagnostic refused (category=development_guard_failed)"
+        )
+    elif diagnostics.enabled_for_local_development():
+        try:
+            diagnostic_result = await diagnostics.collect_oauth_diagnostics(
+                access_token,
+                authorization.facebook_page_id,
+            )
+        except Exception:
+            logger.warning(
+                "Instagram OAuth diagnostic failed (category=internal_error)"
+            )
+        else:
+            _log_oauth_diagnostics(diagnostic_result)
 
     try:
         permissions = await provider.get_granted_permissions(access_token)
@@ -422,6 +503,7 @@ def connection_response(
             "message": None,
         }
 
+
     status = connection.status
     expires_at = connection.token_expires_at
     if expires_at is not None and expires_at.tzinfo is None:
@@ -459,3 +541,28 @@ def connection_response(
             else STATUS_MESSAGES["reauthorization_required"]
         ),
     }
+
+
+def disconnect_connection(
+    db: Session,
+    business_id: str,
+    principal: AuthenticatedPrincipal,
+) -> dict[str, str]:
+    context = access.require_permission(
+        db, principal, business_id, Permission.MANAGE_CONNECTIONS, lock=True,
+    )
+    existing = repository.get_connection_scoped(db, context)
+    if existing is None:
+        return {"status": "not_connected"}
+    repository.update_connection_scoped(db, context, {
+        "instagram_account_id": None,
+        "username": None,
+        "facebook_page_id": None,
+        "encrypted_access_token": None,
+        "token_expires_at": None,
+        "granted_permissions": [],
+        "status": "not_connected",
+        "last_error": None,
+    })
+    Transactions(db).commit()
+    return {"status": "not_connected"}

@@ -1,5 +1,5 @@
 import type { Draft } from "../../services/draftsApi";
-import { useLocalization } from "../../app/localization";
+import { useLocalization } from "../../app/useLocalization";
 import { draftTranslationKeys } from "./campaignLabels";
 
 type Props = {

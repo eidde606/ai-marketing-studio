@@ -1,19 +1,22 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { useLocalization } from "../app/localization";
+import { ArrowRight, BookOpen, Check, Sparkles } from "lucide-react";
+import { useLocalization } from "../app/useLocalization";
 import type { Section } from "./Sidebar";
 
 type Props = {
   activeSection: Section;
   initialStep: number;
   onComplete: (step: number) => Promise<void>;
+  onDismiss: () => void;
   onNavigate: (section: Section) => void;
+  onPause: (step: number) => Promise<void>;
   onStepChange: (step: number) => Promise<void>;
 };
 
 const tutorialSlides = [
   {
-    title: "tutorial.dashboardTitle",
-    body: "tutorial.dashboardBody",
+    title: "tutorial.welcomeTitle",
+    body: "tutorial.welcomeBody",
     section: "Resumen",
     target: "dashboard-overview",
   },
@@ -82,7 +85,9 @@ export default function ProductTutorial({
   activeSection,
   initialStep,
   onComplete,
+  onDismiss,
   onNavigate,
+  onPause,
   onStepChange,
 }: Props) {
   const { t } = useLocalization();
@@ -91,6 +96,7 @@ export default function ProductTutorial({
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(false);
+  const [finished, setFinished] = useState(false);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const slide = tutorialSlides[step];
 
@@ -111,22 +117,56 @@ export default function ProductTutorial({
 
   useEffect(() => {
     headingRef.current?.focus({ preventScroll: true });
-  }, [step]);
+  }, [step, finished]);
 
-  async function complete() {
+  async function skip() {
     if (saving) return;
     setSaving(true);
     setError(false);
     try {
       await onComplete(step);
+      onDismiss();
+    } catch {
+      setError(true);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function pause() {
+    if (saving) return;
+    setSaving(true);
+    setError(false);
+    try {
+      await onPause(step);
     } catch {
       setError(true);
       setSaving(false);
     }
   }
 
+  async function finish() {
+    if (saving) return;
+    setSaving(true);
+    setError(false);
+    try {
+      await onComplete(step);
+      setFinished(true);
+    } catch {
+      setError(true);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function navigateTo(section: Section) {
+    onDismiss();
+    onNavigate(section);
+  }
+
   async function moveTo(nextStep: number) {
-    if (saving || nextStep < 0 || nextStep >= tutorialSlides.length) return;
+    if (saving || finished || nextStep < 0 || nextStep >= tutorialSlides.length)
+      return;
     setSaving(true);
     setError(false);
     try {
@@ -142,7 +182,7 @@ export default function ProductTutorial({
   function handleKeyDown(event: KeyboardEvent<HTMLElement>) {
     if (event.key === "Escape") {
       event.preventDefault();
-      void complete();
+      void pause();
     } else if (event.key === "ArrowLeft") {
       event.preventDefault();
       void moveTo(step - 1);
@@ -157,57 +197,121 @@ export default function ProductTutorial({
       className="product-guide panel"
       aria-label={t("tutorial.title")}
       onKeyDown={handleKeyDown}
+      aria-live="polite"
     >
-      <p className="eyebrow">
-        {t("tutorial.stepCount", {
-          step: step + 1,
-          total: tutorialSlides.length,
-        })}
-      </p>
-      <h2 id="tutorial-title" ref={headingRef} tabIndex={-1} aria-live="polite">
-        {t(slide.title)}
-      </h2>
-      <p>{t(slide.body)}</p>
+      <div className="product-guide__brand">
+        <span className="product-guide__icon" aria-hidden="true">
+          {finished ? <Check size={20} /> : <Sparkles size={20} />}
+        </span>
+        <span className="eyebrow">{t("tutorial.title")}</span>
+        {!finished && (
+          <button
+            type="button"
+            className="product-guide__pause"
+            onClick={() => void pause()}
+            disabled={saving}
+            aria-label={t("tutorial.saveAndExit")}
+          >
+            {t("tutorial.saveAndExit")}
+          </button>
+        )}
+      </div>
+      {!finished ? (
+        <>
+          <div
+            className="product-guide__progress"
+            role="progressbar"
+            aria-label={t("tutorial.progress")}
+            aria-valuemin={1}
+            aria-valuemax={tutorialSlides.length}
+            aria-valuenow={step + 1}
+          >
+            <span
+              style={{
+                width: `${((step + 1) / tutorialSlides.length) * 100}%`,
+              }}
+            />
+          </div>
+          <p className="product-guide__step">
+            {t("tutorial.stepCount", {
+              step: step + 1,
+              total: tutorialSlides.length,
+            })}
+          </p>
+          <h2 id="tutorial-title" ref={headingRef} tabIndex={-1}>
+            {t(slide.title)}
+          </h2>
+          <p className="product-guide__body">{t(slide.body)}</p>
+        </>
+      ) : (
+        <div className="product-guide__completion">
+          <p className="eyebrow">{t("tutorial.completeEyebrow")}</p>
+          <h2 id="tutorial-title" ref={headingRef} tabIndex={-1}>
+            {t("tutorial.completeTitle")}
+          </h2>
+          <p className="product-guide__body">{t("tutorial.completeBody")}</p>
+          <div className="product-guide__completion-actions">
+            <button
+              type="button"
+              className="primary-button"
+              onClick={() => navigateTo("Facturación")}
+            >
+              {t("tutorial.explorePlans")}
+              <ArrowRight size={17} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => navigateTo("Resumen")}
+            >
+              <BookOpen size={17} aria-hidden="true" />
+              {t("tutorial.continueDashboard")}
+            </button>
+          </div>
+        </div>
+      )}
       {error && <p role="alert">{t("tutorial.saveError")}</p>}
-      <div className="tutorial-actions">
-        <button
-          type="button"
-          className="reject-button"
-          onClick={() => void complete()}
-          disabled={saving}
-        >
-          {t("tutorial.skip")}
-        </button>
-        <div>
+      {!finished && (
+        <div className="tutorial-actions">
           <button
             type="button"
             className="reject-button"
-            onClick={() => void moveTo(step - 1)}
-            disabled={step === 0 || saving}
+            onClick={() => void skip()}
+            disabled={saving}
           >
-            {t("tutorial.back")}
+            {saving ? t("common.saving") : t("tutorial.skip")}
           </button>
-          {step < tutorialSlides.length - 1 ? (
+          <div>
             <button
               type="button"
-              className="primary-button"
-              onClick={() => void moveTo(step + 1)}
-              disabled={saving}
+              className="reject-button"
+              onClick={() => void moveTo(step - 1)}
+              disabled={step === 0 || saving}
             >
-              {saving ? t("common.saving") : t("tutorial.next")}
+              {t("tutorial.back")}
             </button>
-          ) : (
-            <button
-              type="button"
-              className="primary-button"
-              onClick={() => void complete()}
-              disabled={saving}
-            >
-              {saving ? t("common.saving") : t("tutorial.finish")}
-            </button>
-          )}
+            {step < tutorialSlides.length - 1 ? (
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => void moveTo(step + 1)}
+                disabled={saving}
+              >
+                {saving ? t("common.saving") : t("tutorial.next")}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => void finish()}
+                disabled={saving}
+              >
+                {saving ? t("common.saving") : t("tutorial.finish")}
+              </button>
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </aside>
   );
 }

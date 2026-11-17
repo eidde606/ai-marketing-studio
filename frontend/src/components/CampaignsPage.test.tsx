@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import CampaignsPage from "./CampaignsPage";
@@ -81,6 +82,11 @@ async function openDeletionForm() {
   return screen.getByRole("button", { name: "Delete campaign" });
 }
 
+async function openDeleteConfirmation() {
+  fireEvent.click(await openDeletionForm());
+  return screen.findByRole("dialog", { name: "Delete campaign?" });
+}
+
 describe("CampaignsPage campaign management", () => {
   beforeEach(() => {
     vi.resetAllMocks();
@@ -102,19 +108,26 @@ describe("CampaignsPage campaign management", () => {
     expect(networkCalls).toBe(0);
   });
 
-  it("makes no changes when deletion confirmation is canceled", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-    render(<CampaignsPage businessId="business-1" />);
+  it("uses a separate outlined danger style for campaign deletion", async () => {
+    const deleteButton = await openDeletionForm();
+    expect(deleteButton.classList.contains("outline-button")).toBe(true);
+    expect(deleteButton.classList.contains("danger-button")).toBe(false);
+    expect(
+      screen.getByRole("button", { name: "Save campaign" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+  });
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Edit campaign" }),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Delete campaign" }));
-
-    expect(confirm).toHaveBeenCalledWith(
-      expect.stringContaining("Campaña de verano"),
-    );
+  it("shows the campaign and preserves it when deletion is canceled", async () => {
+    const dialog = await openDeleteConfirmation();
+    expect(
+      within(dialog).getByText(
+        /Only the campaign "Campaña de verano" will be deleted/,
+      ),
+    ).toBeTruthy();
     expect(campaignApi.deleteCampaign).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(
       screen.getByRole("heading", { name: "Edit campaign" }),
     ).toBeTruthy();
@@ -124,22 +137,22 @@ describe("CampaignsPage campaign management", () => {
     await waitFor(() => {
       expect(screen.queryByText(/Campaign deleted/)).toBeNull();
     });
-    confirm.mockRestore();
   });
 
   it("removes the campaign and makes its preserved content available to another campaign", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     campaignApi.getCampaigns.mockResolvedValue([campaign, remainingCampaign]);
     vi.mocked(getDrafts).mockResolvedValue([associatedDraft]);
     campaignApi.deleteCampaign.mockResolvedValue({
       message: "Campaña eliminada correctamente.",
     });
 
-    const deleteButton = await openDeletionForm();
+    const dialog = await openDeleteConfirmation();
     expect(
       screen.queryByRole("option", { name: /Publicación conservada/ }),
     ).toBeNull();
-    fireEvent.click(deleteButton);
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Delete campaign" }),
+    );
 
     await screen.findByText(
       "Campaign deleted. Its content and history have been preserved.",
@@ -169,11 +182,13 @@ describe("CampaignsPage campaign management", () => {
   });
 
   it("shows the empty state after deleting the last campaign", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     campaignApi.deleteCampaign.mockResolvedValue({
       message: "Campaña eliminada correctamente.",
     });
-    fireEvent.click(await openDeletionForm());
+    const dialog = await openDeleteConfirmation();
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Delete campaign" }),
+    );
 
     await screen.findByText(/No campaigns yet/);
     expect(screen.getByRole("status").textContent).toContain(
@@ -191,7 +206,6 @@ describe("CampaignsPage campaign management", () => {
   });
 
   it("keeps the campaign, form and association when deletion fails, then allows a retry", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     vi.mocked(getDrafts).mockResolvedValue([associatedDraft]);
     campaignApi.deleteCampaign
       .mockRejectedValueOnce(
@@ -200,16 +214,19 @@ describe("CampaignsPage campaign management", () => {
         ),
       )
       .mockResolvedValueOnce({ message: "Campaña eliminada correctamente." });
-    fireEvent.click(await openDeletionForm());
+    const dialog = await openDeleteConfirmation();
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Delete campaign" }),
+    );
 
-    const alert = await screen.findByRole("alert");
+    const alert = await within(dialog).findByRole("alert");
     expect(alert.textContent).toContain("No se pudo eliminar la campaña");
-    expect(
-      screen.getByRole("heading", { name: "Edit campaign" }),
-    ).toBeTruthy();
-    expect(
-      screen.getByText(campaign.name, { selector: "strong" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Edit campaign" })).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByRole("heading", { name: "Edit campaign" })).toBeTruthy();
+    expect(screen.getByText(campaign.name, { selector: "strong" })).toBeTruthy();
     expect((screen.getByLabelText("Name *") as HTMLInputElement).value).toBe(
       campaign.name,
     );
@@ -221,25 +238,34 @@ describe("CampaignsPage campaign management", () => {
     expect(campaignApi.deleteCampaign).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByRole("button", { name: "Delete campaign" }));
+    const retryDialog = await screen.findByRole("dialog", {
+      name: "Delete campaign?",
+    });
+    fireEvent.click(
+      within(retryDialog).getByRole("button", { name: "Delete campaign" }),
+    );
     await screen.findByText(/Campaign deleted/);
     expect(campaignApi.deleteCampaign).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("waits for the server response and prevents duplicate submissions while busy", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     let finishDeletion!: (value: { message: string }) => void;
     campaignApi.deleteCampaign.mockReturnValue(
       new Promise((resolve) => {
         finishDeletion = resolve;
       }),
     );
-    const deleteButton = await openDeletionForm();
+    const dialog = await openDeleteConfirmation();
+    const deleteButton = within(dialog).getByRole("button", {
+      name: "Delete campaign",
+    });
     fireEvent.click(deleteButton);
     fireEvent.click(deleteButton);
 
     expect(campaignApi.deleteCampaign).toHaveBeenCalledTimes(1);
-    expect(deleteButton.closest("fieldset")?.disabled).toBe(true);
+    expect((deleteButton as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole("dialog")).toBeTruthy();
     expect(
       screen.getByText(campaign.name, { selector: "strong" }),
     ).toBeTruthy();
@@ -350,14 +376,71 @@ describe("CampaignsPage campaign management", () => {
     expect(campaignApi.createCampaign).not.toHaveBeenCalled();
   });
 
-  it("cancels an edit without saving or changing the campaign", async () => {
+  it("asks before discarding unsaved edits and leaves the form open if canceled", async () => {
     await openDeletionForm();
     fireEvent.change(screen.getByLabelText("Name *"), {
       target: { value: "Cambio sin guardar" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Discard unsaved changes?",
+    });
+    expect(
+      within(dialog).getByText(/changes to "Cambio sin guardar" will be lost/),
+    ).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    expect((screen.getByLabelText("Name *") as HTMLInputElement).value).toBe(
+      "Cambio sin guardar",
+    );
+    expect(campaignApi.updateCampaign).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    const discardDialog = await screen.findByRole("dialog", {
+      name: "Discard unsaved changes?",
+    });
+    fireEvent.click(
+      within(discardDialog).getByRole("button", { name: "Discard changes" }),
+    );
     expect(screen.getByRole("heading", { name: campaign.name })).toBeTruthy();
     expect(screen.queryByLabelText("Name *")).toBeNull();
+    expect(campaignApi.updateCampaign).not.toHaveBeenCalled();
+  });
+
+  it("closes a clean edit form without a confirmation or save", async () => {
+    await openDeletionForm();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("heading", { name: campaign.name })).toBeTruthy();
+    expect(campaignApi.updateCampaign).not.toHaveBeenCalled();
+  });
+
+  it("asks before switching campaigns with unsaved edits", async () => {
+    campaignApi.getCampaigns.mockResolvedValue([campaign, remainingCampaign]);
+    render(<CampaignsPage businessId="business-1" />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Edit campaign" }),
+    );
+    fireEvent.change(screen.getByLabelText("Name *"), {
+      target: { value: "Unsaved campaign name" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: /Campaña de otoño/ }),
+    );
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Discard unsaved changes?",
+    });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Discard changes" }),
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: remainingCampaign.name }),
+    ).toBeTruthy();
     expect(campaignApi.updateCampaign).not.toHaveBeenCalled();
   });
 
@@ -471,6 +554,54 @@ describe("CampaignsPage campaign management", () => {
     ).toBeTruthy();
     expect(campaignApi.getCampaigns).toHaveBeenCalledTimes(2);
     expect(getDrafts).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows refresh progress, prevents repeated reloads, and updates selected details", async () => {
+    const refreshedCampaign = {
+      ...campaign,
+      objective: "Objetivo actualizado",
+      progress: 35,
+    };
+    let finishRefresh!: (items: Campaign[]) => void;
+    campaignApi.getCampaigns
+      .mockResolvedValueOnce([campaign])
+      .mockReturnValueOnce(
+        new Promise<Campaign[]>((resolve) => {
+          finishRefresh = resolve;
+        }),
+      );
+    render(<CampaignsPage businessId="business-1" />);
+    await screen.findByRole("heading", { name: campaign.name });
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    const refreshing = screen.getByRole("button", { name: "Refreshing…" });
+    expect((refreshing as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(refreshing);
+    expect(campaignApi.getCampaigns).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      finishRefresh([refreshedCampaign]);
+    });
+    expect(
+      screen.getByRole("heading", { name: campaign.name }),
+    ).toBeTruthy();
+    expect(screen.getByText("Objetivo actualizado")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Refresh" })).toBeTruthy();
+  });
+
+  it("shows a refresh error and keeps the selected campaign visible", async () => {
+    campaignApi.getCampaigns
+      .mockResolvedValueOnce([campaign])
+      .mockRejectedValueOnce(new Error("Refresh unavailable"));
+    render(<CampaignsPage businessId="business-1" />);
+    await screen.findByRole("heading", { name: campaign.name });
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Refresh unavailable",
+    );
+    expect(screen.getByRole("heading", { name: campaign.name })).toBeTruthy();
   });
 
   it("retains form values and displays a server error when saving fails", async () => {

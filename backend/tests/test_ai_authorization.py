@@ -84,6 +84,10 @@ def test_inactive_membership_blocks_all_ai_workflows(ai_case, status):
 def test_foreign_conversations_messages_and_missing_membership(ai_case):
     client, engine, chat, generate = ai_case
     assert client.get("/businesses/b/sofia/conversations").status_code == 404
+    assert client.post(
+        "/businesses/b/generate-content",
+        json={"idempotency_key": "foreign-business-generation"},
+    ).status_code == 404
     for resource in ("b-conversation", "b-message-0", "unknown"):
         path = f"/businesses/a/sofia/conversations/{resource}"
         assert client.get(path).status_code == 404
@@ -179,7 +183,8 @@ def test_full_history_pagination_and_request_local_attribution(ai_case, monkeypa
         }).status_code == 200
         profile, history = chat.call_args.args
         assert profile.name == business
-        assert len(history) == (109 if business == "a" else 4)
+        assert len(history) == (20 if business == "a" else 4)
+        assert history[-1].content == "new"
         assert not hasattr(profile, "_sa_instance_state")
         assert not hasattr(history[0], "_sa_instance_state")
     assert [item.business_id for item in seen] == ["a", "b"]

@@ -31,7 +31,13 @@ def start_connection(
 
     state = secrets.token_urlsafe(32)
     state_hash = hashlib.sha256(state.encode()).hexdigest()
-    login_url = provider.get_tiktok_login_url(state)
+    try:
+        login_url = provider.get_tiktok_login_url(state)
+    except (KeyError, RuntimeError) as exc:
+        raise ApplicationError(
+            ErrorKind.UNAVAILABLE,
+            "TikTok connection is not configured",
+        ) from exc
     repository.add_oauth_state_scoped(
         db,
         context,
@@ -137,16 +143,55 @@ def list_accounts(
         accounts.extend(page)
         if len(page) < 100:
             break
+    now = datetime.now(timezone.utc)
     return {
         "accounts": [
             {
                 "id": account.id,
                 "account_name": account.account_name,
-                "connection_status": account.connection_status,
+                "connection_status": _account_status(account, now),
             }
             for account in accounts
         ]
     }
+
+
+def disconnect_account(
+    account_id: str,
+    business_id: str,
+    *,
+    db: Session,
+    principal: AuthenticatedPrincipal,
+) -> dict[str, str]:
+    context = access.require_permission(
+        db, principal, business_id, Permission.MANAGE_CONNECTIONS, lock=True,
+    )
+    account = repository.get_account_scoped(db, context, account_id)
+    if account is None:
+        raise ApplicationError(ErrorKind.NOT_FOUND, "TikTok account not found")
+    if not repository.update_account_scoped(db, context, account_id, {
+        "encrypted_access_token": encrypt_token(""),
+        "encrypted_refresh_token": None,
+        "token_expires_at": None,
+        "connection_status": "disconnected",
+    }):
+        raise ApplicationError(ErrorKind.NOT_FOUND, "TikTok account not found")
+    Transactions(db).commit()
+    return {"status": "disconnected"}
+
+
+def _account_status(account: SocialAccount, now: datetime) -> str:
+    expires_at = account.token_expires_at
+    if expires_at is None:
+        return account.connection_status
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if (
+        expires_at <= now
+        and account.connection_status == "connected"
+    ):
+        return "reauthorization_required"
+    return account.connection_status
 
 
 async def get_valid_access_token(

@@ -9,7 +9,47 @@ import {
 import type { Section } from "../../../components/Sidebar";
 import type { DraftCollection } from "./useDraftCollection";
 import type { DraftOperations } from "./useDraftOperations";
-import { useLocalization } from "../../../app/localization";
+import { useLocalization } from "../../../app/useLocalization";
+import type { Translate } from "../../../app/localization";
+import { ApiError } from "../../../lib/apiClient";
+
+const OVERSIZED_CONTEXT_DETAIL =
+  "This AI request contains too much context. Shorten the request or conversation and try again.";
+const INVALID_IDEMPOTENCY_DETAIL = "A valid idempotency key is required";
+const SAFE_ERROR_CODES = new Set([
+  "ai_entitlement_required",
+  "ai_quota_exhausted",
+  "ai_subscription_required",
+  "invalid_input",
+  "provider_rate_limited",
+  "upstream_failure",
+]);
+
+function generationErrorMessage(error: unknown, translate: Translate): string {
+  if (!(error instanceof ApiError)) return translate("draft.generationError");
+  if (error.message === OVERSIZED_CONTEXT_DETAIL) {
+    return translate("draft.generationContextTooLarge");
+  }
+  if (error.code === "ai_quota_exhausted") {
+    return translate("draft.generationQuotaExceeded");
+  }
+  if (
+    error.code === "ai_entitlement_required" ||
+    error.code === "ai_subscription_required"
+  ) {
+    return translate("draft.generationAccessRequired");
+  }
+  if (error.code === "provider_rate_limited") {
+    return translate("draft.generationProviderThrottled");
+  }
+  if (
+    error.code === "invalid_input" ||
+    error.message === INVALID_IDEMPOTENCY_DETAIL
+  ) {
+    return translate("draft.generationInvalidInput");
+  }
+  return translate("draft.generationError");
+}
 
 export function useDraftActions(
   selectedBusinessId: string,
@@ -61,11 +101,25 @@ export function useDraftActions(
         setActiveSection("Aprobaciones");
       }
     } catch (error) {
-      console.error("Content generation failed:", error);
+      if (import.meta.env.DEV && error instanceof ApiError) {
+        const safeCode =
+          error.code && SAFE_ERROR_CODES.has(error.code)
+            ? error.code
+            : "unknown";
+        const safeDetail =
+          error.message === OVERSIZED_CONTEXT_DETAIL
+            ? "context_too_large"
+            : error.message === INVALID_IDEMPOTENCY_DETAIL
+              ? "invalid_idempotency_key"
+              : "unrecognized";
+        console.warn("Valeria content generation failed", {
+          status: error.status,
+          code: safeCode,
+          detail: safeDetail,
+        });
+      }
       if (isCurrentBusiness() && selectedBusinessRef.current === businessId) {
-        setGenerationError(
-          tRef.current("draft.generationError"),
-        );
+        setGenerationError(generationErrorMessage(error, tRef.current));
       }
     } finally {
       setGenerating(false);

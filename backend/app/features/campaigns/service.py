@@ -44,6 +44,10 @@ def is_published(draft: Draft) -> bool:
     # Approval, timestamps, downloads and copied captions are not evidence.
     return bool(
         (draft.facebook_publish_status == "published" and draft.facebook_post_id)
+        or (
+            draft.instagram_publish_status == "published"
+            and draft.instagram_media_id
+        )
         or (draft.tiktok_publish_status == "published" and draft.tiktok_publish_id)
     )
 

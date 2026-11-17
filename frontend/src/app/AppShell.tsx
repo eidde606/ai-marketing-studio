@@ -13,7 +13,8 @@ import Sidebar, {
   type Section,
 } from "../components/Sidebar";
 import type { Business } from "../services/businessesApi";
-import { useLocalization } from "./localization";
+import { useLocalization } from "./useLocalization";
+import LegalFooter from "../features/legal/LegalFooter";
 
 type Props = {
   activeSection: Section;
@@ -176,6 +177,7 @@ export default function AppShell({
         </header>
 
         {children}
+        <LegalFooter className="app-shell__legal-footer" />
       </main>
     </div>
   );

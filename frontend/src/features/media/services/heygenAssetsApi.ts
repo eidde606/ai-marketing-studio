@@ -1,9 +1,7 @@
 import { supabase } from "../../../services/supabaseClient";
 
 export type HeyGenAvatarType =
-  | "studio_avatar"
-  | "digital_twin"
-  | "photo_avatar";
+  "studio_avatar" | "digital_twin" | "photo_avatar";
 export type HeyGenOwnership = "private" | "public";
 export type HeyGenVoiceType = "private" | "public";
 
@@ -58,9 +56,14 @@ async function getAssetPage<T>(
     },
   });
 
-  if (response.status === 503) throw new Error("HeyGen no está configurado. Contacta al administrador.");
+  if (response.status === 503)
+    throw new Error(
+      "AI Video Studio no está configurado. Contacta al administrador.",
+    );
   if (!response.ok) {
-    throw new Error(`No se pudieron cargar los recursos de HeyGen (${response.status}).`);
+    throw new Error(
+      `No se pudieron cargar los recursos de video (${response.status}).`,
+    );
   }
 
   return response.json() as Promise<HeyGenAssetPage<T>>;

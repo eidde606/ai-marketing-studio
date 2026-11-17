@@ -9,7 +9,7 @@ import {
   type Generation,
   type GenerationRequest,
 } from "../services/heygenGenerationApi";
-import { useLocalization } from "../../../app/localization";
+import { useLocalization } from "../../../app/useLocalization";
 
 type State = {
   checked: boolean;

@@ -135,7 +135,7 @@ only checking an in-memory object or a successful HTTP response.
 
 ### AI platform and publishing destinations
 
-The tests call both generation endpoints with mocked Sofía and Leo SDK responses.
+The tests call both generation endpoints with mocked Sebastián and Valeria SDK responses.
 They check two calls in order, the current model and output platform enum, saved
 content, business scoping, conversation instructions, pending status and the
 absence of publication IDs or automatic campaign assignment.

@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 
 type StatusTone = "positive" | "neutral" | "warning";
+export type CapabilityTone =
+  "available" | "limited" | "planned" | "unavailable";
 
 export function AccountStatusNotice({
   title,
@@ -19,23 +21,19 @@ export function AccountStatusNotice({
 
 export function CapabilityStatus({
   label,
-  available,
-  availableText,
-  unavailableText,
+  status,
+  statusText,
   detail,
 }: {
   label: string;
-  available: boolean;
-  availableText: string;
-  unavailableText: string;
+  status: CapabilityTone;
+  statusText: string;
   detail?: string;
 }) {
   return (
-    <li className="capability-status">
-      <span>{label}</span>
-      <strong aria-label={available ? availableText : unavailableText}>
-        {available ? availableText : unavailableText}
-      </strong>
+    <li className={`capability-status capability-status--${status}`}>
+      <span className="capability-status__label">{label}</span>
+      <strong className="capability-status__badge">{statusText}</strong>
       {detail && <small>{detail}</small>}
     </li>
   );

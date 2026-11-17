@@ -6,7 +6,7 @@ import {
   HeyGenAssetSelector,
   type AssetSelection,
 } from "./HeyGenAssetSelector";
-import { useLocalization } from "../../../app/localization";
+import { useLocalization } from "../../../app/useLocalization";
 
 export function HeyGenGenerationPanel({
   draft,

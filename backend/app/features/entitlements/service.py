@@ -6,8 +6,8 @@ import os
 
 from sqlalchemy.orm import Session
 
-from app.errors import ApplicationError, ErrorKind
-from app.features.access.principal import AuthenticatedPrincipal
+from app.errors import ApplicationError, ErrorCode, ErrorKind
+from app.features.access.principal import AuthenticatedPrincipal, TenantAccess
 from app.features.access.permissions import Permission
 from app.models import CustomerEntitlement
 from app.transactions import Transactions
@@ -17,6 +17,7 @@ _TRIAL_LIMIT_DEFAULTS = {
     "businesses": 1,
     "leo_generations": 20,
     "sofia_requests": 5,
+    "edian_analyses": 5,
     "campaigns": 2,
     "heygen_generations": 0,
 }
@@ -24,16 +25,19 @@ _MONTHLY_LIMIT_DEFAULTS = {
     "businesses": 1,
     "leo_generations": 200,
     "sofia_requests": 100,
+    "edian_analyses": 25,
     "campaigns": 20,
     "heygen_generations": 0,
 }
 _USAGE_LIMITS = {
     "leo_generation": "leo_generations",
     "sofia_request": "sofia_requests",
+    "edian_analysis": "edian_analyses",
 }
 _AI_PERMISSIONS = frozenset({
     Permission.USE_SOFIA,
     Permission.USE_LEO,
+    Permission.USE_EDIAN,
     Permission.GENERATE_MEDIA,
 })
 _MISSING_AI_ENTITLEMENT = (
@@ -90,11 +94,15 @@ def _configured_limits(
         return defaults.copy()
     try:
         parsed = json.loads(raw)
-        if not isinstance(parsed, dict) or set(parsed) != set(defaults):
+        required = set(defaults) - {"edian_analyses"}
+        if (
+            not isinstance(parsed, dict)
+            or frozenset(parsed) not in {frozenset(defaults), frozenset(required)}
+        ):
             raise ValueError
         if any(type(value) is not int or value < 0 for value in parsed.values()):
             raise ValueError
-        return parsed
+        return {**defaults, **parsed}
     except (ValueError, TypeError):
         raise ApplicationError(
             ErrorKind.UNAVAILABLE, f"{label} limit configuration is invalid",
@@ -208,7 +216,9 @@ def assert_mutation_allowed(db: Session, business_id: str, permission: Permissio
     if entitlement is None:
         if permission in _AI_PERMISSIONS:
             raise ApplicationError(
-                ErrorKind.LIMIT_EXCEEDED, _MISSING_AI_ENTITLEMENT,
+                ErrorKind.LIMIT_EXCEEDED,
+                _MISSING_AI_ENTITLEMENT,
+                code=ErrorCode.AI_ENTITLEMENT_REQUIRED,
             )
         return
     status = effective_status(entitlement)
@@ -222,6 +232,7 @@ def assert_mutation_allowed(db: Session, business_id: str, permission: Permissio
     raise ApplicationError(
         ErrorKind.LIMIT_EXCEEDED,
         "Your trial or subscription has ended. Review account options to continue.",
+        code=ErrorCode.AI_SUBSCRIPTION_REQUIRED,
     )
 
 
@@ -267,13 +278,16 @@ def reserve_usage(
     entitlement = repository.entitlement_for_business(db, business_id)
     if entitlement is None:
         raise ApplicationError(
-            ErrorKind.LIMIT_EXCEEDED, _MISSING_AI_ENTITLEMENT,
+            ErrorKind.LIMIT_EXCEEDED,
+            _MISSING_AI_ENTITLEMENT,
+            code=ErrorCode.AI_ENTITLEMENT_REQUIRED,
         )
     status = effective_status(entitlement)
     if status not in {"trialing", "active"}:
         raise ApplicationError(
             ErrorKind.LIMIT_EXCEEDED,
             "Your subscription does not allow AI usage. Review billing options to continue.",
+            code=ErrorCode.AI_SUBSCRIPTION_REQUIRED,
         )
     organization = repository.organization_for_business(db, business_id, lock=True)
     if organization is None:
@@ -289,12 +303,22 @@ def reserve_usage(
             raise ApplicationError(ErrorKind.CONFLICT, "This idempotency key was already used")
         return existing, True
     limits = entitlement.limits or {}
-    limit = limits.get(_USAGE_LIMITS[metric], 0)
+    limit_name = _USAGE_LIMITS[metric]
+    legacy_default = (
+        _TRIAL_LIMIT_DEFAULTS[limit_name]
+        if status == "trialing"
+        else _MONTHLY_LIMIT_DEFAULTS[limit_name]
+    )
+    limit = limits.get(limit_name, legacy_default)
     if type(limit) is not int or limit < 0:
         raise ApplicationError(ErrorKind.UNAVAILABLE, "Trial usage configuration is invalid")
     period_start = entitlement.current_period_start if status == "active" else None
     if repository.count_usage(db, organization.id, metric, since=period_start) >= limit:
-        raise ApplicationError(ErrorKind.LIMIT_EXCEEDED, "This trial usage allowance is exhausted")
+        raise ApplicationError(
+            ErrorKind.LIMIT_EXCEEDED,
+            "This trial usage allowance is exhausted",
+            code=ErrorCode.AI_QUOTA_EXHAUSTED,
+        )
     return repository.insert_usage_reservation(
         db,
         organization_id=organization.id,
@@ -338,7 +362,7 @@ def release_usage_for_nonbillable_failure(
     db: Session,
     reservation_ids: list[str],
 ) -> None:
-    """Release reservations when a provider rejects authentication before generation."""
+    """Release reservations when a provider definitively rejects a request."""
     updated = False
     for reservation_id in sorted(set(reservation_ids)):
         updated = repository.release_usage_reservation(db, reservation_id) or updated
@@ -346,7 +370,14 @@ def release_usage_for_nonbillable_failure(
         Transactions(db).commit()
 
 
-def usage_for_business(db: Session, business_id: str):
+def usage_for_business(
+    db: Session,
+    business_id: str,
+    *,
+    context: TenantAccess,
+):
+    if context.business_id != business_id:
+        raise ApplicationError(ErrorKind.FORBIDDEN, "Authorized business context is required")
     entitlement = repository.entitlement_for_business(db, business_id)
     if entitlement is None:
         return None
@@ -362,6 +393,9 @@ def usage_for_business(db: Session, business_id: str):
     )
     sofia_used = repository.count_usage(
         db, organization_id, "sofia_request", since=period_start,
+    )
+    edian_used = repository.count_usage_scoped(
+        db, context, "edian_analysis", since=period_start,
     )
     now = datetime.now(timezone.utc)
     expires_at = entitlement.trial_expires_at
@@ -381,12 +415,31 @@ def usage_for_business(db: Session, business_id: str):
             },
             "leo_generations": {"used": leo_used, "limit": limits.get("leo_generations", 0)},
             "sofia_requests": {"used": sofia_used, "limit": limits.get("sofia_requests", 0)            },
+            "edian_analyses": {
+                "used": edian_used,
+                "limit": limits.get(
+                    "edian_analyses",
+                    _TRIAL_LIMIT_DEFAULTS["edian_analyses"]
+                    if effective == "trialing"
+                    else _MONTHLY_LIMIT_DEFAULTS["edian_analyses"],
+                ),
+            },
             "campaigns": {"used": campaign_count, "limit": limits.get("campaigns", 0)},
             "heygen_generations": {"used": 0, "limit": limits.get("heygen_generations", 0)},
         },
         "features": {
             "leo_generation": effective in {"trialing", "active"} and leo_used < limits.get("leo_generations", 0),
             "sofia_requests": effective in {"trialing", "active"} and sofia_used < limits.get("sofia_requests", 0),
+            "edian_analyses": (
+                effective in {"trialing", "active"}
+                and edian_used
+                < limits.get(
+                    "edian_analyses",
+                    _TRIAL_LIMIT_DEFAULTS["edian_analyses"]
+                    if effective == "trialing"
+                    else _MONTHLY_LIMIT_DEFAULTS["edian_analyses"],
+                )
+            ),
             "heygen_generation": False,
             "facebook_publishing": effective_status(entitlement) == "trialing",
             "campaign_creation": (

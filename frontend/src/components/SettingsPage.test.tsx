@@ -204,6 +204,51 @@ describe("SettingsPage", () => {
     ).toBeTruthy();
   });
 
+  it("shows Edian as available while other feature statuses remain accurate", () => {
+    render(
+      <SettingsPage
+        businessId="business-1"
+        userDisplayName="María"
+        userEmail=""
+        onSaveDisplayName={vi.fn()}
+        features={{
+          public_registration: false,
+          facebook_publishing: true,
+          tiktok_direct_publishing: false,
+          tiktok_manual_export: true,
+          instagram_publishing: false,
+          instagram_connection: true,
+          mia_analysis: true,
+          scheduling: false,
+        }}
+        facebookConnection={<div />}
+        instagramConnection={<div />}
+        tiktokConnection={<div />}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Integrations" }));
+
+    expect(
+      screen.getByText("Publish approved posts to connected Facebook Pages."),
+    ).toBeTruthy();
+    expect(
+      document.querySelector(".capability-status--available"),
+    ).toBeTruthy();
+    expect(document.querySelector(".capability-status--limited")).toBeTruthy();
+    expect(
+      document.querySelector(".capability-status--unavailable"),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Edian interprets available Facebook engagement metrics after you request an analysis. Instagram and TikTok analytics are unavailable.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("Instagram publishing is not currently supported."),
+    ).toBeTruthy();
+  });
+
   it("explains when no business is selected", () => {
     render(
       <SettingsPage

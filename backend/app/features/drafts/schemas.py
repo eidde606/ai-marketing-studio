@@ -16,9 +16,9 @@ class DraftCreate(BaseModel):
 
 class DraftDestinationsUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    destinations: list[Literal["facebook", "tiktok"]] = Field(
+    destinations: list[Literal["facebook", "instagram", "tiktok"]] = Field(
         min_length=0,
-        max_length=2,
+        max_length=3,
     )
 
 

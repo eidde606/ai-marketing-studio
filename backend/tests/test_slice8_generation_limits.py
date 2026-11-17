@@ -25,7 +25,7 @@ def configure(monkeypatch, **overrides):
 
 
 @pytest.mark.parametrize("configuration,status", [
-    ("{}", 429), ("not-json", 503), ("[]", 503),
+    ("", 429), ("   ", 429), ("{}", 429), ("not-json", 503), ("[]", 503),
     ('{"business-1":{"max_generations":true}}', 503),
 ])
 def test_missing_or_invalid_allowance_never_calls_provider(isolated_client, monkeypatch, configuration, status):
@@ -75,6 +75,29 @@ def test_allowance_recovery_and_usage_do_not_duplicate_charges(isolated_client, 
     assert repeated.json()["attempt_id"] == first.json()["attempt_id"]
     provider.assert_called_once()
     assert client.get("/businesses/business-1/heygen/usage").json()["configured"] is False
+
+
+@pytest.mark.parametrize("configuration", ["", "   ", "{}"])
+def test_empty_business_allowance_configuration_returns_unconfigured_usage(
+    isolated_client, monkeypatch, configuration,
+):
+    client, engine = isolated_client
+    create_draft(engine)
+    monkeypatch.setenv("HEYGEN_BUSINESS_ALLOWANCES", configuration)
+
+    response = client.get("/businesses/business-1/heygen/usage")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "business_id": "business-1",
+        "configured": False,
+        "limits": None,
+        "attempts_used": 0,
+        "active_jobs": 0,
+        "remaining_generations": 0,
+        "period": "lifetime",
+        "unit": "generation_attempts",
+    }
 
 
 def second_draft(engine):

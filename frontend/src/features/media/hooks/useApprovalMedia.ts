@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { Draft } from "../../../services/draftsApi";
 import { fetchVideoPreview, fetchVideoDownload } from "../services/videoApi";
-import { useLocalization } from "../../../app/localization";
+import { useLocalization } from "../../../app/useLocalization";
 
 /** Page-local browser media state; deliberately retains the original lifetime. */
 export function useApprovalMedia() {

@@ -5,7 +5,9 @@ import type { Draft } from "../../../services/draftsApi";
 import type { useDraftMedia } from "../hooks/useDraftMedia";
 import type { useApprovalMedia } from "../hooks/useApprovalMedia";
 import { VideoUpload } from "./VideoUpload";
-import { useLocalization } from "../../../app/localization";
+import { ImageUpload } from "./ImageUpload";
+import { ImageReusePicker } from "./ImageReusePicker";
+import { useLocalization } from "../../../app/useLocalization";
 type Props = {
   heygen?: HeyGenController;
   draft: Draft;
@@ -18,6 +20,8 @@ type Props = {
   | "imageErrors"
   | "imageBusyIds"
   | "handleGenerateImage"
+  | "handleUploadImage"
+  | "handleReuseImage"
   | "handlePreviewImage"
 >;
 export function DraftMediaPanel({
@@ -29,11 +33,15 @@ export function DraftMediaPanel({
   busyDraftIds,
   approvingIds,
   handleGenerateImage,
+  handleUploadImage,
+  handleReuseImage,
   handlePreviewImage,
   browserMedia,
 }: Props) {
   const { t } = useLocalization();
   const [heygenOpen, setHeygenOpen] = useState(false);
+  const [imageUploadOpen, setImageUploadOpen] = useState(false);
+  const [imageReuseOpen, setImageReuseOpen] = useState(false);
   const {
     openVideoEditorId,
     setOpenVideoEditorId,
@@ -46,10 +54,7 @@ export function DraftMediaPanel({
     handlePreviewVideo,
   } = browserMedia;
   return (
-    <section
-      className="draft-image-section"
-      aria-label={t("media.ariaLabel")}
-    >
+    <section className="draft-image-section" aria-label={t("media.ariaLabel")}>
       <strong>
         {draft.media_type === "video"
           ? t("media.videoAssets")
@@ -65,9 +70,7 @@ export function DraftMediaPanel({
       )}
 
       {draft.image_status === "generating" && (
-        <p role="status">
-          {t("media.imageGenerating")}
-        </p>
+        <p role="status">{t("media.imageGenerating")}</p>
       )}
 
       {draft.image_status === "failed" && (
@@ -123,6 +126,59 @@ export function DraftMediaPanel({
         )}
       </div>
 
+      {draft.status === "pending" &&
+        draft.media_type !== "video" &&
+        !draft.image_url &&
+        !draft.video_url &&
+        ["not_started", "failed"].includes(draft.video_status) &&
+        ["not_started", "failed"].includes(draft.image_status) && (
+          <div className="image-upload-section">
+            <button
+              type="button"
+              className="text-button"
+              aria-expanded={imageUploadOpen}
+              onClick={() => setImageUploadOpen((open) => !open)}
+            >
+              {imageUploadOpen
+                ? t("media.cancelImageUpload")
+                : t("media.openImageUpload")}
+            </button>
+            {imageUploadOpen && (
+              <ImageUpload
+                disabled={
+                  imageBusyIds.includes(draft.id) ||
+                  busyDraftIds.includes(draft.id) ||
+                  approvingIds.includes(draft.id)
+                }
+                onUpload={(file) => handleUploadImage(draft, file)}
+              />
+            )}
+            <button
+              type="button"
+              className="text-button"
+              aria-expanded={imageReuseOpen}
+              onClick={() => setImageReuseOpen((open) => !open)}
+            >
+              {imageReuseOpen
+                ? t("media.cancelImageReuse")
+                : t("media.reuseImage")}
+            </button>
+            {imageReuseOpen && (
+              <ImageReusePicker
+                draftId={draft.id}
+                disabled={
+                  imageBusyIds.includes(draft.id) ||
+                  busyDraftIds.includes(draft.id) ||
+                  approvingIds.includes(draft.id)
+                }
+                onSelect={(sourceDraftId) =>
+                  handleReuseImage(draft, sourceDraftId)
+                }
+              />
+            )}
+          </div>
+        )}
+
       {draft.media_type === "video" &&
         draft.video_status === "completed" &&
         !!draft.video_url && (
@@ -173,9 +229,7 @@ export function DraftMediaPanel({
 
       {draft.video_script && (
         <section className="heygen-script">
-          <div
-            className="heygen-script-header"
-          >
+          <div className="heygen-script-header">
             <strong>{t("media.heygenScript")}</strong>
 
             <button
@@ -189,11 +243,7 @@ export function DraftMediaPanel({
             </button>
           </div>
 
-          <p
-            className="heygen-script-text"
-          >
-            {draft.video_script}
-          </p>
+          <p className="heygen-script-text">{draft.video_script}</p>
         </section>
       )}
 
@@ -206,9 +256,7 @@ export function DraftMediaPanel({
               disabled={openVideoEditorId === draft.id}
               onClick={() => setHeygenOpen((value) => !value)}
             >
-              {heygenOpen
-                ? t("media.closeHeygen")
-                : t("media.createHeygen")}
+              {heygenOpen ? t("media.closeHeygen") : t("media.createHeygen")}
             </button>
             {heygenOpen && (
               <HeyGenGenerationPanel draft={draft} controller={heygen} />
@@ -248,9 +296,7 @@ export function DraftMediaPanel({
         )}
 
       {!draft.image_prompt && !draft.image_url && (
-        <small>
-          {t("media.noImagePrompt")}
-        </small>
+        <small>{t("media.noImagePrompt")}</small>
       )}
     </section>
   );

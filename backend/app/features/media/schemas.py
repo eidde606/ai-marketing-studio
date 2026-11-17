@@ -63,6 +63,11 @@ class ImageRevisionRequest(BaseModel):
     instructions: str = Field(min_length=1, max_length=1000)
 
 
+class ImageReuseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_draft_id: str = Field(min_length=1, max_length=64)
+
+
 class HeyGenGenerationResponse(BaseModel):
     attempt_id: str
     draft_id: str

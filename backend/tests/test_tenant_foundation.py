@@ -38,7 +38,7 @@ def tenant_engine(isolated_client):
 @pytest.mark.parametrize("permission", list(Permission))
 def test_permission_matrix(role, permission):
     member = {"read", "edit_content", "manage_campaigns", "use_sofia", "use_leo",
-              "generate_media", "upload_media", "submit_for_approval"}
+              "use_edian", "generate_media", "upload_media", "submit_for_approval"}
     admin = member | {
         "approve_content", "publish", "manage_connections", "manage_heygen_assets",
         "edit_business", "manage_members", "manage_billing",

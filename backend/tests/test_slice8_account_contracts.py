@@ -301,7 +301,7 @@ def test_capabilities_are_fresh_and_scoped_to_current_user(isolated_client):
     response = client.get("/account").json()
     assert [b["id"] for b in response["businesses"]] == ["a"]
     assert "publish" in response["businesses"][0]["capabilities"]
-    assert response["features"]["mia_analysis"] is False
+    assert response["features"]["mia_analysis"] is True
     assert response["features"]["instagram_publishing"] is False
     with Session(engine) as db:
         membership = db.scalar(select(BusinessMembership).where(BusinessMembership.user_id == actor.user_id))

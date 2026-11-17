@@ -23,6 +23,14 @@ def _failure(kind: ErrorKind, detail: str) -> ApplicationError:
     return ApplicationError(kind, detail)
 
 
+def _require_direct_publishing_enabled() -> None:
+    if os.getenv("TIKTOK_DIRECT_PUBLISHING_ENABLED") != "1":
+        raise _failure(
+            ErrorKind.UNAVAILABLE,
+            "TikTok direct publishing requires provider approval",
+        )
+
+
 async def get_creator_settings(
     draft_id: str,
     account_id: str,
@@ -33,6 +41,7 @@ async def get_creator_settings(
     context = access.require_draft_permission(
         db, principal, draft_id, Permission.PUBLISH,
     )
+    _require_direct_publishing_enabled()
     draft = repository.get_draft_scoped(db, context, draft_id)
     if draft is None:
         raise _failure(ErrorKind.NOT_FOUND, "Draft not found")
@@ -67,6 +76,7 @@ async def publish_video(
     context = access.require_draft_permission(
         db, principal, draft_id, Permission.PUBLISH,
     )
+    _require_direct_publishing_enabled()
     draft = repository.get_draft_scoped(db, context, draft_id)
     if draft is None:
         raise _failure(ErrorKind.NOT_FOUND, "Draft not found")
@@ -157,7 +167,9 @@ async def publish_video(
     transactions.commit()
 
     try:
-        access.require_draft_permission(db, principal, draft_id, Permission.PUBLISH)
+        access.require_draft_permission(
+            db, principal, draft_id, Permission.PUBLISH, include_deleted=True,
+        )
     except ApplicationError:
         transactions.rollback()
         repository.release_publication_claim_scoped(db, context, draft_id)
@@ -185,9 +197,9 @@ async def publish_video(
             values={"tiktok_publish_status": "needs_review"},
         )
         transactions.commit()
-        logger.exception(
-            "TikTok publishing requires review for draft %s",
-            draft_id,
+        logger.warning(
+            "TikTok publishing requires review (%s)",
+            type(exc).__name__,
         )
         raise _failure(
             ErrorKind.UPSTREAM_FAILURE,

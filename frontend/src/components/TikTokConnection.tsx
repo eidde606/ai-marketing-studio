@@ -1,14 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  disconnectTikTokAccount,
   getConnectedTikTokAccounts,
   startTikTokConnection,
   type ConnectedTikTokAccount,
 } from "../services/tiktokApi";
-import { useLocalization } from "../app/localization";
+import { useLocalization } from "../app/useLocalization";
 
-type Props = { businessId: string };
+type Props = {
+  businessId: string;
+  directPublishingEnabled?: boolean;
+};
 
-export default function TikTokConnection({ businessId }: Props) {
+export default function TikTokConnection({
+  businessId,
+  directPublishingEnabled = false,
+}: Props) {
   const { t } = useLocalization();
   const tRef = useRef(t);
   useEffect(() => {
@@ -21,13 +28,22 @@ export default function TikTokConnection({ businessId }: Props) {
     accounts: ConnectedTikTokAccount[];
     message: string;
     failed: boolean;
+    connectFailed: boolean;
   } | null>(null);
   const [connectingBusinessId, setConnectingBusinessId] = useState<
     string | null
   >(null);
+  const [disconnectingAccountId, setDisconnectingAccountId] = useState<
+    string | null
+  >(null);
+  const [disconnectNotice, setDisconnectNotice] = useState("");
+  const [callbackResult] = useState(() => {
+    const match = window.location.hash.match(/^#tiktok_result=([^&]+)/);
+    if (match) return match[1];
+    return window.location.hash === "#tiktok_connected=1" ? "connected" : "";
+  });
   const currentSnapshot =
-    snapshot?.businessId === businessId &&
-    snapshot.retryCount === retryCount
+    snapshot?.businessId === businessId && snapshot.retryCount === retryCount
       ? snapshot
       : null;
   const accounts = currentSnapshot?.accounts ?? [];
@@ -35,12 +51,22 @@ export default function TikTokConnection({ businessId }: Props) {
   const loading =
     Boolean(businessId) &&
     (!currentSnapshot || connectingBusinessId === businessId);
+  const connectedAccounts = accounts.filter(
+    (account) => account.connection_status === "connected",
+  );
+  const connectionAvailable = accounts.length > 0;
+  const unavailable =
+    currentSnapshot?.failed ||
+    (currentSnapshot?.connectFailed && connectedAccounts.length === 0);
 
   useEffect(() => {
     if (!businessId) return;
     let active = true;
-    const connected = window.location.hash === "#tiktok_connected=1";
-    if (connected) {
+    const hasCallbackResult =
+      window.location.hash.startsWith("#tiktok_result=");
+    const legacyConnectedResult =
+      window.location.hash === "#tiktok_connected=1";
+    if (hasCallbackResult || legacyConnectedResult) {
       window.history.replaceState(
         null,
         "",
@@ -52,9 +78,15 @@ export default function TikTokConnection({ businessId }: Props) {
         const result = await getConnectedTikTokAccounts(businessId);
         if (active) {
           let resultMessage = "";
-          if (connected && result.length > 0)
+          if (
+            (callbackResult === "connected" || legacyConnectedResult) &&
+            result.length > 0
+          )
             resultMessage = tRef.current("tiktok.verified");
-          else if (connected)
+          else if (
+            (callbackResult === "connected" || legacyConnectedResult) &&
+            result.length === 0
+          )
             resultMessage = tRef.current("tiktok.wrongBusiness");
           setSnapshot({
             businessId,
@@ -62,6 +94,7 @@ export default function TikTokConnection({ businessId }: Props) {
             accounts: result,
             message: resultMessage,
             failed: false,
+            connectFailed: false,
           });
         }
       } catch {
@@ -72,6 +105,7 @@ export default function TikTokConnection({ businessId }: Props) {
             accounts: [],
             message: tRef.current("tiktok.verifyError"),
             failed: true,
+            connectFailed: false,
           });
       }
     }
@@ -79,7 +113,7 @@ export default function TikTokConnection({ businessId }: Props) {
     return () => {
       active = false;
     };
-  }, [businessId, retryCount]);
+  }, [businessId, callbackResult, retryCount]);
 
   async function handleConnect() {
     if (!businessId) return;
@@ -88,26 +122,57 @@ export default function TikTokConnection({ businessId }: Props) {
     try {
       const url = await startTikTokConnection(targetBusinessId);
       window.location.assign(url);
-    } catch (error) {
+    } catch {
       setSnapshot({
         businessId: targetBusinessId,
         retryCount,
         accounts: currentSnapshot?.accounts ?? [],
-        message:
-          error instanceof Error
-            ? error.message
-            : tRef.current("tiktok.connectError"),
+        message: tRef.current("tiktok.connectError"),
         failed: false,
+        connectFailed: true,
       });
     } finally {
       setConnectingBusinessId(null);
     }
   }
 
-  const connectedAccounts = accounts.filter(
-    (account) => account.connection_status === "connected",
-  );
-  const connectionAvailable = accounts.length > 0;
+  async function handleDisconnect(account: ConnectedTikTokAccount) {
+    if (
+      !businessId ||
+      !account.id ||
+      !window.confirm(t("tiktok.disconnectConfirm"))
+    ) {
+      return;
+    }
+    setDisconnectingAccountId(account.id);
+    setDisconnectNotice("");
+    try {
+      await disconnectTikTokAccount(businessId, account.id);
+      setDisconnectNotice(tRef.current("tiktok.disconnected"));
+      setSnapshot(null);
+      setRetryCount((count) => count + 1);
+    } catch {
+      setSnapshot({
+        businessId,
+        retryCount,
+        accounts,
+        message: tRef.current("tiktok.disconnectError"),
+        failed: true,
+        connectFailed: false,
+      });
+    } finally {
+      setDisconnectingAccountId(null);
+    }
+  }
+
+  const callbackMessageKeys = {
+    authorization_declined: "tiktok.callbackDeclined",
+    invalid_state: "tiktok.callbackInvalid",
+    provider_error: "tiktok.callbackError",
+  } as const;
+  const callbackMessageKey = Object.entries(callbackMessageKeys).find(
+    ([result]) => result === callbackResult,
+  )?.[1];
 
   return (
     <section className="panel facebook-connection social-integration social-integration--tiktok">
@@ -130,7 +195,9 @@ export default function TikTokConnection({ businessId }: Props) {
                 ? "social-status--connected"
                 : connectionAvailable
                   ? "social-status--attention"
-                  : "social-status--disconnected"
+                  : unavailable
+                    ? "social-status--unavailable"
+                    : "social-status--disconnected"
           }`}
           role="status"
         >
@@ -140,14 +207,24 @@ export default function TikTokConnection({ businessId }: Props) {
               ? t("tiktok.connectedStatus")
               : connectionAvailable
                 ? t("tiktok.reviewAccess")
-                : t("tiktok.notConnected")}
+                : unavailable
+                  ? t("tiktok.statusUnavailable")
+                  : businessId
+                    ? t("tiktok.notConnected")
+                    : t("tiktok.noBusiness")}
         </span>
       </div>
       <div className="facebook-connection-content">
         <div className="facebook-connection-description">
-          <strong>{t("tiktok.available")}</strong>
+          <strong>{t("tiktok.connectionSetup")}</strong>
           <p>{t("tiktok.eligibility")}</p>
-          <p>{t("tiktok.manualOnly")}</p>
+          <p>
+            {t(
+              directPublishingEnabled
+                ? "tiktok.directPublishingEnabled"
+                : "tiktok.manualOnly",
+            )}
+          </p>
         </div>
         <button
           type="button"
@@ -166,38 +243,73 @@ export default function TikTokConnection({ businessId }: Props) {
         </p>
       )}
       {accounts.map((account, index) => (
-        <p
+        <div
           key={account.id ?? account.platform_account_id ?? index}
           className="facebook-connection-message"
         >
-          {account.account_name ??
-            account.display_name ??
-            t("tiktok.account")}{" "}
-          —{" "}
-          {account.connection_status === "connected"
-            ? t("tiktok.connectedStatus")
-            : t("tiktok.status", {
-                status:
-                  account.connection_status ?? t("tiktok.unverified"),
-              })}
-        </p>
+          <span>
+            {account.account_name ??
+              account.display_name ??
+              t("tiktok.account")}{" "}
+            —{" "}
+            {account.connection_status === "connected"
+              ? t("tiktok.connectedStatus")
+              : account.connection_status === "reauthorization_required"
+                ? t("tiktok.reauthorize")
+                : account.connection_status === "pending"
+                  ? t("tiktok.authorizationIncomplete")
+                  : t("tiktok.unverified")}
+          </span>
+          {account.id && (
+            <button
+              type="button"
+              className="outline-button"
+              onClick={() => void handleDisconnect(account)}
+              disabled={disconnectingAccountId === account.id}
+            >
+              {disconnectingAccountId === account.id
+                ? t("tiktok.disconnecting")
+                : t("tiktok.disconnect")}
+            </button>
+          )}
+        </div>
       ))}
+      {callbackMessageKey && (
+        <p className="facebook-connection-message" role="alert">
+          {t(callbackMessageKey)}
+        </p>
+      )}
+      {disconnectNotice && (
+        <p className="facebook-connection-message" role="status">
+          {disconnectNotice}
+        </p>
+      )}
       {message && (
         <p
           className="facebook-connection-message"
-          role={currentSnapshot?.failed ? "alert" : "status"}
+          role={
+            currentSnapshot?.failed || currentSnapshot?.connectFailed
+              ? "alert"
+              : "status"
+          }
         >
           {message}
         </p>
       )}
-      {!loading && currentSnapshot?.failed && (
-        <button
-          type="button"
-          className="outline-button"
-          onClick={() => setRetryCount((count) => count + 1)}
-        >
-          {t("tiktok.retry")}
-        </button>
+      {!loading &&
+        (currentSnapshot?.failed || currentSnapshot?.connectFailed) && (
+          <button
+            type="button"
+            className="outline-button"
+            onClick={() => setRetryCount((count) => count + 1)}
+          >
+            {t("tiktok.retry")}
+          </button>
+        )}
+      {!businessId && (
+        <p className="facebook-connection-message" role="status">
+          {t("tiktok.noBusiness")}
+        </p>
       )}
     </section>
   );

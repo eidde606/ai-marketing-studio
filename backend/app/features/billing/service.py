@@ -44,7 +44,9 @@ def overview(db: Session, principal: AuthenticatedPrincipal, business_id: str) -
             "can_manage": False,
         }
 
-    usage = entitlement_service.usage_for_business(db, business_id) or {}
+    usage = entitlement_service.usage_for_business(
+        db, business_id, context=context,
+    ) or {}
     portal_ready = (
         manageable
         and stripe_gateway.checkout_available()

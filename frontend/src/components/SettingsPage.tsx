@@ -6,7 +6,7 @@ import {
   Settings2,
   UserRound,
 } from "lucide-react";
-import { useLocalization } from "../app/localization";
+import { useLocalization } from "../app/useLocalization";
 import { AccountStatusNotice, CapabilityStatus } from "../app/ProductStatus";
 import type { FeatureAvailability } from "../services/accountApi";
 import type { Business, BusinessUpdate } from "../services/businessesApi";
@@ -30,10 +30,12 @@ type Props = {
   membershipRole?: "owner" | "admin" | "member" | null;
   canEditBusiness?: boolean;
   onSaveBusiness?: (values: BusinessUpdate) => Promise<void>;
-  onReplayTutorial?: () => void;
+  onResumeTutorial?: () => void;
+  onRestartTutorial?: () => void;
   canManageConnections?: boolean;
   languagePreferences?: ReactNode;
   features?: FeatureAvailability;
+  showIntegrationsOnMount?: boolean;
   facebookConnection: ReactNode;
   instagramConnection?: ReactNode;
   tiktokConnection: ReactNode;
@@ -48,16 +50,20 @@ export default function SettingsPage({
   membershipRole = null,
   canEditBusiness = false,
   onSaveBusiness = async () => {},
-  onReplayTutorial = () => {},
+  onResumeTutorial = () => {},
+  onRestartTutorial = () => {},
   canManageConnections = false,
   languagePreferences,
   features,
+  showIntegrationsOnMount = false,
   facebookConnection,
   instagramConnection,
   tiktokConnection,
 }: Props) {
   const { t } = useLocalization();
-  const [activeTab, setActiveTab] = useState<SettingsTab>("account");
+  const [activeTab, setActiveTab] = useState<SettingsTab>(
+    showIntegrationsOnMount ? "integrations" : "account",
+  );
   const initialName =
     userDisplayName === t("shell.myAccount") ? "" : userDisplayName;
   const [displayName, setDisplayName] = useState(initialName);
@@ -391,14 +397,23 @@ export default function SettingsPage({
                 </form>
               </section>
             )}
-            <button
-              type="button"
-              className="reject-button settings-tutorial-button"
-              onClick={onReplayTutorial}
-            >
-              <BookOpen size={18} aria-hidden="true" />
-              {t("tutorial.replay")}
-            </button>
+            <div className="settings-tutorial-actions">
+              <button
+                type="button"
+                className="secondary-button settings-tutorial-button"
+                onClick={onResumeTutorial}
+              >
+                <BookOpen size={18} aria-hidden="true" />
+                {t("tutorial.resume")}
+              </button>
+              <button
+                type="button"
+                className="reject-button settings-tutorial-button"
+                onClick={onRestartTutorial}
+              >
+                {t("tutorial.restart")}
+              </button>
+            </div>
           </section>
         ) : (
           <section
@@ -433,39 +448,79 @@ export default function SettingsPage({
                 <ul>
                   <CapabilityStatus
                     label={t("settings.facebookPublishing")}
-                    available={features.facebook_publishing}
-                    availableText={t("capability.available")}
-                    unavailableText={t("capability.unavailable")}
+                    status={
+                      features.facebook_publishing ? "available" : "unavailable"
+                    }
+                    statusText={
+                      features.facebook_publishing
+                        ? t("capability.available")
+                        : t("capability.unavailable")
+                    }
+                    detail={t("settings.facebookPublishingDetail")}
                   />
                   <CapabilityStatus
                     label={t("settings.tiktokDirect")}
-                    available={features.tiktok_direct_publishing}
-                    availableText={t("capability.available")}
-                    unavailableText={t("capability.unavailable")}
+                    status={
+                      features.tiktok_direct_publishing
+                        ? "available"
+                        : "unavailable"
+                    }
+                    statusText={
+                      features.tiktok_direct_publishing
+                        ? t("capability.available")
+                        : t("capability.unavailable")
+                    }
+                    detail={t("settings.tiktokDirectDetail")}
                   />
                   <CapabilityStatus
                     label={t("settings.tiktokManual")}
-                    available={features.tiktok_manual_export}
-                    availableText={t("capability.available")}
-                    unavailableText={t("capability.unavailable")}
+                    status={
+                      features.tiktok_manual_export ? "limited" : "unavailable"
+                    }
+                    statusText={
+                      features.tiktok_manual_export
+                        ? t("capability.limited")
+                        : t("capability.unavailable")
+                    }
+                    detail={t("settings.tiktokManualDetail")}
                   />
                   <CapabilityStatus
                     label={t("settings.instagramConnection")}
-                    available={features.instagram_connection}
-                    availableText={t("capability.available")}
-                    unavailableText={t("capability.unavailable")}
+                    status={
+                      features.instagram_connection
+                        ? "available"
+                        : "unavailable"
+                    }
+                    statusText={
+                      features.instagram_connection
+                        ? t("capability.available")
+                        : t("capability.unavailable")
+                    }
+                    detail={t("settings.instagramConnectionDetail")}
                   />
                   <CapabilityStatus
                     label={t("settings.instagramPublishing")}
-                    available={features.instagram_publishing}
-                    availableText={t("capability.available")}
-                    unavailableText={t("capability.unavailable")}
+                    status={
+                      features.instagram_publishing
+                        ? "available"
+                        : "unavailable"
+                    }
+                    statusText={
+                      features.instagram_publishing
+                        ? t("capability.available")
+                        : t("capability.unavailable")
+                    }
+                    detail={t("settings.instagramPublishingDetail")}
                   />
                   <CapabilityStatus
                     label={t("settings.miaAnalysis")}
-                    available={features.mia_analysis}
-                    availableText={t("capability.available")}
-                    unavailableText={t("capability.unavailable")}
+                    status={features.mia_analysis ? "available" : "unavailable"}
+                    statusText={
+                      features.mia_analysis
+                        ? t("capability.available")
+                        : t("capability.unavailable")
+                    }
+                    detail={t("settings.miaAnalysisDetail")}
                   />
                 </ul>
               </section>

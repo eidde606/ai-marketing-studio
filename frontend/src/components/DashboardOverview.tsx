@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { getFacebookReach, type Draft } from "../services/draftsApi";
 import { getCampaigns, type Campaign } from "../services/campaignsApi";
-import { useLocalization } from "../app/localization";
+import { useLocalization } from "../app/useLocalization";
 import type { Section } from "./Sidebar";
 
 type Agent = {

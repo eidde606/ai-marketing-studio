@@ -1,8 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  getHeyGenAvatarAssets,
-  getHeyGenVoiceAssets,
-} from "./heygenAssetsApi";
+import { getHeyGenAvatarAssets, getHeyGenVoiceAssets } from "./heygenAssetsApi";
 
 const auth = vi.hoisted(() => ({ getSession: vi.fn() }));
 vi.mock("../../../services/supabaseClient", () => ({
@@ -19,12 +16,14 @@ it("uses the authenticated backend and sends avatar filters and cursor", async (
     data: { session: { access_token: "test-access-token" } },
     error: null,
   });
-  const fetchMock = vi.fn().mockResolvedValue(
-    new Response(
-      JSON.stringify({ data: [], has_more: false, next_token: null }),
-      { status: 200 },
-    ),
-  );
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValue(
+      new Response(
+        JSON.stringify({ data: [], has_more: false, next_token: null }),
+        { status: 200 },
+      ),
+    );
   vi.stubGlobal("fetch", fetchMock);
 
   await getHeyGenAvatarAssets({
@@ -55,7 +54,7 @@ it("uses v3 voice type and reports backend failures", async () => {
   );
 
   await expect(getHeyGenVoiceAssets({ type: "public" })).rejects.toThrow(
-    "No se pudieron cargar los recursos de HeyGen (502).",
+    "No se pudieron cargar los recursos de video (502).",
   );
   expect(fetch).toHaveBeenCalledWith(
     expect.stringContaining("/heygen/assets/voices?type=public&limit=20"),

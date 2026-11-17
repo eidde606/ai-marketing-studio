@@ -13,20 +13,44 @@ from app.features.entitlements import service as entitlement_service
 from app.features.drafts import repository as drafts
 from app.models import Draft, ImageRevision
 from app.storage_service import (
+    delete_marketing_image,
     download_marketing_image,
     get_marketing_image_url,
+    upload_marketing_image,
     upload_marketing_video,
 )
 from app.transactions import Transactions
-from . import generation_service, repository
+from . import generation_service, image_processing, repository
 from .image_provider import edit_marketing_image, generate_marketing_image
 
 logger = logging.getLogger(__name__)
 MAX_MANUAL_VIDEO_SIZE = 100 * 1024 * 1024
+MAX_MANUAL_IMAGE_SIZE = image_processing.MAX_INPUT_IMAGE_BYTES
 
 
 def _failure(kind: ErrorKind, detail: str) -> ApplicationError:
     return ApplicationError(kind, detail)
+
+
+def _signed_media_url(
+    storage_path: str,
+    context: TenantAccess,
+    *,
+    expires_in: int = 3600,
+    invalid_path_detail: str = "Invalid media storage path",
+    failure_detail: str = "Media storage is unavailable. Please try again later.",
+) -> str:
+    try:
+        return get_marketing_image_url(
+            storage_path,
+            expires_in=expires_in,
+            context=context,
+        )
+    except ValueError:
+        raise _failure(ErrorKind.INVALID_INPUT, invalid_path_detail) from None
+    except Exception as exc:
+        logger.warning("Storage URL generation failed (%s)", type(exc).__name__)
+        raise _failure(ErrorKind.UNAVAILABLE, failure_detail) from None
 
 
 def _draft(
@@ -123,6 +147,12 @@ def save_manual_video_upload(
         )
     except ValueError as exc:
         raise _failure(ErrorKind.INVALID_INPUT, str(exc)) from exc
+    except Exception as exc:
+        logger.warning("Video storage upload failed (%s)", type(exc).__name__)
+        raise _failure(
+            ErrorKind.UNAVAILABLE,
+            "Video storage is unavailable. Please try again later.",
+        ) from None
 
     context = access.require_draft_permission(
         db, principal, draft.id, Permission.UPLOAD_MEDIA,
@@ -149,6 +179,216 @@ def save_manual_video_upload(
     }
 
 
+def prepare_manual_image_upload(
+    db: Session,
+    principal: AuthenticatedPrincipal,
+    draft_id: str,
+) -> tuple[TenantAccess, Draft]:
+    context, draft = _pending_draft(
+        db, principal, draft_id, Permission.UPLOAD_MEDIA,
+    )
+    if (
+        draft.media_type == "video"
+        or draft.video_url
+        or draft.video_status not in ("not_started", "failed")
+        or _has_video_operation(db, context, draft.id)
+    ):
+        raise _failure(
+            ErrorKind.CONFLICT,
+            "An image cannot be added while this draft has a video or video operation",
+        )
+    if draft.image_url or draft.image_status not in ("not_started", "failed"):
+        raise _failure(
+            ErrorKind.CONFLICT,
+            "This draft already has an image or an active image operation",
+        )
+    return context, draft
+
+
+def save_manual_image_upload(
+    db: Session,
+    principal: AuthenticatedPrincipal,
+    draft: Draft,
+    image_bytes: bytes,
+) -> dict[str, str]:
+    context, current = prepare_manual_image_upload(
+        db, principal, draft.id,
+    )
+    if current.business_id != draft.business_id:
+        raise _failure(ErrorKind.NOT_FOUND, "Draft not found")
+    try:
+        jpeg_bytes = image_processing.normalize_instagram_jpeg(image_bytes)
+    except image_processing.ImageValidationError as exc:
+        raise _failure(ErrorKind.UNSUPPORTED_MEDIA, str(exc)) from exc
+
+    try:
+        storage_path = upload_marketing_image(
+            image_bytes=jpeg_bytes,
+            business_id=context.business_id,
+            content_type="image/jpeg",
+        )
+    except ValueError as exc:
+        raise _failure(ErrorKind.INVALID_INPUT, str(exc)) from exc
+    except Exception as exc:
+        logger.warning("Image storage upload failed (%s)", type(exc).__name__)
+        raise _failure(
+            ErrorKind.UNAVAILABLE,
+            "Image storage is unavailable. Please try again later.",
+        ) from None
+
+    try:
+        context = access.require_draft_permission(
+            db, principal, draft.id, Permission.UPLOAD_MEDIA,
+        )
+    except ApplicationError:
+        Transactions(db).rollback()
+        _discard_uploaded_image(storage_path, context.business_id)
+        raise
+    if not repository.save_uploaded_image_scoped(
+        db,
+        context,
+        draft.id,
+        storage_path,
+        expected_image_status=current.image_status,
+    ):
+        Transactions(db).rollback()
+        _discard_uploaded_image(storage_path, context.business_id)
+        raise _failure(ErrorKind.CONFLICT, "The draft changed during image upload")
+    Transactions(db).commit()
+    return {
+        "draft_id": draft.id,
+        "media_type": "image",
+        "image_status": "completed",
+        "image_url": _signed_media_url(storage_path, context),
+    }
+
+
+def _discard_uploaded_image(storage_path: str, business_id: str) -> None:
+    try:
+        delete_marketing_image(storage_path, business_id)
+    except Exception as exc:
+        logger.warning(
+            "Unattached image cleanup failed (%s)",
+            type(exc).__name__,
+        )
+
+
+def list_reusable_images(
+    db: Session,
+    principal: AuthenticatedPrincipal,
+    draft_id: str,
+) -> list[dict[str, str]]:
+    context, _draft_record = prepare_manual_image_upload(
+        db, principal, draft_id,
+    )
+    return [
+        {
+            "draft_id": image.id,
+            "title": image.title,
+            "image_url": _signed_media_url(
+                image.image_url,
+                context,
+                invalid_path_detail="Invalid image storage path",
+                failure_detail="Image preview is unavailable. Please try again later.",
+            ),
+        }
+        for image in repository.list_reusable_images_scoped(
+            db,
+            context,
+            exclude_draft_id=draft_id,
+        )
+    ]
+
+
+def reuse_image(
+    db: Session,
+    principal: AuthenticatedPrincipal,
+    draft_id: str,
+    source_draft_id: str,
+) -> dict[str, str]:
+    context, target = prepare_manual_image_upload(
+        db, principal, draft_id,
+    )
+    if source_draft_id == draft_id:
+        raise _failure(ErrorKind.INVALID_INPUT, "Choose an image from another draft")
+    source = drafts.get_draft_scoped(db, context, source_draft_id)
+    if (
+        source is None
+        or source.media_type != "image"
+        or source.image_status != "completed"
+        or not source.image_url
+    ):
+        raise _failure(ErrorKind.NOT_FOUND, "Reusable image not found")
+
+    original_path = source.image_url
+    try:
+        original_bytes = download_marketing_image(
+            original_path,
+            context.business_id,
+        )
+        jpeg_bytes = image_processing.normalize_instagram_jpeg(original_bytes)
+    except image_processing.ImageValidationError as exc:
+        raise _failure(ErrorKind.UNSUPPORTED_MEDIA, str(exc)) from exc
+    except Exception as exc:
+        logger.warning("Reusable image download failed (%s)", type(exc).__name__)
+        raise _failure(
+            ErrorKind.UNAVAILABLE,
+            "The selected image is unavailable. Please try again later.",
+        ) from None
+
+    try:
+        storage_path = upload_marketing_image(
+            image_bytes=jpeg_bytes,
+            business_id=context.business_id,
+            content_type="image/jpeg",
+        )
+    except Exception as exc:
+        logger.warning("Reusable image storage failed (%s)", type(exc).__name__)
+        raise _failure(
+            ErrorKind.UNAVAILABLE,
+            "Image storage is unavailable. Please try again later.",
+        ) from None
+
+    try:
+        context = access.require_draft_permission(
+            db, principal, draft_id, Permission.UPLOAD_MEDIA,
+        )
+    except ApplicationError:
+        Transactions(db).rollback()
+        _discard_uploaded_image(storage_path, context.business_id)
+        raise
+    current_source = drafts.get_draft_scoped(
+        db,
+        context,
+        source_draft_id,
+    )
+    if (
+        current_source is None
+        or current_source.image_url != original_path
+        or current_source.image_status != "completed"
+    ):
+        Transactions(db).rollback()
+        _discard_uploaded_image(storage_path, context.business_id)
+        raise _failure(ErrorKind.CONFLICT, "The selected image changed during reuse")
+    if not repository.save_uploaded_image_scoped(
+        db,
+        context,
+        target.id,
+        storage_path,
+        expected_image_status=target.image_status,
+    ):
+        Transactions(db).rollback()
+        _discard_uploaded_image(storage_path, context.business_id)
+        raise _failure(ErrorKind.CONFLICT, "The draft changed during image reuse")
+    Transactions(db).commit()
+    return {
+        "draft_id": target.id,
+        "media_type": "image",
+        "image_status": "completed",
+        "image_url": _signed_media_url(storage_path, context),
+    }
+
+
 def video_preview(
     db: Session,
     principal: AuthenticatedPrincipal,
@@ -166,12 +406,13 @@ def video_preview(
             ErrorKind.NOT_FOUND,
             "No completed video available for this draft",
         )
-    try:
-        signed_url = get_marketing_image_url(
-            draft.video_url, expires_in=900, context=context,
-        )
-    except ValueError as exc:
-        raise _failure(ErrorKind.INVALID_INPUT, "Invalid video storage path") from exc
+    signed_url = _signed_media_url(
+        draft.video_url,
+        context,
+        expires_in=900,
+        invalid_path_detail="Invalid video storage path",
+        failure_detail="Video preview is unavailable. Please try again later.",
+    )
     return {"draft_id": draft.id, "video_url": signed_url}
 
 
@@ -254,14 +495,14 @@ def generate_image(
         )
     Transactions(db).commit()
 
-    try:
-        preview_url = get_marketing_image_url(storage_path, context=context)
-    except Exception as exc:
-        raise _failure(
-            ErrorKind.UPSTREAM_FAILURE,
+    preview_url = _signed_media_url(
+        storage_path,
+        context,
+        failure_detail=(
             "Image saved, but its preview URL could not be created. "
-            "Retry preview later.",
-        ) from exc
+            "Retry preview later."
+        ),
+    )
     return {
         "draft_id": draft_id,
         "image_status": "completed",
@@ -282,7 +523,12 @@ def image_preview(
     return {
         "draft_id": draft.id,
         "image_status": draft.image_status,
-        "image_url": get_marketing_image_url(draft.image_url, context=context),
+        "image_url": _signed_media_url(
+            draft.image_url,
+            context,
+            invalid_path_detail="Invalid image storage path",
+            failure_detail="Image preview is unavailable. Please try again later.",
+        ),
     }
 
 
@@ -316,7 +562,12 @@ def _revision_response(
     context: TenantAccess,
 ) -> dict:
     preview_url = (
-        get_marketing_image_url(revision.revised_image_path, context=context)
+        _signed_media_url(
+            revision.revised_image_path,
+            context,
+            invalid_path_detail="Invalid image storage path",
+            failure_detail="Image preview is unavailable. Please try again later.",
+        )
         if revision.revised_image_path
         else None
     )
@@ -460,12 +711,6 @@ def accept_image_revision(
     context, draft = _pending_draft(
         db, principal, draft_id, Permission.GENERATE_MEDIA,
     )
-    if not repository.lock_draft_revisions_scoped(db, context, draft_id):
-        Transactions(db).rollback()
-        raise _failure(ErrorKind.NOT_FOUND, "Draft not found")
-    context, draft = _pending_draft(
-        db, principal, draft_id, Permission.GENERATE_MEDIA,
-    )
     revision = _revision(db, context, draft_id, revision_id)
     if revision.status != "ready" or not revision.revised_image_path:
         raise _failure(ErrorKind.CONFLICT, "Only ready revisions can be accepted")
@@ -474,6 +719,26 @@ def accept_image_revision(
             ErrorKind.CONFLICT,
             "The draft image has changed since this revision was created.",
         )
+    signed_path = revision.revised_image_path
+    image_url = _signed_media_url(
+        signed_path,
+        context,
+        invalid_path_detail="Invalid image storage path",
+        failure_detail="Image preview is unavailable. Please try again later.",
+    )
+    if not repository.lock_draft_revisions_scoped(db, context, draft_id):
+        Transactions(db).rollback()
+        raise _failure(ErrorKind.NOT_FOUND, "Draft not found")
+    context, draft = _pending_draft(
+        db, principal, draft_id, Permission.GENERATE_MEDIA,
+    )
+    revision = _revision(db, context, draft_id, revision_id)
+    if (
+        revision.status != "ready"
+        or revision.revised_image_path != signed_path
+        or draft.image_url != revision.original_image_path
+    ):
+        raise _failure(ErrorKind.CONFLICT, "This revision is no longer active")
     if not repository.accept_image_revision_scoped(
         db,
         context,
@@ -489,9 +754,7 @@ def accept_image_revision(
         "draft_id": draft_id,
         "revision_id": revision_id,
         "status": "accepted",
-        "image_url": get_marketing_image_url(
-            revision.revised_image_path, context=context,
-        ),
+        "image_url": image_url,
     }
 
 

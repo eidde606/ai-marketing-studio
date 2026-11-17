@@ -5,7 +5,7 @@ import {
   type Business,
   type BusinessCreate,
 } from '../services/businessesApi';
-import { useLocalization } from '../app/localization';
+import { useLocalization } from "../app/useLocalization";
 
 type Props = {
   onCreated: (business: Business) => void;

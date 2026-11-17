@@ -1,6 +1,6 @@
 import type { Draft } from "../../../services/draftsApi";
 import type { useDraftMedia } from "../hooks/useDraftMedia";
-import { useLocalization } from "../../../app/localization";
+import { useLocalization } from "../../../app/useLocalization";
 type Props = { draft: Draft } & Pick<
   ReturnType<typeof useDraftMedia>,
   | "toggleImageEditor"

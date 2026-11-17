@@ -3,7 +3,7 @@ import {
   getBusinessEntitlement,
   type BusinessEntitlement,
 } from "../services/onboardingApi";
-import { useLocalization } from "./localization";
+import { useLocalization } from "./useLocalization";
 import { ProductNotice } from "./ProductStatus";
 
 export default function TrialStatus({ businessId }: { businessId: string }) {
@@ -11,9 +11,16 @@ export default function TrialStatus({ businessId }: { businessId: string }) {
   const [reload, setReload] = useState(0);
   const [state, setState] = useState<{
     businessId: string;
+    reload: number;
     result: BusinessEntitlement | null;
     error: boolean;
   } | null>(null);
+
+  useEffect(() => {
+    const refresh = () => setReload((value) => value + 1);
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -23,10 +30,10 @@ export default function TrialStatus({ businessId }: { businessId: string }) {
       };
     getBusinessEntitlement(businessId)
       .then((result) => {
-        if (active) setState({ businessId, result, error: false });
+        if (active) setState({ businessId, reload, result, error: false });
       })
       .catch(() => {
-        if (active) setState({ businessId, result: null, error: true });
+        if (active) setState({ businessId, reload, result: null, error: true });
       });
     return () => {
       active = false;
@@ -34,7 +41,8 @@ export default function TrialStatus({ businessId }: { businessId: string }) {
   }, [businessId, reload]);
 
   if (!businessId) return null;
-  const current = state?.businessId === businessId ? state : null;
+  const current =
+    state?.businessId === businessId && state.reload === reload ? state : null;
   if (!current) return <p role="status">{t("trial.loading")}</p>;
   if (current.error || !current.result) {
     return (
@@ -77,17 +85,90 @@ export default function TrialStatus({ businessId }: { businessId: string }) {
   }
 
   const expired = entitlement.status === "expired";
-  const leo = entitlement.usage?.leo_generations;
-  const sofia = entitlement.usage?.sofia_requests;
-  const heygen = entitlement.usage?.heygen_generations;
-  const campaigns = entitlement.usage?.campaigns;
-  const featureKeys = [
-    ["trial.feature.leo", "leo_generation"],
-    ["trial.feature.sofia", "sofia_requests"],
-    ["trial.feature.facebook", "facebook_publishing"],
-    ["trial.feature.heygen", "heygen_generation"],
-    ["trial.feature.campaigns", "campaign_creation"],
+  const activeTrial = !expired;
+  const videoUsage = entitlement.usage?.heygen_generations;
+  const usageItems = [
+    {
+      label: "trial.feature.leo",
+      usage: entitlement.usage?.leo_generations,
+      included: (entitlement.usage?.leo_generations?.limit ?? 0) > 0,
+    },
+    {
+      label: "trial.feature.sofia",
+      usage: entitlement.usage?.sofia_requests,
+      included: (entitlement.usage?.sofia_requests?.limit ?? 0) > 0,
+    },
+    {
+      label: "trial.feature.analytics",
+      usage: entitlement.usage?.edian_analyses,
+      included: (entitlement.usage?.edian_analyses?.limit ?? 0) > 0,
+    },
+    {
+      label: "trial.feature.campaigns",
+      usage: entitlement.usage?.campaigns,
+      included: (entitlement.usage?.campaigns?.limit ?? 0) > 0,
+    },
+    {
+      label: "trial.feature.heygen",
+      usage: videoUsage,
+      included:
+        entitlement.features.heygen_generation && (videoUsage?.limit ?? 0) > 0,
+    },
   ] as const;
+  const featureItems = [
+    {
+      label: "trial.feature.leo",
+      status:
+        activeTrial && (entitlement.usage?.leo_generations?.limit ?? 0) > 0
+          ? "limited"
+          : "unavailable",
+    },
+    {
+      label: "trial.feature.sofia",
+      status:
+        activeTrial && (entitlement.usage?.sofia_requests?.limit ?? 0) > 0
+          ? "limited"
+          : "unavailable",
+    },
+    {
+      label: "trial.feature.facebook",
+      status:
+        activeTrial && entitlement.features.facebook_publishing
+          ? "available"
+          : "unavailable",
+    },
+    {
+      label: "trial.feature.heygen",
+      status:
+        activeTrial && entitlement.features.heygen_generation
+          ? "limited"
+          : "unavailable",
+    },
+    {
+      label: "trial.feature.image",
+      status: "unavailable",
+    },
+    {
+      label: "trial.feature.campaigns",
+      status:
+        activeTrial && (entitlement.usage?.campaigns?.limit ?? 0) > 0
+          ? "limited"
+          : "unavailable",
+    },
+    {
+      label: "trial.feature.analytics",
+      status:
+        activeTrial && (entitlement.usage?.edian_analyses?.limit ?? 0) > 0
+          ? "limited"
+          : "unavailable",
+    },
+  ] as const;
+  const featureStatusMessages = {
+    available: "trial.featureStatus.available",
+    limited: "trial.featureStatus.limited",
+    unavailable: "trial.featureStatus.unavailable",
+    planned: "trial.featureStatus.planned",
+  } as const;
   return (
     <ProductNotice
       title={expired ? t("trial.expired") : t("trial.active")}
@@ -100,38 +181,54 @@ export default function TrialStatus({ businessId }: { businessId: string }) {
       }
       tone={expired ? "warning" : "positive"}
     >
-      {leo && (
-        <p>
-          {t("trial.generationsUsed", { used: leo.used, limit: leo.limit })}
-        </p>
-      )}
-      {sofia && (
-        <p>{t("trial.sofiaUsed", { used: sofia.used, limit: sofia.limit })}</p>
-      )}
-      {heygen && (
-        <p>
-          {t("trial.heygenUsed", { used: heygen.used, limit: heygen.limit })}
-        </p>
-      )}
-      {campaigns && (
-        <p>
-          {t("trial.campaignsUsed", {
-            used: campaigns.used,
-            limit: campaigns.limit,
-          })}
-        </p>
-      )}
-      <ul className="trial-features">
-        {featureKeys.map(([label, feature]) => (
-          <li key={feature}>
-            {t(label)} —{" "}
-            {entitlement.features[feature]
-              ? t("trial.featureAvailable")
-              : t("trial.featureUnavailable")}
-          </li>
-        ))}
+      <div className="trial-usage-grid" aria-label={t("trial.usageTitle")}>
+        {usageItems.map(({ label, usage, included }) =>
+          usage ? (
+            <article className="trial-usage-card" key={label}>
+              <div className="trial-usage-card__heading">
+                <span>{t(label)}</span>
+                <strong className={included ? "" : "trial-usage-not-included"}>
+                  {included
+                    ? `${usage.used} / ${usage.limit}`
+                    : t("trial.notIncluded")}
+                </strong>
+              </div>
+              {included && (
+                <div
+                  className="trial-usage-meter"
+                  role="progressbar"
+                  aria-label={t(label)}
+                  aria-valuemin={0}
+                  aria-valuemax={usage.limit}
+                  aria-valuenow={Math.min(usage.used, usage.limit)}
+                >
+                  <span
+                    style={{
+                      width: `${Math.min(100, (usage.used / usage.limit) * 100)}%`,
+                    }}
+                  />
+                </div>
+              )}
+            </article>
+          ) : null,
+        )}
+      </div>
+      <ul className="trial-features" aria-label={t("trial.featureTitle")}>
+        {featureItems.map(({ label, status }) => {
+          return (
+            <li
+              className={`trial-feature-status trial-feature-status--${status}`}
+              key={label}
+            >
+              <span>{t(label)}</span>
+              <strong>{t(featureStatusMessages[status])}</strong>
+            </li>
+          );
+        })}
       </ul>
-      <p>{t("trial.subscriptionUnavailable")}</p>
+      <p className="trial-subscription-note">
+        {t("trial.subscriptionUnavailable")}
+      </p>
     </ProductNotice>
   );
 }

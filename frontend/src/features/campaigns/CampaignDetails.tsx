@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
+import { Pencil } from "lucide-react";
 import type { Campaign } from "../../services/campaignsApi";
-import { useLocalization } from "../../app/localization";
+import { useLocalization } from "../../app/useLocalization";
 import {
   draftTranslationKeys,
   formatCampaignDate,
@@ -27,17 +28,20 @@ export default function CampaignDetails({
     <section className="panel campaign-detail">
       <div className="panel-heading">
         <div>
-          <span className="eyebrow">
+          <span
+            className={`campaign-status-badge campaign-status-badge--${campaign.status}`}
+          >
             {t(statusTranslationKeys[campaign.status])}
           </span>
           <h2>{campaign.name}</h2>
         </div>
         <button
-          className="outline-button"
+          className="outline-button campaign-edit-button"
           type="button"
           disabled={busy}
           onClick={onEdit}
         >
+          <Pencil size={16} aria-hidden="true" />
           {t("campaigns.edit")}
         </button>
       </div>
@@ -63,9 +67,7 @@ export default function CampaignDetails({
       <p className="campaign-note">{t("campaigns.confirmedProgress")}</p>
       {children}
       <h3>{t("campaigns.associatedContent")}</h3>
-      {!campaign.drafts.length && (
-        <p>{t("campaigns.noCountableContent")}</p>
-      )}
+      {!campaign.drafts.length && <p>{t("campaigns.noCountableContent")}</p>}
       <ul className="campaign-contents">
         {campaign.drafts.map((draft) => (
           <li key={draft.id}>
@@ -87,9 +89,7 @@ export default function CampaignDetails({
                       ],
                     )
                   : draft.status}
-                {draft.deleted_at
-                  ? ` · ${t("campaigns.deletedHistory")}`
-                  : ""}
+                {draft.deleted_at ? ` · ${t("campaigns.deletedHistory")}` : ""}
               </span>
             </div>
             <button

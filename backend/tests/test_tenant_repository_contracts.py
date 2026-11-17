@@ -13,9 +13,10 @@ MANIFEST = Path(__file__).with_name("legacy_repository_calls.json")
 # bootstrap lookups are followed by permission checks and tenant-scoped state
 # consumption; they are not tenant resource reads.
 OAUTH_BOOTSTRAP_LOOKUPS = {
+    "app.features.facebook.service:callback_frontend_origin -> app.features.facebook.repository.oauth_state_identity": 1,
     "app.features.facebook.service:complete_callback -> app.features.facebook.repository.oauth_state_identity": 1,
-    "app.features.facebook.service:handoff_pages -> app.features.facebook.repository.pending_selection_business": 1,
-    "app.features.facebook.service:select_page -> app.features.facebook.repository.pending_selection_business": 1,
+    "app.features.facebook.service:handoff_pages -> app.features.facebook.repository.pending_selection_identity": 1,
+    "app.features.facebook.service:select_page -> app.features.facebook.repository.pending_selection_identity": 1,
     "app.features.instagram.service:consume_callback_state -> app.features.instagram.repository.oauth_state_identity": 1,
     "app.features.tiktok.service:complete_authorization -> app.features.tiktok.repository.oauth_state_identity": 1,
 }

@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { useLocalization } from "./localization";
+import { useLocalization } from "./useLocalization";
 import { getBusinesses, type Business } from "../services/businessesApi";
 
 /** Owned by the user-keyed workspace, so accounts never share selection state. */
-export function useBusinessSelection(userId: string) {
+export function useBusinessSelection(
+  userId: string,
+  preferredBusinessId: string | null = null,
+) {
   const { t } = useLocalization();
   const [businesses, setBusinesses] = useState<Business[]>([]);
   const [selectedBusinessId, setSelectedBusinessId] = useState("");
@@ -44,11 +47,13 @@ export function useBusinessSelection(userId: string) {
           }
           const valid = (id: string) =>
             data.some((business) => business.id === id);
-          return valid(current)
-            ? current
-            : valid(saved)
-              ? saved
-              : (data[0]?.id ?? "");
+          return preferredBusinessId && valid(preferredBusinessId)
+            ? preferredBusinessId
+            : valid(current)
+              ? current
+              : valid(saved)
+                ? saved
+                : (data[0]?.id ?? "");
         });
         setBusinessError(null);
       })
@@ -63,7 +68,7 @@ export function useBusinessSelection(userId: string) {
     return () => {
       active = false;
     };
-  }, [userId, refreshVersion, t]);
+  }, [preferredBusinessId, userId, refreshVersion, t]);
   const addBusiness = (business: Business) => {
     setBusinesses((current) => [...current, business]);
     setSelectedBusinessId(business.id);

@@ -160,6 +160,22 @@ def list_messages_scoped(db: Session, context: TenantAccess, conversation_id: st
         .order_by(ConversationMessage.created_at, ConversationMessage.id), limit=limit, offset=offset)).all()
 
 
+def list_recent_messages_scoped(
+    db: Session,
+    context: TenantAccess,
+    conversation_id: str,
+    *,
+    limit: int,
+):
+    rows = db.scalars(
+        tenant.selection(ConversationMessage, context)
+        .where(ConversationMessage.conversation_id == conversation_id)
+        .order_by(ConversationMessage.created_at.desc(), ConversationMessage.id.desc())
+        .limit(limit)
+    ).all()
+    return list(reversed(rows))
+
+
 def get_message_scoped(db: Session, context: TenantAccess, message_id: str):
     return db.scalar(tenant.selection(ConversationMessage, context).where(
         ConversationMessage.id == message_id,

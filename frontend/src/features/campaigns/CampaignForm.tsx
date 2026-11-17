@@ -1,9 +1,10 @@
 import type { FormEvent } from "react";
+import { LoaderCircle, Trash2, X } from "lucide-react";
 import type {
   CampaignInput,
   CampaignStatus,
 } from "../../services/campaignsApi";
-import { useLocalization } from "../../app/localization";
+import { useLocalization } from "../../app/useLocalization";
 import { statusTranslationKeys } from "./campaignLabels";
 
 type Props = {
@@ -13,7 +14,7 @@ type Props = {
   onChange: (form: CampaignInput) => void;
   onSave: (event: FormEvent) => Promise<void>;
   onCancel: () => void;
-  onDelete: () => Promise<void>;
+  onDelete: () => void;
 };
 
 export default function CampaignForm({
@@ -89,7 +90,15 @@ export default function CampaignForm({
               className="primary-button"
               type="submit"
               disabled={!form.name.trim() || !form.objective.trim()}
+              aria-busy={busy}
             >
+              {busy && (
+                <LoaderCircle
+                  size={16}
+                  className="campaign-save-spinner"
+                  aria-hidden="true"
+                />
+              )}
               {busy ? t("campaigns.saving") : t("campaigns.save")}
             </button>
             <button
@@ -98,16 +107,18 @@ export default function CampaignForm({
               disabled={busy}
               onClick={onCancel}
             >
+              <X size={16} aria-hidden="true" />
               {t("campaigns.cancel")}
             </button>
             {isEditing && (
               <button
-                className="danger-button"
+                className="outline-button campaign-delete-button"
                 type="button"
                 disabled={busy}
                 onClick={() => void onDelete()}
               >
-                {busy ? t("campaigns.deleting") : t("campaigns.delete")}
+                <Trash2 size={16} aria-hidden="true" />
+                {t("campaigns.delete")}
               </button>
             )}
           </div>

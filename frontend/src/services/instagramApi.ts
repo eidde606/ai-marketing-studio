@@ -72,3 +72,18 @@ export async function startInstagramConnection(
   }
   return body.authorization_url;
 }
+
+export async function disconnectInstagramConnection(
+  businessId: string,
+): Promise<void> {
+  const accessToken = await getAccessToken();
+  const url = new URL(`${API_BASE_URL}/auth/instagram/accounts`);
+  url.searchParams.set("business_id", businessId);
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    throw new Error("No se pudo desconectar Instagram.");
+  }
+}

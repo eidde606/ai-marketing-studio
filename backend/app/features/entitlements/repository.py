@@ -12,6 +12,8 @@ from app.models import (
     CustomerOrganization,
     StripeWebhookEvent,
 )
+from app.features.access.principal import TenantAccess
+from app.persistence import tenant
 
 
 def organization_for_owner(db: Session, user_id: str, *, lock: bool = False):
@@ -96,6 +98,22 @@ def organization_for_business(db: Session, business_id: str, *, lock: bool = Fal
     return db.scalar(statement.execution_options(populate_existing=True))
 
 
+def organization_for_business_scoped(
+    db: Session,
+    context: TenantAccess,
+    *,
+    lock: bool = False,
+):
+    statement = (
+        select(CustomerOrganization)
+        .join(Business, Business.customer_organization_id == CustomerOrganization.id)
+        .where(tenant.predicate(Business, context))
+    )
+    if lock:
+        statement = statement.with_for_update(of=CustomerOrganization)
+    return db.scalar(statement.execution_options(populate_existing=True))
+
+
 def count_businesses(db: Session, organization_id: str) -> int:
     return db.scalar(select(func.count()).select_from(Business).where(
         Business.customer_organization_id == organization_id,
@@ -126,6 +144,26 @@ def usage_reservation_by_key(
     ).execution_options(populate_existing=True))
 
 
+def usage_reservation_by_key_scoped(
+    db: Session,
+    context: TenantAccess,
+    metric: str,
+    idempotency_key: str,
+):
+    organization_id = (
+        select(Business.customer_organization_id)
+        .where(tenant.predicate(Business, context))
+        .scalar_subquery()
+    )
+    return db.scalar(
+        select(AIUsageReservation).where(
+            AIUsageReservation.organization_id == organization_id,
+            AIUsageReservation.metric == metric,
+            AIUsageReservation.idempotency_key == idempotency_key,
+        ).execution_options(populate_existing=True)
+    )
+
+
 def count_usage(
     db: Session,
     organization_id: str,
@@ -133,6 +171,28 @@ def count_usage(
     *,
     since: datetime | None = None,
 ) -> int:
+    statement = select(func.count()).select_from(AIUsageReservation).where(
+        AIUsageReservation.organization_id == organization_id,
+        AIUsageReservation.metric == metric,
+        AIUsageReservation.status != "failed",
+    )
+    if since is not None:
+        statement = statement.where(AIUsageReservation.created_at >= since)
+    return db.scalar(statement) or 0
+
+
+def count_usage_scoped(
+    db: Session,
+    context: TenantAccess,
+    metric: str,
+    *,
+    since: datetime | None = None,
+) -> int:
+    organization_id = (
+        select(Business.customer_organization_id)
+        .where(tenant.predicate(Business, context))
+        .scalar_subquery()
+    )
     statement = select(func.count()).select_from(AIUsageReservation).where(
         AIUsageReservation.organization_id == organization_id,
         AIUsageReservation.metric == metric,

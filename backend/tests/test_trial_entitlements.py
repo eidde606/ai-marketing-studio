@@ -3,7 +3,7 @@ import json
 from unittest.mock import Mock
 
 from httpx import Request, Response
-from openai import AuthenticationError
+from openai import AuthenticationError, RateLimitError
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -36,6 +36,7 @@ def _trial_limits(**overrides):
         "businesses": 1,
         "leo_generations": 20,
         "sofia_requests": 5,
+        "edian_analyses": 5,
         "campaigns": 2,
         "heygen_generations": 0,
     }
@@ -70,6 +71,18 @@ def _create_business_without_entitlement(engine):
         return principal, business.id
 
 
+def test_legacy_limit_configuration_inherits_the_additive_edian_allowance(
+    monkeypatch,
+):
+    legacy = _trial_limits()
+    legacy.pop("edian_analyses")
+    monkeypatch.setenv("TRIAL_LIMITS_JSON", json.dumps(legacy))
+    monkeypatch.setenv("STRIPE_MONTHLY_LIMITS_JSON", json.dumps(legacy))
+
+    assert entitlement_service.trial_limits()["edian_analyses"] == 5
+    assert entitlement_service.monthly_subscription_limits()["edian_analyses"] == 25
+
+
 def test_ai_permissions_reservations_and_routes_fail_closed_without_entitlement(
     isolated_client, monkeypatch,
 ):
@@ -90,6 +103,7 @@ def test_ai_permissions_reservations_and_routes_fail_closed_without_entitlement(
         for permission in (
             Permission.USE_SOFIA,
             Permission.USE_LEO,
+            Permission.USE_EDIAN,
             Permission.GENERATE_MEDIA,
         ):
             with pytest.raises(ApplicationError) as denied:
@@ -115,6 +129,7 @@ def test_ai_permissions_reservations_and_routes_fail_closed_without_entitlement(
     )
 
     assert chat_response.status_code == generation_response.status_code == 429
+    assert chat_response.headers["x-error-code"] == "ai_entitlement_required"
     assert chat_response.json() == {
         "detail": "An active trial or subscription is required to use AI features.",
     }
@@ -319,6 +334,7 @@ def test_failed_usage_reservation_never_calls_ai_provider(
     )
 
     assert chat_response.status_code == generation_response.status_code == 429
+    assert chat_response.headers["x-error-code"] == "limit_exceeded"
     chat.assert_not_called()
     generate.assert_not_called()
     with Session(engine) as db:
@@ -346,6 +362,7 @@ def test_exhausted_chat_quota_blocks_direct_api_before_provider_call(
     )
 
     assert response.status_code == 429
+    assert response.headers["x-error-code"] == "ai_quota_exhausted"
     provider.assert_not_called()
     with Session(engine) as db:
         assert db.scalar(select(func.count()).select_from(AIUsageReservation)) == 0
@@ -466,16 +483,18 @@ def test_repeated_generation_request_with_same_key_reuses_billable_operation(
             AIUsageReservation.business_id == business_id,
         )).all()
         assert {reservation.metric for reservation in reservations} == {
-            "sofia_request", "leo_generation",
+            "leo_generation",
         }
         assert {reservation.status for reservation in reservations} == {"succeeded"}
         organization = entitlement_repository.organization_for_business(
             db, business_id,
         )
-        for metric in ("sofia_request", "leo_generation"):
-            assert entitlement_repository.count_usage(
-                db, organization.id, metric,
-            ) == 1
+        assert entitlement_repository.count_usage(
+            db, organization.id, "sofia_request",
+        ) == 0
+        assert entitlement_repository.count_usage(
+            db, organization.id, "leo_generation",
+        ) == 1
         assert db.scalar(select(func.count()).select_from(Draft).where(
             Draft.business_id == business_id,
         )) == 1
@@ -591,7 +610,7 @@ def test_provider_authentication_failure_refunds_once_and_success_counts(
     )
 
     assert failed.status_code == 502
-    assert failed.json() == {"detail": "Sofía could not respond. Please try again."}
+    assert failed.json() == {"detail": "Sebastián could not respond. Please try again."}
     assert "sensitive provider response" not in failed.text
     assert "sensitive provider response" not in caplog.text
     with Session(engine) as db:
@@ -668,7 +687,7 @@ def test_provider_authentication_failure_releases_both_content_reservations(
             AIUsageReservation.business_id == business_id,
         )).all()
         assert {reservation.metric for reservation in reservations} == {
-            "sofia_request", "leo_generation",
+            "leo_generation",
         }
         assert {reservation.status for reservation in reservations} == {"failed"}
         assert entitlement_repository.count_usage(
@@ -677,6 +696,130 @@ def test_provider_authentication_failure_releases_both_content_reservations(
         assert entitlement_repository.count_usage(
             db, organization.id, "leo_generation",
         ) == 0
+
+
+def test_valeria_generation_remains_available_when_sofia_quota_is_exhausted(
+    isolated_client, monkeypatch,
+):
+    client, engine = isolated_client
+    principal, business_id = _create_trial_business(engine, monkeypatch)
+    with Session(engine) as db:
+        for metric, prefix in (
+            ("sofia_request", "sofia-exhausted"),
+            ("leo_generation", "valeria-used"),
+        ):
+            for index in range(5):
+                reservation, replay = entitlement_service.reserve_usage(
+                    db,
+                    principal,
+                    business_id=business_id,
+                    metric=metric,
+                    idempotency_key=f"{prefix}-{index}",
+                )
+                assert reservation is not None
+                assert replay is False
+                db.commit()
+                entitlement_service.finish_usage(
+                    db, reservation.id, succeeded=True,
+                )
+        organization = entitlement_repository.organization_for_business(
+            db, business_id,
+        )
+        assert entitlement_repository.count_usage(
+            db, organization.id, "sofia_request",
+        ) == 5
+        assert entitlement_repository.count_usage(
+            db, organization.id, "leo_generation",
+        ) == 5
+        entitlement = db.scalar(select(CustomerEntitlement).where(
+            CustomerEntitlement.organization_id == organization.id,
+        ))
+        assert entitlement is not None
+        assert (
+            entitlement.limits["leo_generations"]
+            - entitlement_repository.count_usage(
+                db, organization.id, "leo_generation",
+            )
+        ) == 15
+    from app.auth import get_authenticated_principal
+    from app.main import app
+
+    app.dependency_overrides[get_authenticated_principal] = lambda: principal
+    provider = Mock(return_value={
+        "title": "A test draft",
+        "caption": "A test caption",
+        "platform": "Facebook",
+        "image_prompt": "A test image prompt",
+        "video_script": "A test video script",
+    })
+    monkeypatch.setattr(
+        "app.features.content.generation_service.generate_marketing_content",
+        provider,
+    )
+
+    response = client.post(
+        f"/businesses/{business_id}/generate-content",
+        json={"idempotency_key": "valeria-independent-generation"},
+    )
+
+    assert response.status_code == 201
+    provider.assert_called_once()
+    with Session(engine) as db:
+        organization = entitlement_repository.organization_for_business(
+            db, business_id,
+        )
+        reservations = db.scalars(select(AIUsageReservation).where(
+            AIUsageReservation.business_id == business_id,
+        )).all()
+        assert sum(
+            reservation.metric == "sofia_request" for reservation in reservations
+        ) == 5
+        assert sum(
+            reservation.metric == "leo_generation" for reservation in reservations
+        ) == 6
+        assert entitlement_repository.count_usage(
+            db, organization.id, "sofia_request",
+        ) == 5
+        entitlement = db.scalar(select(CustomerEntitlement).where(
+            CustomerEntitlement.organization_id == organization.id,
+        ))
+        assert entitlement is not None
+        assert entitlement.limits["sofia_requests"] == 5
+        assert entitlement_repository.count_usage(
+            db, organization.id, "leo_generation",
+        ) == 6
+        assert entitlement.limits["leo_generations"] == 20
+
+
+def test_provider_rate_limit_has_a_distinct_error_code(isolated_client, monkeypatch):
+    client, engine = isolated_client
+    principal, business_id = _create_trial_business(
+        engine, monkeypatch, subject="provider-rate-limit-customer",
+    )
+    from app.auth import get_authenticated_principal
+    from app.main import app
+
+    app.dependency_overrides[get_authenticated_principal] = lambda: principal
+    monkeypatch.setattr(
+        "app.features.content.adapters.chat_with_sofia",
+        Mock(side_effect=RateLimitError(
+            "provider limit reached",
+            response=Response(
+                429,
+                request=Request("POST", "https://api.openai.com/v1/responses"),
+            ),
+            body={},
+        )),
+    )
+
+    response = client.post(
+        f"/businesses/{business_id}/sofia/chat",
+        json={"message": "Help me plan", "idempotency_key": "provider-throttle"},
+    )
+
+    assert response.status_code == 502
+    assert response.headers["x-error-code"] == "provider_rate_limited"
+    assert "429" not in response.json()["detail"]
 
 
 def test_trial_disables_image_generation_and_revisions_before_provider_calls(

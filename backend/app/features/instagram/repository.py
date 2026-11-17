@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     Business,
+    Draft,
     InstagramConnection,
     InstagramOAuthState,
     SocialAccount,
@@ -35,6 +36,31 @@ def get_facebook_page_scoped(db: Session, context: TenantAccess) -> SocialAccoun
         SocialAccount.platform == "facebook",
         SocialAccount.connection_status == "connected",
     ))
+
+
+def get_page_account_scoped(
+    db: Session,
+    context: TenantAccess,
+    page_id: str,
+) -> SocialAccount | None:
+    return db.scalar(
+        tenant.selection(SocialAccount, context).where(
+            SocialAccount.platform == "facebook",
+            SocialAccount.platform_account_id == page_id,
+            SocialAccount.connection_status == "connected",
+        )
+    )
+
+
+def get_connected_facebook_pages_scoped(db: Session, context: TenantAccess):
+    return db.scalars(tenant.page(
+        tenant.selection(SocialAccount, context).where(
+            SocialAccount.platform == "facebook",
+            SocialAccount.connection_status == "connected",
+        ).order_by(SocialAccount.id),
+        limit=2,
+        offset=0,
+    )).all()
 
 
 def create_oauth_state(
@@ -114,6 +140,88 @@ def _consume_oauth_state_statement(state_hash, now):
 
 def get_connection_scoped(db: Session, context: TenantAccess):
     return tenant.get(db, context, InstagramConnection, tenant.business_id(context))
+
+
+def get_publish_connection_scoped(db: Session, context: TenantAccess):
+    return db.scalar(
+        tenant.selection(InstagramConnection, context)
+        .execution_options(populate_existing=True)
+    )
+
+
+def claim_publication_scoped(
+    db: Session,
+    context: TenantAccess,
+    draft_id: str,
+) -> bool:
+    return db.execute(
+        update(Draft)
+        .where(
+            tenant.predicate(Draft, context),
+            Draft.id == draft_id,
+            Draft.deleted_at.is_(None),
+            Draft.status == "approved",
+            Draft.instagram_publish_status.in_(("not_published", "failed")),
+            Draft.instagram_media_id.is_(None),
+        )
+        .values(instagram_publish_status="publishing")
+        .returning(Draft.id)
+    ).scalar_one_or_none() is not None
+
+
+def save_claimed_publication_scoped(
+    db: Session,
+    context: TenantAccess,
+    draft_id: str,
+    *,
+    expected_status: str = "publishing",
+    values: dict,
+) -> bool:
+    allowed = {
+        "instagram_media_id",
+        "instagram_permalink",
+        "instagram_publish_status",
+        "instagram_published_at",
+    }
+    if (
+        not values
+        or not set(values) <= allowed
+        or values.get("instagram_publish_status")
+        not in {None, "not_published", "publishing", "published", "failed", "needs_review"}
+    ):
+        raise ValueError("Unsupported Instagram publication fields")
+    return db.execute(
+        update(Draft)
+        .where(
+            tenant.predicate(Draft, context),
+            Draft.id == draft_id,
+            Draft.instagram_publish_status == expected_status,
+        )
+        .values(**values)
+        .returning(Draft.id)
+    ).scalar_one_or_none() is not None
+
+
+def save_publication_permalink_scoped(
+    db: Session,
+    context: TenantAccess,
+    draft_id: str,
+    *,
+    media_id: str,
+    permalink: str,
+) -> bool:
+    return db.execute(
+        update(Draft)
+        .where(
+            tenant.predicate(Draft, context),
+            Draft.id == draft_id,
+            Draft.instagram_publish_status == "published",
+            Draft.instagram_media_id == media_id,
+            Draft.instagram_permalink.is_(None),
+        )
+        .values(instagram_permalink=permalink)
+        .returning(Draft.id)
+    ).scalar_one_or_none() is not None
 
 
 def update_connection_scoped(db: Session, context: TenantAccess, values: dict) -> bool:

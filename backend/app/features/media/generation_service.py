@@ -118,8 +118,10 @@ def _can_attach_video(
         and draft.status == "pending"
         and draft.published_at is None
         and draft.facebook_publish_status == "not_published"
+        and draft.instagram_publish_status == "not_published"
         and draft.tiktok_publish_status == "not_published"
         and not draft.facebook_post_id
+        and not draft.instagram_media_id
         and not draft.tiktok_publish_id
         and draft.image_status != "generating"
         and draft.media_type == "video"
@@ -386,8 +388,11 @@ def _submit_provider_request(
             principal=principal,
             context=context,
         )
-    except Exception:
-        logger.exception("Unexpected HeyGen submission error for attempt %s", attempt.id)
+    except Exception as exc:
+        logger.warning(
+            "Unexpected HeyGen submission error (%s)",
+            type(exc).__name__,
+        )
         return _mark_unknown(
             db,
             attempt.id,
@@ -448,7 +453,7 @@ def submit_generation(
         if active.request_fingerprint != fingerprint:
             raise _failure(
                 ErrorKind.CONFLICT,
-                "A different HeyGen generation attempt is already active",
+                "A different AI video generation attempt is already active",
             )
         if active.status == "PROCESSING" or active.provider_video_id:
             return _response(active)
@@ -502,7 +507,7 @@ def submit_generation(
         )
 
     if not request.confirmed_paid_generation:
-        raise _failure(ErrorKind.INVALID_INPUT, "Confirm paid generation before creating a HeyGen job")
+        raise _failure(ErrorKind.INVALID_INPUT, "Confirm paid video generation before creating an AI video job")
     # Asset authorization holds the business lock; count and insert are atomic
     # across drafts/tabs. Existing attempts above retain their recovery path.
     usage_service.require_capacity(db, context, request.script)
@@ -541,7 +546,7 @@ def submit_generation(
             return _response(concurrent)
         raise _failure(
             ErrorKind.CONFLICT,
-            "A different HeyGen generation attempt is already active",
+            "A different AI video generation attempt is already active",
         )
     attempt = repository.get_attempt_scoped(db, context, attempt_id)
     if attempt is None:
@@ -575,7 +580,7 @@ def get_latest_generation(
     if attempt is None:
         raise _failure(
             ErrorKind.NOT_FOUND,
-            "No HeyGen generation attempt found",
+            "No AI video generation attempt found",
         )
     if attempt.status == "COMPLETED" and attempt.storage_status == "STORED":
         # Private storage is authoritative after completion; provider retention
@@ -595,12 +600,12 @@ def get_latest_generation(
     except CompletionProcessingError as exc:
         raise _failure(
             ErrorKind.UPSTREAM_FAILURE,
-            "HeyGen video completion could not be stored; retry reconciliation",
+            "AI video completion could not be stored; retry reconciliation",
         ) from exc
     except (httpx.HTTPError, HeyGenConfigurationError, ValueError) as exc:
         raise _failure(
             ErrorKind.UPSTREAM_FAILURE,
-            "HeyGen status is temporarily unavailable; the saved attempt is unchanged",
+            "Video status is temporarily unavailable; the saved attempt is unchanged",
         ) from exc
 
     return _response(attempt)
@@ -974,10 +979,10 @@ def process_webhook_delivery(delivery_id: str) -> None:
             return
         try:
             _reconcile_webhook_delivery(db, delivery)
-        except Exception:
-            logger.exception(
-                "Unable to reconcile HeyGen webhook delivery %s",
-                delivery_id,
+        except Exception as exc:
+            logger.warning(
+                "Unable to reconcile HeyGen webhook delivery (%s)",
+                type(exc).__name__,
             )
             return
 

@@ -3,30 +3,39 @@ from pathlib import Path
 
 import jwt
 import httpx
-from dotenv import load_dotenv
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import PyJWKClient
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.environment import is_development_environment, load_application_environment
 from app.errors import ApplicationError
-from app.features.access.principal import AuthenticatedPrincipal, Principal
 from app.features.access import service as access_service
+from app.features.access.principal import AuthenticatedPrincipal, Principal
 from app.features.entitlements import service as entitlement_service
 from app.http_errors import http_error
 
-# Load environment variables
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+load_application_environment(Path(__file__).resolve().parent.parent / ".env")
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 ALLOWED_USER_ID = os.getenv("ALLOWED_USER_ID", "").strip()
 
 if not SUPABASE_URL:
-    raise RuntimeError("SUPABASE_URL is not configured")
+    environment_file = (
+        "backend/.env.development.local"
+        if is_development_environment()
+        else "backend/.env"
+    )
+    raise RuntimeError(f"SUPABASE_URL must be configured in {environment_file}")
 
 if not ALLOWED_USER_ID:
-    raise RuntimeError("ALLOWED_USER_ID is not configured")
+    environment_file = (
+        "backend/.env.development.local"
+        if is_development_environment()
+        else "backend/.env"
+    )
+    raise RuntimeError(f"ALLOWED_USER_ID must be configured in {environment_file}")
 
 SUPABASE_ISSUER = f"{SUPABASE_URL}/auth/v1"
 SUPABASE_JWKS_URL = f"{SUPABASE_ISSUER}/.well-known/jwks.json"

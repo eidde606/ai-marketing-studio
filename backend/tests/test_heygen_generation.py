@@ -230,7 +230,7 @@ def test_missing_generation_attempt_is_distinct_from_missing_draft(isolated_clie
         client.post(f"{GENERATION_PATH}/reconcile"),
     ):
         assert response.status_code == 404
-        assert response.json()["detail"] == "No HeyGen generation attempt found"
+        assert response.json()["detail"] == "No AI video generation attempt found"
 
     inaccessible = client.get(
         "/businesses/another-business/drafts/draft-1/heygen-generation"
@@ -1691,8 +1691,6 @@ def test_completion_cannot_attach_superseded_attempt(completed_provider, monkeyp
     assert result.json()["storage_status"] == "FAILED"
     with Session(engine) as db:
         assert db.get(Draft, "draft-1").video_url is None
-
-
 @pytest.mark.parametrize("first", ["image", "video"])
 def test_media_reservations_block_other_provider_while_first_is_pending(
     isolated_client, monkeypatch, first,

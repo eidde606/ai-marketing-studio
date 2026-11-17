@@ -8,7 +8,7 @@ import {
   X,
 } from "lucide-react";
 import { useVideoUpload } from "../hooks/useVideoUpload";
-import { useLocalization } from "../../../app/localization";
+import { useLocalization } from "../../../app/useLocalization";
 
 type VideoUploadProps = {
   draftId: string;

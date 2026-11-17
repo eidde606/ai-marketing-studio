@@ -141,8 +141,10 @@ def update_tutorial_status(
 
 
 def entitlement_status(db: Session, principal: AuthenticatedPrincipal, business_id: str):
-    access.require_permission(db, principal, business_id, Permission.READ)
-    status = entitlement_service.usage_for_business(db, business_id)
+    context = access.require_permission(db, principal, business_id, Permission.READ)
+    status = entitlement_service.usage_for_business(
+        db, business_id, context=context,
+    )
     if status is not None:
         status["usage"]["heygen_generations"]["used"] = heygen_usage_service.attempt_count(
             db, principal, business_id,

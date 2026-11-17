@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { uploadDraftVideo } from "../services/videoApi";
-import { useLocalization } from "../../../app/localization";
+import { useLocalization } from "../../../app/useLocalization";
 
 export function useVideoUpload(draftId: string, onUploaded: () => void) {
   const { t } = useLocalization();

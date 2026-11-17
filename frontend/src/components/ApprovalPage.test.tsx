@@ -4,6 +4,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ComponentProps } from "react";
@@ -45,6 +46,9 @@ function props(
     pendingCount: 0,
     canApprove: true,
     canPublish: true,
+    facebookPublisher: "Test Page",
+    instagramPublisher: null,
+    publisherStatusLoading: false,
     loadingDrafts: false,
     loadError: null,
     draftMessages: null,
@@ -72,12 +76,15 @@ function props(
     handleApprove: vi.fn(),
     handleDelete: vi.fn(),
     handlePublishFacebook: vi.fn(),
+    handlePublishInstagram: vi.fn(),
     handlePublishTikTok: vi.fn(),
     onVerifyTikTok: vi.fn(),
     onVerifyFacebookVideo: vi.fn(),
     handleReject: vi.fn(),
     handleSaveEdit: vi.fn(),
     handleGenerateImage: vi.fn(),
+    handleUploadImage: vi.fn().mockResolvedValue(true),
+    handleReuseImage: vi.fn().mockResolvedValue(true),
     handlePreviewImage: vi.fn(),
     handleCreateRevision: vi.fn(),
     handleDecideRevision: vi.fn(),
@@ -87,6 +94,18 @@ function props(
     toggleImageEditor: vi.fn(),
     startEditing: vi.fn(),
     ...overrides,
+  };
+}
+function pendingImageDraft(
+  image_url: string | null,
+  image_status: Draft["image_status"] = "completed",
+): Draft {
+  return {
+    ...draft,
+    status: "pending",
+    media_type: "image",
+    image_status,
+    image_url,
   };
 }
 beforeEach(() => {
@@ -104,11 +123,7 @@ afterEach(() => {
 });
 it.each([
   ["text", null, "Publish this text to Facebook?"],
-  [
-    "image",
-    "stored-image",
-    "Publish this image and its caption to Facebook?",
-  ],
+  ["image", "stored-image", "Publish this image and its caption to Facebook?"],
   [
     "video",
     null,
@@ -132,9 +147,9 @@ it.each([
 it("disables pending publication and retains verification-only UI", () => {
   const p = props({ publishingIds: [draft.id] });
   const view = render(<ApprovalPage {...p} />);
-  expect(
-    (screen.getByText("Publishing…") as HTMLButtonElement).disabled,
-  ).toBe(true);
+  expect((screen.getByText("Publishing…") as HTMLButtonElement).disabled).toBe(
+    true,
+  );
   view.rerender(
     <ApprovalPage
       {...p}
@@ -152,39 +167,307 @@ it("disables pending publication and retains verification-only UI", () => {
   fireEvent.click(screen.getByText("Verify Facebook post"));
   expect(p.onVerifyFacebookVideo).toHaveBeenCalledWith(draft.id);
 });
-it("keeps member review available without approval, rejection, or publishing controls", () => {
-const pending = { ...draft, status: "pending" as const };
-const view = render(
-  <ApprovalPage
-    {...props({
-      canApprove: false,
-      canPublish: false,
-      visibleDrafts: [pending],
-    })}
-  />,
-);
-expect(screen.queryByText("✓ Approve")).toBeNull();
-expect(screen.queryByText("Reject")).toBeNull();
-expect(view.container.querySelector(".approval-platform-selection")).toBeNull();
-expect(screen.getByText("Edit")).toBeTruthy();
+it("requires confirmation for an approved Instagram image and shows its published link", () => {
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  const instagramDraft: Draft = {
+    ...draft,
+    media_type: "image",
+    image_status: "completed",
+    image_url: "approved-image.jpeg",
+    publish_destinations: ["instagram"],
+  };
+  const p = props({
+    visibleDrafts: [instagramDraft],
+    instagramPublisher: "nazborttech",
+  });
+  const view = render(<ApprovalPage {...p} />);
+  fireEvent.click(screen.getByText("Publish to Instagram"));
+  expect(confirm).toHaveBeenCalledWith(
+    "Publish this approved JPEG image and caption to the connected Instagram account?",
+  );
+  expect(p.handlePublishInstagram).not.toHaveBeenCalled();
 
-view.rerender(
-  <ApprovalPage
-    {...props({
-      canApprove: false,
-      canPublish: false,
-      visibleDrafts: [draft],
-    })}
-  />,
+  confirm.mockReturnValue(true);
+  fireEvent.click(screen.getByText("Publish to Instagram"));
+  expect(p.handlePublishInstagram).toHaveBeenCalledWith(instagramDraft.id);
+
+  view.rerender(
+    <ApprovalPage
+      {...p}
+      visibleDrafts={[
+        {
+          ...instagramDraft,
+          instagram_publish_status: "published",
+          instagram_permalink: "https://www.instagram.com/p/example/",
+        },
+      ]}
+    />,
+  );
+  const link = screen.getByText("View Instagram post") as HTMLAnchorElement;
+  expect(link.href).toBe("https://www.instagram.com/p/example/");
+  expect(link.target).toBe("_blank");
+});
+it("does not offer an Instagram publish action for unsupported media or ambiguous results", () => {
+  const p = props({
+    instagramPublisher: "nazborttech",
+    visibleDrafts: [
+      {
+        ...draft,
+        media_type: "video",
+        publish_destinations: ["instagram"],
+      },
+    ],
+  });
+  const view = render(<ApprovalPage {...p} />);
+  expect(screen.queryByText("Publish to Instagram")).toBeNull();
+  view.rerender(
+    <ApprovalPage
+      {...p}
+      visibleDrafts={[
+        {
+          ...draft,
+          media_type: "image",
+          image_status: "completed",
+          image_url: "approved-image.jpg",
+          publish_destinations: ["instagram"],
+          instagram_publish_status: "needs_review",
+        },
+      ]}
+    />,
+  );
+  expect(screen.queryByText("Retry Instagram")).toBeNull();
+  expect(
+    screen.getByText(
+      "Instagram may have published this post. Check the account before taking further action.",
+    ),
+  ).toBeTruthy();
+});
+it.each([".jpg", ".jpeg"])(
+  "enables Instagram selection for completed JPEG images (%s)",
+  (extension) => {
+    render(
+      <ApprovalPage
+        {...props({
+          visibleDrafts: [
+            pendingImageDraft(`businesses/example/image${extension}`),
+          ],
+          instagramPublisher: "nazborttech",
+        })}
+      />,
+    );
+    expect(
+      (
+        screen.getByRole("checkbox", {
+          name: /Instagram/,
+        }) as HTMLInputElement
+      ).disabled,
+    ).toBe(false);
+    expect(
+      screen.getByText(
+        "Instagram supports completed JPEG images up to 8 MB and captions up to 2,200 characters.",
+      ),
+    ).toBeTruthy();
+  },
 );
-expect(screen.queryByText("Publish to Facebook")).toBeNull();
-expect(screen.getByText("⬇ Download video for TikTok")).toBeTruthy();
+it.each([
+  [".png", "This image is .png; Instagram requires a JPEG (.jpg or .jpeg)."],
+  [".webp", "This image is .webp; Instagram requires a JPEG (.jpg or .jpeg)."],
+])(
+  "keeps Instagram selection disabled for unsupported image formats (%s)",
+  (extension, reason) => {
+    render(
+      <ApprovalPage
+        {...props({
+          visibleDrafts: [
+            pendingImageDraft(`businesses/example/image${extension}`),
+          ],
+          instagramPublisher: "nazborttech",
+        })}
+      />,
+    );
+    expect(
+      (
+        screen.getByRole("checkbox", {
+          name: /Instagram/,
+        }) as HTMLInputElement
+      ).disabled,
+    ).toBe(true);
+    expect(screen.getByRole("status").textContent).toBe(reason);
+  },
+);
+it("explains missing image files and incomplete image generation", () => {
+  const view = render(
+    <ApprovalPage
+      {...props({
+        visibleDrafts: [pendingImageDraft(null)],
+        instagramPublisher: "nazborttech",
+      })}
+    />,
+  );
+  expect(
+    (
+      screen.getByRole("checkbox", {
+        name: /Instagram/,
+      }) as HTMLInputElement
+    ).disabled,
+  ).toBe(true);
+  expect(
+    screen.getByText(
+      "The completed image file is missing. Generate or attach an image first.",
+    ),
+  ).toBeTruthy();
+
+  view.rerender(
+    <ApprovalPage
+      {...props({
+        visibleDrafts: [pendingImageDraft(null, "not_started")],
+        instagramPublisher: "nazborttech",
+      })}
+    />,
+  );
+  expect(
+    screen.getByText(
+      "Image generation has not started. Generate an image before selecting Instagram.",
+    ),
+  ).toBeTruthy();
+  expect(
+    (
+      screen.getByRole("checkbox", {
+        name: /Instagram/,
+      }) as HTMLInputElement
+    ).disabled,
+  ).toBe(true);
+});
+it("explains when a text draft cannot be selected for Instagram", () => {
+  render(
+    <ApprovalPage
+      {...props({
+        visibleDrafts: [{ ...draft, status: "pending", media_type: "text" }],
+        instagramPublisher: "nazborttech",
+      })}
+    />,
+  );
+  expect(
+    (
+      screen.getByRole("checkbox", {
+        name: /Instagram/,
+      }) as HTMLInputElement
+    ).disabled,
+  ).toBe(true);
+  expect(
+    screen.getByText(
+      "This is a text draft. Instagram publishing requires an image draft.",
+    ),
+  ).toBeTruthy();
+});
+it("offers an authenticated upload for a pending image-free draft", async () => {
+  const pending = {
+    ...draft,
+    status: "pending",
+    media_type: "text" as const,
+    image_status: "not_started" as const,
+    video_status: "not_started" as const,
+    video_url: null,
+  };
+  const p = props({ visibleDrafts: [pending] });
+  render(<ApprovalPage {...p} />);
+  fireEvent.click(screen.getByText("Upload an image"));
+  const file = new File(["image bytes"], "customer.png", {
+    type: "image/png",
+  });
+  fireEvent.change(document.querySelector('input[type="file"]')!, {
+    target: { files: [file] },
+  });
+  fireEvent.click(screen.getByText("Upload image"));
+  await act(async () => {});
+  expect(p.handleUploadImage).toHaveBeenCalledWith(pending, file);
+});
+it("keeps image media actions on approval cards and does not change video drafts", () => {
+  const imageDraft: Draft = {
+    ...draft,
+    id: "image-draft",
+    status: "pending",
+    source: "ai",
+    media_type: "image",
+    image_prompt: "A welcoming cafe",
+    image_url: null,
+    image_status: "not_started",
+    video_status: "not_started",
+    video_url: null,
+    video_script: null,
+  };
+  render(<ApprovalPage {...props({ visibleDrafts: [imageDraft, draft] })} />);
+
+  expect(screen.getByText("✦ Generate image")).toBeTruthy();
+  expect(screen.getByText("Upload an image")).toBeTruthy();
+  expect(screen.getByText("Choose an existing image")).toBeTruthy();
+  expect(screen.getByText("Guion")).toBeTruthy();
+  expect(
+    screen.queryByRole("button", { name: "Create Image Post" }),
+  ).toBeNull();
+});
+it("offers tenant-scoped existing images for a pending image-free draft", async () => {
+  const pending = {
+    ...draft,
+    status: "pending",
+    media_type: "text" as const,
+    image_status: "not_started" as const,
+    video_status: "not_started" as const,
+    video_url: null,
+  };
+  const p = props({ visibleDrafts: [pending] });
+  vi.mocked(fetch).mockResolvedValue(
+    new Response(
+      JSON.stringify([
+        {
+          draft_id: "source-1",
+          title: "Earlier image",
+          image_url: "https://storage.example.com/source.jpg",
+        },
+      ]),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    ),
+  );
+  render(<ApprovalPage {...p} />);
+  fireEvent.click(screen.getByText("Choose an existing image"));
+  fireEvent.click(await screen.findByText("Use this image"));
+  await waitFor(() => {
+    expect(p.handleReuseImage).toHaveBeenCalledWith(pending, "source-1");
+  });
+});
+it("keeps member review available without approval, rejection, or publishing controls", () => {
+  const pending = { ...draft, status: "pending" as const };
+  const view = render(
+    <ApprovalPage
+      {...props({
+        canApprove: false,
+        canPublish: false,
+        visibleDrafts: [pending],
+      })}
+    />,
+  );
+  expect(screen.queryByText("✓ Approve")).toBeNull();
+  expect(screen.queryByText("Reject")).toBeNull();
+  expect(
+    view.container.querySelector(".approval-platform-selection"),
+  ).toBeNull();
+  expect(screen.getByText("Edit")).toBeTruthy();
+
+  view.rerender(
+    <ApprovalPage
+      {...props({
+        canApprove: false,
+        canPublish: false,
+        visibleDrafts: [draft],
+      })}
+    />,
+  );
+  expect(screen.queryByText("Publish to Facebook")).toBeNull();
+  expect(screen.getByText("⬇ Download video for TikTok")).toBeTruthy();
 });
 it("shows empty/loading/error states without displaying obsolete drafts", () => {
   const view = render(<ApprovalPage {...props({ visibleDrafts: [] })} />);
-  expect(
-    screen.getByText("There are no drafts to review yet."),
-  ).toBeTruthy();
+  expect(screen.getByText("There are no drafts to review yet.")).toBeTruthy();
   view.rerender(
     <ApprovalPage
       {...props({
@@ -221,12 +504,14 @@ it("previews and closes video using the authenticated preview endpoint", async (
   expect(view.container.querySelector("video")?.getAttribute("src")).toBe(
     "https://example.test/signed.mp4",
   );
-  expect(view.container.querySelector("video")?.classList.contains(
-    "approval-video-player",
-  )).toBe(true);
-  expect((view.container.querySelector("video") as HTMLVideoElement).controls).toBe(
-    true,
-  );
+  expect(
+    view.container
+      .querySelector("video")
+      ?.classList.contains("approval-video-player"),
+  ).toBe(true);
+  expect(
+    (view.container.querySelector("video") as HTMLVideoElement).controls,
+  ).toBe(true);
   fireEvent.click(screen.getByText("Close video"));
   expect(view.container.querySelector("video")).toBeNull();
   expect(fetch).toHaveBeenCalledTimes(1);
@@ -257,7 +542,9 @@ it("keeps approval information, media, scripts, platform and actions in separate
     container.querySelector(".approval-card-caption")?.textContent,
   ).toContain(draft.caption);
   expect(
-    container.querySelector(".approval-card-controls .approval-platform-selection"),
+    container.querySelector(
+      ".approval-card-controls .approval-platform-selection",
+    ),
   ).toBeTruthy();
   expect(
     container.querySelector(".approval-card-controls .approval-card-decisions"),

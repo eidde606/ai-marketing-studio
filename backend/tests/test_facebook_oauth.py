@@ -3,6 +3,7 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
@@ -13,6 +14,11 @@ from app.auth import get_authenticated_principal, verify_token
 from app.main import app
 from app.models import BusinessMembership, FacebookOAuthState, SocialAccount
 from tests.tenancy_fixtures import grant_test_owner
+
+
+@pytest.fixture(autouse=True)
+def facebook_frontend_redirect(monkeypatch):
+    monkeypatch.setenv("FRONTEND_BASE_URL", "https://studio.test.invalid")
 
 
 def create_business(client) -> str:
@@ -117,6 +123,105 @@ def test_facebook_oauth_start_preserves_auth_and_missing_business_response(
     assert unauthorized.status_code == 401
 
 
+def test_facebook_oauth_start_reports_missing_configuration_without_saving_state(
+    isolated_client,
+    monkeypatch,
+):
+    client, engine = isolated_client
+    business_id = create_business(client)
+    for name in (
+        "FACEBOOK_APP_ID",
+        "FACEBOOK_CONFIG_ID",
+        "FACEBOOK_REDIRECT_URI",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    response = client.get(
+        "/auth/facebook/start",
+        params={"business_id": business_id},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "Facebook connection is not configured",
+    }
+    with Session(engine) as db:
+        assert db.query(FacebookOAuthState).count() == 0
+
+
+def test_facebook_provider_uses_configured_callback_uri(monkeypatch):
+    from urllib.parse import parse_qs, urlparse
+
+    from app.features.facebook.provider import get_facebook_login_url
+
+    monkeypatch.setenv("FACEBOOK_APP_ID", "test-app-id")
+    monkeypatch.setenv("FACEBOOK_CONFIG_ID", "test-config")
+    monkeypatch.setenv(
+        "FACEBOOK_REDIRECT_URI",
+        "https://api.test.invalid/auth/facebook/callback",
+    )
+
+    params = parse_qs(urlparse(get_facebook_login_url("test-state")).query)
+
+    assert params["redirect_uri"] == [
+        "https://api.test.invalid/auth/facebook/callback",
+    ]
+    assert params["state"] == ["test-state"]
+
+
+def test_facebook_page_lookup_uses_bearer_headers_not_token_query_params(monkeypatch):
+    import asyncio
+
+    from app.features.facebook import provider
+
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, *, params=None, headers=None):
+            calls.append((url, params, headers))
+            if url.endswith("/me/accounts"):
+                return FakeResponse({"data": [{"id": "page-id", "name": "Page"}]})
+            return FakeResponse({"id": "page-id", "name": "Page"})
+
+    monkeypatch.setattr(provider.httpx, "AsyncClient", FakeClient)
+
+    async def run():
+        return (
+            await provider.get_managed_pages("user-access-token"),
+            await provider.get_page_info("page-id", "page-access-token"),
+        )
+
+    pages, page = asyncio.run(run())
+    assert pages == [{"id": "page-id", "name": "Page"}]
+    assert page == {"id": "page-id", "name": "Page"}
+    assert calls[0][2] == {"Authorization": "Bearer user-access-token"}
+    assert calls[1][2] == {"Authorization": "Bearer page-access-token"}
+    assert all(
+        token not in str((url, params))
+        for token in ("user-access-token", "page-access-token")
+        for url, params, _headers in calls
+    )
+
+
 def test_facebook_callback_consumes_state_before_provider_and_hands_off_pages(
     isolated_client,
     monkeypatch,
@@ -158,7 +263,10 @@ def test_facebook_callback_consumes_state_before_provider_and_hands_off_pages(
     )
 
     assert response.status_code == 303
-    handoff = response.headers["location"].split("#facebook_handoff=", 1)[1]
+    fragment = parse_qs(urlsplit(response.headers["location"]).fragment)
+    handoff = fragment["facebook_handoff"][0]
+    assert fragment["business_id"] == [business_id]
+    assert urlsplit(response.headers["location"]).netloc == "studio.test.invalid"
     assert len(handoff) > 20
     exchange.assert_awaited_once_with("authorization-code")
     long_lived.assert_awaited_once_with("short-user-token")
@@ -215,8 +323,15 @@ def test_facebook_callback_rejects_invalid_or_incomplete_authorization(
         follow_redirects=False,
     )
 
-    assert response.status_code == 400
-    assert response.json() == {"detail": expected_detail}
+    assert response.status_code == 303
+    result = (
+        "invalid_state"
+        if expected_detail.startswith("Invalid,")
+        else "authorization_declined"
+    )
+    assert response.headers["location"] == (
+        f"https://studio.test.invalid/#facebook_result={result}"
+    )
 
 
 def test_facebook_callback_maps_provider_failure_and_consumes_state(
@@ -238,8 +353,10 @@ def test_facebook_callback_maps_provider_failure_and_consumes_state(
         follow_redirects=False,
     )
 
-    assert response.status_code == 502
-    assert response.json() == {"detail": "Unable to retrieve Facebook Pages"}
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        "https://studio.test.invalid/#facebook_result=provider_error"
+    )
     exchange.assert_awaited_once_with("authorization-code")
     with Session(engine) as db:
         assert db.get(
@@ -274,10 +391,10 @@ def test_facebook_callback_rejects_empty_page_list(
         follow_redirects=False,
     )
 
-    assert response.status_code == 400
-    assert response.json() == {
-        "detail": "No Facebook Pages available for this account",
-    }
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        "https://studio.test.invalid/#facebook_result=no_pages"
+    )
 
 
 def test_facebook_member_cannot_list_or_connect_pages(isolated_client, monkeypatch):
@@ -302,7 +419,8 @@ def test_facebook_member_cannot_list_or_connect_pages(isolated_client, monkeypat
         "/auth/facebook/start", params={"business_id": business_id},
     )
     handoff_response = client.post(
-        "/auth/facebook/handoff", json={"handoff_token": handoff},
+        "/auth/facebook/handoff",
+        json={"handoff_token": handoff, "business_id": business_id},
     )
 
     assert [listing.status_code, start.status_code, handoff_response.status_code] == [
@@ -356,8 +474,10 @@ def test_facebook_callback_rechecks_membership_after_provider_exchange(
         follow_redirects=False,
     )
 
-    assert response.status_code == 404
-    assert response.json() == {"detail": "Business not found"}
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        "https://studio.test.invalid/#facebook_result=provider_error"
+    )
     exchange.assert_awaited_once()
     long_lived.assert_awaited_once()
     pages.assert_awaited_once()
@@ -365,6 +485,75 @@ def test_facebook_callback_rechecks_membership_after_provider_exchange(
         assert db.get(FacebookOAuthState, hashlib.sha256(state.encode()).hexdigest()) is None
         assert db.query(FacebookOAuthState).count() == 0
         assert db.query(SocialAccount).count() == 0
+
+
+def test_facebook_callback_returns_to_oauth_initiating_local_origin(
+        isolated_client,
+        monkeypatch,
+):
+        client, engine = isolated_client
+        business_id = create_business(client)
+        monkeypatch.setenv("FRONTEND_BASE_URL", "http://127.0.0.1:5173")
+        monkeypatch.setattr(
+            "app.features.facebook.provider.get_facebook_login_url",
+            lambda state: f"https://facebook.test/authorize?state={state}",
+        )
+        start = client.get(
+            "/auth/facebook/start",
+            params={"business_id": business_id},
+            headers={"Origin": "http://localhost:5173"},
+        )
+        state = parse_qs(urlsplit(start.json()["authorization_url"]).query)["state"][0]
+        monkeypatch.setattr(
+            "app.features.facebook.provider.exchange_code_for_token",
+            AsyncMock(return_value="short-token"),
+        )
+        monkeypatch.setattr(
+            "app.features.facebook.provider.get_long_lived_user_token",
+            AsyncMock(return_value="long-token"),
+        )
+        monkeypatch.setattr(
+            "app.features.facebook.provider.get_managed_pages",
+            AsyncMock(return_value=[{
+                "id": "page-id", "name": "Page", "access_token": "page-token",
+            }]),
+        )
+        monkeypatch.setattr(
+            "app.features.facebook.service.encrypt_token",
+            lambda value: f"encrypted:{value}",
+        )
+
+        callback = client.get(
+            "/auth/facebook/callback",
+            params={"state": state, "code": "authorization-code"},
+            follow_redirects=False,
+        )
+
+        assert callback.status_code == 303
+        assert callback.headers["location"].startswith(
+            "http://localhost:5173/#facebook_handoff=",
+        )
+
+
+def test_facebook_start_rejects_untrusted_frontend_origin(
+        isolated_client,
+        monkeypatch,
+):
+        client, _ = isolated_client
+        business_id = create_business(client)
+        monkeypatch.setattr(
+            "app.features.facebook.provider.get_facebook_login_url",
+            lambda state: f"https://facebook.test/authorize?state={state}",
+        )
+
+        response = client.get(
+            "/auth/facebook/start",
+            params={"business_id": business_id},
+            headers={"Origin": "https://attacker.test"},
+        )
+
+        assert response.status_code == 400
+        assert response.json() == {"detail": "Facebook connection origin is not allowed"}
 
 
 def test_facebook_handoff_is_user_scoped_and_hides_page_tokens(
@@ -391,7 +580,7 @@ def test_facebook_handoff_is_user_scoped_and_hides_page_tokens(
 
     response = client.post(
         "/auth/facebook/handoff",
-        json={"handoff_token": token},
+        json={"handoff_token": token, "business_id": business_id},
     )
 
     assert response.status_code == 200
@@ -400,6 +589,51 @@ def test_facebook_handoff_is_user_scoped_and_hides_page_tokens(
         "pages": [{"id": "page-id", "name": "Hola Compra Vibes"}],
     }
     assert "must-not-be-returned" not in response.text
+
+
+def test_facebook_handoff_and_selection_reject_wrong_business(
+    isolated_client,
+    monkeypatch,
+):
+    client, engine = isolated_client
+    business_a = create_business(client)
+    business_b = client.post(
+        "/businesses",
+        json={"name": "Other Facebook business"},
+    ).json()["id"]
+    token = create_pending_selection(
+        engine,
+        business_a,
+        pages=[{"id": "page-id", "name": "Page", "access_token": "secret"}],
+    )
+    monkeypatch.setattr(
+        "app.features.facebook.service.decrypt_token",
+        lambda value: value.removeprefix("encrypted:"),
+    )
+
+    handoff = client.post(
+        "/auth/facebook/handoff",
+        json={"handoff_token": token, "business_id": business_b},
+    )
+    selection = client.post(
+        "/auth/facebook/select-page",
+        json={
+            "selection_token": token,
+            "business_id": business_b,
+            "page_id": "page-id",
+        },
+    )
+
+    assert handoff.status_code == selection.status_code == 403
+    assert "secret" not in handoff.text + selection.text
+    with Session(engine) as db:
+        assert db.query(SocialAccount).count() == 0
+        assert db.scalar(
+            select(FacebookOAuthState).where(
+                FacebookOAuthState.selection_token_hash
+                == hashlib.sha256(token.encode()).hexdigest()
+            )
+        ) is not None
 
 
 def test_facebook_page_selection_connects_reconnects_and_consumes_token(
@@ -442,7 +676,11 @@ def test_facebook_page_selection_connects_reconnects_and_consumes_token(
 
     response = client.post(
         "/auth/facebook/select-page",
-        json={"selection_token": token, "page_id": "page-id"},
+        json={
+            "selection_token": token,
+            "business_id": business_id,
+            "page_id": "page-id",
+        },
     )
 
     assert response.status_code == 200
@@ -475,12 +713,16 @@ def test_facebook_page_selection_connects_reconnects_and_consumes_token(
     [
         (
             "/auth/facebook/handoff",
-            {"handoff_token": "not-valid"},
+            {"handoff_token": "not-valid", "business_id": "business-id"},
             "Invalid or expired Facebook handoff",
         ),
         (
             "/auth/facebook/select-page",
-            {"selection_token": "not-valid", "page_id": "page-id"},
+            {
+                "selection_token": "not-valid",
+                "business_id": "business-id",
+                "page_id": "page-id",
+            },
             "Invalid or expired Page selection",
         ),
     ],
@@ -497,6 +739,52 @@ def test_facebook_handoff_and_page_selection_reject_invalid_tokens(
 
     assert response.status_code == 400
     assert response.json() == {"detail": detail}
+
+
+def test_facebook_handoff_rejects_expired_selection(
+    isolated_client,
+):
+    client, engine = isolated_client
+    business_id = create_business(client)
+    token = create_pending_selection(
+        engine,
+        business_id,
+        pages=[{"id": "page-id", "name": "Page", "access_token": "secret"}],
+    )
+    with Session(engine) as db:
+        pending = db.scalar(
+            select(FacebookOAuthState).where(
+                FacebookOAuthState.selection_token_hash
+                == hashlib.sha256(token.encode()).hexdigest()
+            )
+        )
+        pending.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        db.commit()
+
+    response = client.post(
+        "/auth/facebook/handoff",
+        json={"handoff_token": token, "business_id": business_id},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Invalid or expired Facebook handoff"}
+
+
+def test_facebook_handoff_requires_an_authenticated_session(
+    isolated_client,
+):
+    client, engine = isolated_client
+    business_id = create_business(client)
+    token = create_pending_selection(engine, business_id)
+    del app.dependency_overrides[verify_token]
+    del app.dependency_overrides[get_authenticated_principal]
+
+    response = client.post(
+        "/auth/facebook/handoff",
+        json={"handoff_token": token, "business_id": business_id},
+    )
+
+    assert response.status_code == 401
 
 
 def test_facebook_page_selection_rejects_unavailable_page(
@@ -517,7 +805,11 @@ def test_facebook_page_selection_rejects_unavailable_page(
 
     response = client.post(
         "/auth/facebook/select-page",
-        json={"selection_token": token, "page_id": "other-page"},
+        json={
+            "selection_token": token,
+            "business_id": business_id,
+            "page_id": "other-page",
+        },
     )
 
     assert response.status_code == 400
@@ -578,3 +870,56 @@ def test_facebook_accounts_listing_is_business_scoped_and_hides_tokens(
     )
     assert missing.status_code == 404
     assert missing.json() == {"detail": "Business not found"}
+
+
+def test_facebook_disconnect_is_business_scoped_and_clears_saved_token(
+    isolated_client,
+    monkeypatch,
+):
+    client, engine = isolated_client
+    business_a = create_business(client)
+    business_b = client.post(
+        "/businesses",
+        json={"name": "Second Facebook business"},
+    ).json()["id"]
+    with Session(engine) as db:
+        accounts = [
+            SocialAccount(
+                business_id=business_a,
+                platform="facebook",
+                platform_account_id="page-a",
+                account_name="Page A",
+                encrypted_access_token="encrypted:secret-a",
+            ),
+            SocialAccount(
+                business_id=business_b,
+                platform="facebook",
+                platform_account_id="page-b",
+                account_name="Page B",
+                encrypted_access_token="encrypted:secret-b",
+            ),
+        ]
+        db.add_all(accounts)
+        db.commit()
+        account_a_id, account_b_id = (account.id for account in accounts)
+    monkeypatch.setattr(
+        "app.features.facebook.service.encrypt_token",
+        lambda value: f"encrypted:{value}",
+    )
+
+    cross_tenant = client.delete(
+        f"/auth/facebook/accounts/{account_b_id}",
+        params={"business_id": business_a},
+    )
+    disconnected = client.delete(
+        f"/auth/facebook/accounts/{account_a_id}",
+        params={"business_id": business_a},
+    )
+
+    assert cross_tenant.status_code == 404
+    assert disconnected.status_code == 200
+    assert disconnected.json() == {"status": "disconnected"}
+    with Session(engine) as db:
+        account = db.get(SocialAccount, account_a_id)
+        assert account.connection_status == "disconnected"
+        assert account.encrypted_access_token == "encrypted:"

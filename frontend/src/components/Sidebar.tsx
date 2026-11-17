@@ -21,7 +21,8 @@ import {
   SheetTitle,
   SheetTrigger,
 } from '@/components/ui/sheet';
-import { useLocalization, type Translate } from "../app/localization";
+import type { Translate } from "../app/localization";
+import { useLocalization } from "../app/useLocalization";
 
 export type Section =
   | 'Resumen'

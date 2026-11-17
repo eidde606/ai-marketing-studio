@@ -7,6 +7,7 @@
   "app.features.businesses.service:list_businesses -> app.features.businesses.repository.list_for_principal": 1,
   "app.features.drafts.service:require_draft -> app.features.drafts.repository.get_draft": 1,
   "app.features.drafts.service:require_pending_draft -> app.features.drafts.repository.lock_draft": 1,
+  "app.features.analytics.edian_service:analyze_business -> app.features.analytics.repository.flush": 1,
   "app.features.media.generation_service:_can_attach_video -> app.features.media.repository.latest_attempt": 1,
   "app.features.media.generation_service:_claim_storage -> app.features.media.repository.lock_attempt_for_update": 1,
   "app.features.media.generation_service:_reconcile_webhook_delivery -> app.features.media.repository.attempt_by_id": 1,

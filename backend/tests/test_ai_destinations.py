@@ -23,6 +23,16 @@ def generated_content(platform):
     }
 
 
+def test_ai_instructions_identify_the_renamed_agents():
+    from app.features.content import sofia_provider
+
+    chat_instructions = sofia_provider._instructions("en")
+    assert "Eres Sebastián" in chat_instructions
+    assert "Valeria crea contenido" in chat_instructions
+    assert "Edian analizará resultados" in chat_instructions
+    assert all(name not in chat_instructions for name in ("Sofía", "Leo", "Mía"))
+
+
 @pytest.mark.parametrize("platform", ["Facebook", "TikTok", "Instagram"])
 @pytest.mark.parametrize("workflow", ["automatic", "conversation"])
 def test_ai_platform_maps_only_to_supported_destinations(
@@ -57,7 +67,7 @@ def test_ai_platform_maps_only_to_supported_destinations(
         db.commit()
         business_id, conversation_id = business.id, conversation.id
 
-    # Exercise the real Sofía→Leo orchestration with only the SDK calls mocked.
+    # Exercise the real Sebastián→Valeria orchestration with only the SDK calls mocked.
     responses = Mock(side_effect=[
         SimpleNamespace(output_text="Estrategia de prueba"),
         SimpleNamespace(output_text=json.dumps(generated_content(platform))),
@@ -79,6 +89,8 @@ def test_ai_platform_maps_only_to_supported_destinations(
     assert body["campaign_id"] is None
     assert responses.call_count == 2
     strategy_call, content_call = responses.call_args_list
+    assert "Eres Sebastián" in strategy_call.kwargs["instructions"]
+    assert "Eres Valeria" in content_call.kwargs["instructions"]
     assert strategy_call.kwargs["model"] == content_call.kwargs["model"] == "gpt-4.1-mini"
     assert "Estrategia de prueba" in content_call.kwargs["input"]
     assert "Otro negocio" not in strategy_call.kwargs["input"]

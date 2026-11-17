@@ -28,6 +28,10 @@ _ERROR_RESPONSES = {
         409,
         "TikTok requires an image or video",
     ),
+    service.DraftErrorKind.INSTAGRAM_MEDIA_REQUIRED: (
+        409,
+        "Instagram requires a completed JPEG image and a supported caption",
+    ),
     service.DraftErrorKind.SOCIAL_ACCOUNTS_NOT_CONNECTED: (
         409,
         "Connect the selected social accounts first",

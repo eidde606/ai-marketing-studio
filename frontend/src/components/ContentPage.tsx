@@ -7,7 +7,7 @@ import {
   type FacebookAnalytics,
 } from "../services/draftsApi";
 import { fetchVideoPreview } from "../features/media/services/videoApi";
-import { useLocalization } from "../app/localization";
+import { useLocalization } from "../app/useLocalization";
 
 type Props = {
   drafts: Draft[];

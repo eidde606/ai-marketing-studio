@@ -8,7 +8,7 @@ import {
   type HeyGenVoice,
   type HeyGenVoiceType,
 } from "../services/heygenAssetsApi";
-import { useLocalization } from "../../../app/localization";
+import { useLocalization } from "../../../app/useLocalization";
 
 const avatarTypes: (HeyGenAvatarType | "")[] = [
   "",

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { getHeyGenUsage, type HeyGenUsage } from "../services/accountApi";
-import { useLocalization } from "./localization";
+import { useLocalization } from "./useLocalization";
 
 export default function UsageIndicator({ businessId }: { businessId: string }) {
   const { t } = useLocalization();
@@ -23,7 +23,7 @@ export default function UsageIndicator({ businessId }: { businessId: string }) {
     getHeyGenUsage(businessId)
       .then((result) => {
         if (result.configured !== Boolean(result.limits)) {
-          throw new Error("HeyGen usage response is inconsistent.");
+          throw new Error("AI video usage response is inconsistent.");
         }
         if (active) {
           setState({
@@ -55,11 +55,11 @@ export default function UsageIndicator({ businessId }: { businessId: string }) {
   return (
     <section
       className="settings-usage panel"
-      aria-labelledby="heygen-usage-title"
+      aria-labelledby="video-usage-title"
     >
       <div className="settings-section-heading">
         <div>
-          <h3 id="heygen-usage-title">{t("usage.heygenTitle")}</h3>
+          <h3 id="video-usage-title">{t("usage.heygenTitle")}</h3>
           <p>{t("usage.heygenNote")}</p>
         </div>
       </div>

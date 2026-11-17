@@ -10,6 +10,7 @@ from app.models import Draft
 from app.features.access.principal import AuthenticatedPrincipal
 from app.features.access.permissions import Permission
 from app.features.access.service import require_permission, require_draft_permission
+from app.features.instagram import publishing_service as instagram_publishing
 from app.transactions import Transactions, rollback_on_failure
 from . import repository
 from .schemas import DraftCreate, DraftDestinationsUpdate, DraftUpdate
@@ -22,6 +23,7 @@ class DraftErrorKind(Enum):
     DELETE_IN_PROGRESS = "delete_in_progress"
     DUPLICATE_DESTINATIONS = "duplicate_destinations"
     TIKTOK_MEDIA_REQUIRED = "tiktok_media_required"
+    INSTAGRAM_MEDIA_REQUIRED = "instagram_media_required"
     SOCIAL_ACCOUNTS_NOT_CONNECTED = "social_accounts_not_connected"
     VIDEO_NOT_READY = "video_not_ready"
 
@@ -142,7 +144,18 @@ def update_draft_destinations(draft_id: str, request: DraftDestinationsUpdate, d
         raise DraftError(DraftErrorKind.DUPLICATE_DESTINATIONS)
     if "tiktok" in destinations and not ((draft.media_type == "video" and draft.video_url) or draft.image_url):
         raise DraftError(DraftErrorKind.TIKTOK_MEDIA_REQUIRED)
-    if set(destinations) != repository.connected_platforms_scoped(db, context, destinations):
+    if "instagram" in destinations:
+        if not instagram_publishing.supports_instagram_image(draft):
+            raise DraftError(DraftErrorKind.INSTAGRAM_MEDIA_REQUIRED)
+        instagram_publishing.get_publish_ready_connection(db, context)
+    connected_destinations = [
+        destination for destination in destinations if destination != "instagram"
+    ]
+    if set(connected_destinations) != repository.connected_platforms_scoped(
+        db,
+        context,
+        connected_destinations,
+    ):
         raise DraftError(DraftErrorKind.SOCIAL_ACCOUNTS_NOT_CONNECTED)
     return _save(db, principal, context, draft_id, {"publish_destinations": destinations}, Permission.EDIT_CONTENT)
 
@@ -154,9 +167,13 @@ def approve_draft(draft_id: str, db: Session, *, principal: AuthenticatedPrincip
             or draft.video_status in {"generating", "uploading", "needs_review"}
             or repository.has_active_revision_scoped(db, context, draft_id)):
         raise ApplicationError(ErrorKind.CONFLICT, "Resolve pending media operations before approval")
-    if (any(destination not in {"facebook", "tiktok"} for destination in draft.publish_destinations)
+    if (any(destination not in {"facebook", "instagram", "tiktok"} for destination in draft.publish_destinations)
             or len(draft.publish_destinations) != len(set(draft.publish_destinations))):
         raise ApplicationError(ErrorKind.CONFLICT, "Choose supported publishing destinations before approval")
+    if "instagram" in draft.publish_destinations:
+        if not instagram_publishing.supports_instagram_image(draft):
+            raise DraftError(DraftErrorKind.INSTAGRAM_MEDIA_REQUIRED)
+        instagram_publishing.get_publish_ready_connection(db, context)
     if draft.media_type == "video" and (draft.video_status != "completed" or not draft.video_url):
         raise DraftError(DraftErrorKind.VIDEO_NOT_READY)
     return _save(db, principal, context, draft_id, {"status": "approved"}, Permission.APPROVE_CONTENT)

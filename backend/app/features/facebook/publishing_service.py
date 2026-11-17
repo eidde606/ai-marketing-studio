@@ -28,6 +28,21 @@ def _failure(kind: ErrorKind, detail: str) -> ApplicationError:
     return ApplicationError(kind, detail)
 
 
+def _connected_publish_page(db: Session, context: TenantAccess):
+    accounts = repository.get_connected_pages_scoped(db, context)
+    if not accounts:
+        raise _failure(
+            ErrorKind.CONFLICT,
+            "Connect a Facebook Page to this business first",
+        )
+    if len(accounts) > 1:
+        raise _failure(
+            ErrorKind.CONFLICT,
+            "Disconnect extra Facebook Pages so the publishing account is unambiguous",
+        )
+    return accounts[0]
+
+
 def _save_claimed_status(
     db: Session,
     context: TenantAccess,
@@ -86,15 +101,9 @@ async def publish_draft(
     if draft is None:
         raise _failure(ErrorKind.NOT_FOUND, "Draft not found")
 
-    account = repository.get_connected_page_scoped(db, context)
-    if account is None:
-        raise _failure(
-            ErrorKind.CONFLICT,
-            "Connect a Facebook Page to this business first",
-        )
+    account = _connected_publish_page(db, context)
 
     page_id = account.platform_account_id
-    access_token = decrypt_token(account.encrypted_access_token)
     transactions = Transactions(db)
     context = access.require_permission(
         db, principal, draft.business_id, Permission.PUBLISH, lock=True,
@@ -115,6 +124,11 @@ async def publish_draft(
     if draft is None:
         _release_claim(db, context, draft_id)
         raise _failure(ErrorKind.NOT_FOUND, "Draft not found")
+    account = _connected_publish_page(db, context)
+    if account.platform_account_id != page_id:
+        _release_claim(db, context, draft_id)
+        raise _failure(ErrorKind.CONFLICT, "Facebook publishing account changed")
+    access_token = decrypt_token(account.encrypted_access_token)
 
     if draft.media_type == "video":
         if draft.video_status != "completed" or not draft.video_url:
@@ -138,9 +152,9 @@ async def publish_draft(
         except Exception as exc:
             Transactions(db).rollback()
             _save_claimed_status(db, context, draft_id, "needs_review")
-            logger.exception(
-                "Facebook video publishing outcome uncertain for draft %s",
-                draft_id,
+            logger.warning(
+                "Facebook video publishing outcome uncertain (%s)",
+                type(exc).__name__,
             )
             raise _failure(
                 ErrorKind.UPSTREAM_FAILURE,
@@ -148,6 +162,11 @@ async def publish_draft(
             ) from exc
 
         context = _authorize_claimed_operation(db, principal, context, draft_id)
+        account = _connected_publish_page(db, context)
+        if account.platform_account_id != page_id:
+            _release_claim(db, context, draft_id)
+            raise _failure(ErrorKind.CONFLICT, "Facebook publishing account changed")
+        access_token = decrypt_token(account.encrypted_access_token)
         try:
             response = await publish_video_post(
                 page_id=page_id,
@@ -181,9 +200,9 @@ async def publish_draft(
         except Exception as exc:
             transactions.rollback()
             _save_claimed_status(db, context, draft_id, "needs_review")
-            logger.exception(
-                "Facebook video publishing outcome uncertain for draft %s",
-                draft_id,
+            logger.warning(
+                "Facebook video publishing outcome uncertain (%s)",
+                type(exc).__name__,
             )
             raise _failure(
                 ErrorKind.UPSTREAM_FAILURE,
@@ -222,14 +241,10 @@ async def publish_draft(
         ) from exc
 
     context = _authorize_claimed_operation(db, principal, context, draft_id)
-    account = repository.get_connected_page_scoped(db, context)
-    if account is None:
+    account = _connected_publish_page(db, context)
+    if account.platform_account_id != page_id:
         _release_claim(db, context, draft_id)
-        raise _failure(
-            ErrorKind.CONFLICT,
-            "Connect a Facebook Page to this business first",
-        )
-    page_id = account.platform_account_id
+        raise _failure(ErrorKind.CONFLICT, "Facebook publishing account changed")
     access_token = decrypt_token(account.encrypted_access_token)
 
     try:
@@ -317,9 +332,7 @@ async def verify_video(
             "Video is not awaiting verification",
         )
 
-    account = repository.get_connected_page_scoped(db, context)
-    if account is None:
-        raise _failure(ErrorKind.CONFLICT, "Facebook Page is not connected")
+    account = _connected_publish_page(db, context)
 
     access_token = decrypt_token(account.encrypted_access_token)
     access.require_draft_permission(

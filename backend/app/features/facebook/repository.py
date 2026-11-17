@@ -78,6 +78,18 @@ def pending_selection_business(
     ))
 
 
+def pending_selection_identity(db: Session, token_hash: str, now: datetime):
+    return db.execute(
+        select(
+            FacebookOAuthState.business_id,
+            FacebookOAuthState.user_id,
+        ).where(
+            FacebookOAuthState.selection_token_hash == token_hash,
+            FacebookOAuthState.expires_at > now,
+        )
+    ).one_or_none()
+
+
 def lock_pending_selection(
     db: Session,
     token_hash: str,
@@ -217,11 +229,15 @@ def get_account_scoped(db: Session, context: TenantAccess, account_id: str):
         SocialAccount.id == account_id, SocialAccount.platform == "facebook"))
 
 
-def get_connected_page_scoped(db: Session, context: TenantAccess):
-    return db.scalar(tenant.selection(SocialAccount, context).where(
-        SocialAccount.platform == "facebook",
-        SocialAccount.connection_status == "connected",
-    ))
+def get_connected_pages_scoped(db: Session, context: TenantAccess, *, limit=2):
+    return db.scalars(tenant.page(
+        tenant.selection(SocialAccount, context).where(
+            SocialAccount.platform == "facebook",
+            SocialAccount.connection_status == "connected",
+        ).order_by(SocialAccount.id),
+        limit=limit,
+        offset=0,
+    )).all()
 
 
 def get_page_account_scoped(db: Session, context: TenantAccess, page_id: str):
@@ -288,7 +304,10 @@ def add_oauth_state_scoped(db: Session, context: TenantAccess, record: FacebookO
 
 
 def update_account_scoped(db: Session, context: TenantAccess, account_id: str, values: dict) -> bool:
-    allowed = {"account_name", "encrypted_access_token", "token_expires_at", "connection_status"}
+    allowed = {
+        "account_name", "encrypted_access_token", "encrypted_refresh_token",
+        "token_expires_at", "connection_status",
+    }
     if not values or not set(values) <= allowed:
         raise ValueError("Unsupported Facebook account fields")
     return db.execute(update(SocialAccount).where(

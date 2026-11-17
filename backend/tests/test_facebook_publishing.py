@@ -114,6 +114,27 @@ def test_approved_draft_publishes_successfully(publishing_case):
     assert_saved_state(case, "published", "fake_post_123", published=True)
 
 
+def test_multiple_connected_pages_block_ambiguous_publishing(publishing_case):
+    case = publishing_case
+    with Session(case.engine) as db:
+        db.add(SocialAccount(
+            business_id=case.business_id,
+            platform="facebook",
+            platform_account_id="fake_page_456",
+            account_name="Another Page",
+            encrypted_access_token="encrypted_fake_token",
+            connection_status="connected",
+        ))
+        db.commit()
+
+    response = case.client.post(case.url)
+    assert response.status_code == 409
+    assert "Disconnect extra Facebook Pages" in response.json()["detail"]
+    for publisher in case.publishers.values():
+        publisher.assert_not_awaited()
+    assert_saved_state(case, "not_published")
+
+
 @pytest.mark.parametrize("provider_response,expected_id", [
     ({"post_id": "feed-post", "id": "photo-object"}, "feed-post"),
     ({"id": "photo-object"}, "photo-object"),
@@ -135,7 +156,9 @@ def test_image_publication_saves_supported_provider_id(publishing_case, provider
 
 @pytest.mark.parametrize("media", ["text", "image", "video"])
 @pytest.mark.parametrize("failure", ["timeout", "missing_id", 429, 500, 503])
-def test_uncertain_outcome_requires_review_and_blocks_resubmission(publishing_case, media, failure):
+def test_uncertain_outcome_requires_review_and_blocks_resubmission(
+    publishing_case, media, failure, caplog,
+):
     case = publishing_case
     set_media(case, media)
     publisher = case.publishers[media]
@@ -160,6 +183,8 @@ def test_uncertain_outcome_requires_review_and_blocks_resubmission(publishing_ca
     assert response.json() == {"detail": expected_detail}
     assert_saved_state(case, "needs_review")
     assert case.client.post(case.url).status_code == 409
+    if media == "video" and failure == "timeout":
+        assert "Simulated timeout after submission" not in caplog.text
     publisher.assert_awaited_once()
     for other_media, other_publisher in case.publishers.items():
         if other_media != media:

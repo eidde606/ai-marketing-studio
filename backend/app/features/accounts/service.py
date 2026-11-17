@@ -1,4 +1,6 @@
 """Account workflows: trusted identity only, no ownership assignment."""
+import os
+
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.errors import ApplicationError, ErrorKind
@@ -50,6 +52,9 @@ def language_preferences(db: Session, principal: AuthenticatedPrincipal):
 def account(db: Session, principal: AuthenticatedPrincipal):
     actor = resolve_principal(db, principal)
     memberships = repository.memberships_for_identity(db, actor)
+    tiktok_direct_publishing = (
+        os.getenv("TIKTOK_DIRECT_PUBLISHING_ENABLED") == "1"
+    )
     return {
         "user_id": actor.user_id,
         "preferences": language_preferences(db, actor),
@@ -58,9 +63,9 @@ def account(db: Session, principal: AuthenticatedPrincipal):
                         "capabilities": [p.value for p in Permission if allows(row.role, p)]}
                        for row in memberships],
         "features": {"public_registration": entitlement_service.public_registration_enabled(), "facebook_publishing": True,
-                     "tiktok_direct_publishing": False, "tiktok_manual_export": True,
+                     "tiktok_direct_publishing": tiktok_direct_publishing, "tiktok_manual_export": True,
                      "instagram_publishing": False, "instagram_connection": True,
-                     "mia_analysis": False, "scheduling": False},
+                     "mia_analysis": True, "scheduling": False},
     }
 
 

@@ -3,6 +3,8 @@ from sqlalchemy.orm import Session
 
 from app.models import Business, BusinessMembership, OnboardingProgress
 
+LOCAL_FRONTEND_ORIGIN = "http://127.0.0.1:5173"
+
 
 def test_public_registration_remains_closed(isolated_client, monkeypatch):
     client, _ = isolated_client
@@ -34,6 +36,34 @@ def test_public_config_exposes_trial_only_when_both_gates_are_enabled(
     }
 
 
+def test_local_frontend_onboarding_put_preflight_allows_auth_and_json_headers(
+    isolated_client,
+):
+    client, _ = isolated_client
+    response = client.options(
+        "/account/onboarding",
+        headers={
+            "Origin": LOCAL_FRONTEND_ORIGIN,
+            "Access-Control-Request-Method": "PUT",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == LOCAL_FRONTEND_ORIGIN
+    allowed_methods = {
+        method.strip().lower()
+        for method in response.headers["access-control-allow-methods"].split(",")
+    }
+    allowed_headers = {
+        header.strip().lower()
+        for header in response.headers["access-control-allow-headers"].split(",")
+    }
+    assert "put" in allowed_methods
+    assert {"authorization", "content-type"} <= allowed_headers
+    assert response.headers.get("access-control-allow-credentials") != "true"
+
+
 def test_onboarding_saves_resumes_and_activates_idempotently(isolated_client):
     client, engine = isolated_client
     assert client.get("/account/onboarding").json() == {
@@ -63,8 +93,13 @@ def test_onboarding_saves_resumes_and_activates_idempotently(isolated_client):
         "marketing_content_language": "es",
         "social_accounts_skipped": True,
     }
-    saved = client.put("/account/onboarding", json=progress)
+    saved = client.put(
+        "/account/onboarding",
+        json=progress,
+        headers={"Origin": LOCAL_FRONTEND_ORIGIN},
+    )
     assert saved.status_code == 200
+    assert saved.headers["access-control-allow-origin"] == LOCAL_FRONTEND_ORIGIN
     assert saved.json()["current_step"] == 5
     assert saved.json()["business_profile"]["name"] == "Example Studio"
     assert saved.json()["interface_language"] == "es"

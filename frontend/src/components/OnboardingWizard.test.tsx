@@ -14,7 +14,7 @@ import {
 } from "../services/onboardingApi";
 import type { Business } from "../services/businessesApi";
 
-vi.mock("../app/localization", () => ({
+vi.mock("../app/useLocalization", () => ({
   useLocalization: () => ({
     locale: "en",
     setInterfaceLanguage: vi.fn().mockResolvedValue(undefined),
