@@ -1,21 +1,36 @@
 """Facebook OAuth and Page lookup API adapter."""
 import os
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import httpx
 
 GRAPH_API_URL = "https://graph.facebook.com/v26.0"
 FACEBOOK_LOGIN_URL = "https://www.facebook.com/v26.0/dialog/oauth"
 
-REDIRECT_URI = (
-    "https://ai-marketing-studio-api-ha8a.onrender.com" "/auth/facebook/callback"
-)
-
 FACEBOOK_SCOPES = [
     "pages_show_list",
     "pages_read_engagement",
     "pages_manage_posts",
 ]
+
+
+def callback_uri() -> str:
+    redirect_uri = os.getenv("FACEBOOK_REDIRECT_URI", "").strip()
+    parsed = urlsplit(redirect_uri)
+    if (
+        parsed.scheme not in ("http", "https")
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or (
+            parsed.scheme == "http"
+            and parsed.hostname not in ("localhost", "127.0.0.1")
+        )
+    ):
+        raise RuntimeError("Facebook OAuth redirect URI is not configured")
+    return redirect_uri
 
 
 async def get_page_info(page_id: str, access_token: str) -> dict:
@@ -25,8 +40,8 @@ async def get_page_info(page_id: str, access_token: str) -> dict:
             f"{GRAPH_API_URL}/{page_id}",
             params={
                 "fields": "id,name",
-                "access_token": access_token,
             },
+            headers={"Authorization": f"Bearer {access_token}"},
         )
         response.raise_for_status()
         return response.json()
@@ -42,7 +57,7 @@ def get_facebook_login_url(state: str) -> str:
 
     params = {
         "client_id": app_id,
-        "redirect_uri": REDIRECT_URI,
+        "redirect_uri": callback_uri(),
         "state": state,
         "response_type": "code",
         "config_id": config_id,
@@ -56,7 +71,7 @@ async def exchange_code_for_token(code: str) -> str:
     params = {
         "client_id": os.environ["FACEBOOK_APP_ID"],
         "client_secret": os.environ["FACEBOOK_APP_SECRET"],
-        "redirect_uri": REDIRECT_URI,
+        "redirect_uri": callback_uri(),
         "code": code,
     }
 
@@ -102,11 +117,11 @@ async def get_managed_pages(user_token: str) -> list[dict]:
                     {
                         "fields": "id,name,access_token,tasks",
                         "limit": 100,
-                        "access_token": user_token,
                     }
                     if url == f"{GRAPH_API_URL}/me/accounts"
                     else None
                 ),
+                headers={"Authorization": f"Bearer {user_token}"},
             )
 
             response.raise_for_status()

@@ -1,0 +1,451 @@
+"""Trial lifecycle, effective access, and concurrency-safe usage policy."""
+from datetime import datetime, timedelta, timezone
+from math import ceil
+import json
+import os
+
+from sqlalchemy.orm import Session
+
+from app.errors import ApplicationError, ErrorCode, ErrorKind
+from app.features.access.principal import AuthenticatedPrincipal, TenantAccess
+from app.features.access.permissions import Permission
+from app.models import CustomerEntitlement
+from app.transactions import Transactions
+from . import repository
+
+_TRIAL_LIMIT_DEFAULTS = {
+    "businesses": 1,
+    "leo_generations": 20,
+    "sofia_requests": 5,
+    "edian_analyses": 5,
+    "campaigns": 2,
+    "heygen_generations": 0,
+}
+_MONTHLY_LIMIT_DEFAULTS = {
+    "businesses": 1,
+    "leo_generations": 200,
+    "sofia_requests": 100,
+    "edian_analyses": 25,
+    "campaigns": 20,
+    "heygen_generations": 0,
+}
+_USAGE_LIMITS = {
+    "leo_generation": "leo_generations",
+    "sofia_request": "sofia_requests",
+    "edian_analysis": "edian_analyses",
+}
+_AI_PERMISSIONS = frozenset({
+    Permission.USE_SOFIA,
+    Permission.USE_LEO,
+    Permission.USE_EDIAN,
+    Permission.GENERATE_MEDIA,
+})
+_MISSING_AI_ENTITLEMENT = (
+    "An active trial or subscription is required to use AI features."
+)
+
+
+def public_registration_enabled() -> bool:
+    return os.getenv("PUBLIC_REGISTRATION_ENABLED", "").strip().lower() == "true"
+
+
+def google_sign_in_enabled() -> bool:
+    return os.getenv("SUPABASE_GOOGLE_SIGN_IN_ENABLED", "").strip().lower() == "true"
+
+
+def facebook_sign_in_enabled() -> bool:
+    return os.getenv("SUPABASE_FACEBOOK_SIGN_IN_ENABLED", "").strip().lower() == "true"
+
+
+def apple_sign_in_enabled() -> bool:
+    return os.getenv("SUPABASE_APPLE_SIGN_IN_ENABLED", "").strip().lower() == "true"
+
+
+def trials_enabled() -> bool:
+    return os.getenv("TRIALS_ENABLED", "").strip().lower() == "true"
+
+
+def is_operator_subject(subject: str) -> bool:
+    allowed_user_id = os.getenv("ALLOWED_USER_ID", "").strip()
+    return bool(allowed_user_id and subject == allowed_user_id)
+
+
+def is_operator(principal: AuthenticatedPrincipal) -> bool:
+    return is_operator_subject(principal.subject)
+
+
+def trial_limits() -> dict[str, int]:
+    return _configured_limits("TRIAL_LIMITS_JSON", _TRIAL_LIMIT_DEFAULTS, "Trial")
+
+
+def monthly_subscription_limits() -> dict[str, int]:
+    return _configured_limits(
+        "STRIPE_MONTHLY_LIMITS_JSON", _MONTHLY_LIMIT_DEFAULTS, "Subscription",
+    )
+
+
+def _configured_limits(
+    environment_key: str,
+    defaults: dict[str, int],
+    label: str,
+) -> dict[str, int]:
+    raw = os.getenv(environment_key)
+    if raw is None:
+        return defaults.copy()
+    try:
+        parsed = json.loads(raw)
+        required = set(defaults) - {"edian_analyses"}
+        if (
+            not isinstance(parsed, dict)
+            or frozenset(parsed) not in {frozenset(defaults), frozenset(required)}
+        ):
+            raise ValueError
+        if any(type(value) is not int or value < 0 for value in parsed.values()):
+            raise ValueError
+        return {**defaults, **parsed}
+    except (ValueError, TypeError):
+        raise ApplicationError(
+            ErrorKind.UNAVAILABLE, f"{label} limit configuration is invalid",
+        ) from None
+
+
+def ensure_customer_organization(db: Session, user_id: str):
+    organization = repository.organization_for_owner(db, user_id, lock=True)
+    if organization is not None:
+        return organization
+    return repository.insert_organization(db, user_id)
+
+
+def activate_trial(db: Session, organization_id: str) -> CustomerEntitlement:
+    if not trials_enabled():
+        raise ApplicationError(ErrorKind.UNAVAILABLE, "Trial activation is not enabled")
+    organization = repository.organization_by_id(db, organization_id, lock=True)
+    if organization is None:
+        raise ApplicationError(ErrorKind.CONFLICT, "Customer organization is unavailable")
+    current = repository.entitlement_for_organization(db, organization.id, lock=True)
+    if current is not None:
+        raise ApplicationError(ErrorKind.CONFLICT, "This customer organization already used its trial")
+    limits = trial_limits()
+    started_at = datetime.now(timezone.utc)
+    try:
+        days = int(os.getenv("TRIAL_DAYS", "14"))
+    except ValueError:
+        raise ApplicationError(ErrorKind.UNAVAILABLE, "Trial duration configuration is invalid") from None
+    if days != 14:
+        raise ApplicationError(ErrorKind.UNAVAILABLE, "Trial duration must remain 14 days")
+    entitlement = CustomerEntitlement(
+        organization_id=organization.id,
+        status="trialing",
+        trial_started_at=started_at,
+        trial_expires_at=started_at + timedelta(days=days),
+        payment_provider_status=None,
+        limits=limits,
+    )
+    return repository.insert_entitlement(db, entitlement)
+
+
+def prepare_workspace_activation(db: Session, user_id: str):
+    """Lock the durable owner identity, start one trial, and enforce workspace count."""
+    organization = ensure_customer_organization(db, user_id)
+    entitlement = repository.entitlement_for_organization(db, organization.id, lock=True)
+    if entitlement is None:
+        if not trials_enabled():
+            raise ApplicationError(ErrorKind.UNAVAILABLE, "Customer workspace activation is not enabled")
+        entitlement = activate_trial(db, organization.id)
+    status = effective_status(entitlement)
+    if status not in {"trialing", "active", "operator_granted"}:
+        raise ApplicationError(ErrorKind.LIMIT_EXCEEDED, "Your trial or subscription has ended")
+    limit = (entitlement.limits or {}).get("businesses", 0)
+    if type(limit) is not int or limit < 1:
+        raise ApplicationError(ErrorKind.LIMIT_EXCEEDED, "No additional business workspace is available")
+    if repository.count_businesses(db, organization.id) >= limit:
+        raise ApplicationError(ErrorKind.LIMIT_EXCEEDED, "This account has reached its business workspace limit")
+    return organization, entitlement
+
+
+def require_campaign_capacity(db: Session, business_id: str) -> None:
+    organization = repository.organization_for_business(db, business_id, lock=True)
+    if organization is None:
+        return
+    entitlement = repository.entitlement_for_organization(db, organization.id, lock=True)
+    if entitlement is None:
+        return
+    status = effective_status(entitlement)
+    if status not in {"trialing", "active"}:
+        raise ApplicationError(ErrorKind.LIMIT_EXCEEDED, "Your trial has ended")
+    limit = (entitlement.limits or {}).get("campaigns", 0)
+    if type(limit) is not int or limit < 0:
+        raise ApplicationError(ErrorKind.UNAVAILABLE, "Campaign limit configuration is invalid")
+    period_start = entitlement.current_period_start if status == "active" else None
+    if repository.count_campaigns(
+        db, organization.id, since=period_start,
+    ) >= limit:
+        raise ApplicationError(ErrorKind.LIMIT_EXCEEDED, "This trial campaign allowance is exhausted")
+
+
+def entitlement_for_business(db: Session, business_id: str):
+    return repository.entitlement_for_business(db, business_id)
+
+
+def effective_status(entitlement: CustomerEntitlement, *, now: datetime | None = None) -> str:
+    now = now or datetime.now(timezone.utc)
+    if entitlement.status == "trialing":
+        expiry = entitlement.trial_expires_at
+        if expiry is None:
+            return "expired"
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        return "trialing" if now < expiry else "expired"
+    if entitlement.status == "active" and entitlement.current_period_end is not None:
+        period_end = entitlement.current_period_end
+        if period_end.tzinfo is None:
+            period_end = period_end.replace(tzinfo=timezone.utc)
+        if now >= period_end:
+            return "expired"
+    if entitlement.status == "canceled" and entitlement.current_period_end is not None:
+        period_end = entitlement.current_period_end
+        if period_end.tzinfo is None:
+            period_end = period_end.replace(tzinfo=timezone.utc)
+        if now < period_end:
+            return "active"
+    return entitlement.status
+
+
+def assert_mutation_allowed(db: Session, business_id: str, permission: Permission) -> None:
+    entitlement = repository.entitlement_for_business(db, business_id)
+    if entitlement is None:
+        if permission in _AI_PERMISSIONS:
+            raise ApplicationError(
+                ErrorKind.LIMIT_EXCEEDED,
+                _MISSING_AI_ENTITLEMENT,
+                code=ErrorCode.AI_ENTITLEMENT_REQUIRED,
+            )
+        return
+    status = effective_status(entitlement)
+    if status in {"trialing", "active", "operator_granted"}:
+        return
+    if permission in {
+        Permission.READ, Permission.EDIT_BUSINESS, Permission.PUBLISH,
+        Permission.MANAGE_BILLING,
+    }:
+        return
+    raise ApplicationError(
+        ErrorKind.LIMIT_EXCEEDED,
+        "Your trial or subscription has ended. Review account options to continue.",
+        code=ErrorCode.AI_SUBSCRIPTION_REQUIRED,
+    )
+
+
+def assert_publishing_allowed(db: Session, business_id: str) -> None:
+    entitlement = repository.entitlement_for_business(db, business_id)
+    if entitlement is None or effective_status(entitlement) in {
+        "trialing", "active", "operator_granted",
+    }:
+        return
+    raise ApplicationError(
+        ErrorKind.LIMIT_EXCEEDED,
+        "Your trial or subscription has ended. Review account options to continue.",
+    )
+
+
+def assert_trial_image_generation_allowed(db: Session, business_id: str) -> None:
+    entitlement = entitlement_for_business(db, business_id)
+    if entitlement is not None and effective_status(entitlement) == "trialing":
+        raise ApplicationError(
+            ErrorKind.LIMIT_EXCEEDED,
+            "AI image generation and editing are not available during the free trial.",
+        )
+
+
+def assert_image_generation_disabled(db: Session, business_id: str) -> None:
+    assert_trial_image_generation_allowed(db, business_id)
+    raise ApplicationError(
+        ErrorKind.LIMIT_EXCEEDED,
+        "AI image generation and editing are temporarily unavailable.",
+    )
+
+
+def reserve_usage(
+    db: Session,
+    principal: AuthenticatedPrincipal,
+    *,
+    business_id: str,
+    metric: str,
+    idempotency_key: str | None,
+):
+    if metric not in _USAGE_LIMITS:
+        raise ValueError("Unsupported AI usage metric")
+    entitlement = repository.entitlement_for_business(db, business_id)
+    if entitlement is None:
+        raise ApplicationError(
+            ErrorKind.LIMIT_EXCEEDED,
+            _MISSING_AI_ENTITLEMENT,
+            code=ErrorCode.AI_ENTITLEMENT_REQUIRED,
+        )
+    status = effective_status(entitlement)
+    if status not in {"trialing", "active"}:
+        raise ApplicationError(
+            ErrorKind.LIMIT_EXCEEDED,
+            "Your subscription does not allow AI usage. Review billing options to continue.",
+            code=ErrorCode.AI_SUBSCRIPTION_REQUIRED,
+        )
+    organization = repository.organization_for_business(db, business_id, lock=True)
+    if organization is None:
+        raise ApplicationError(ErrorKind.FORBIDDEN, "Customer organization is unavailable")
+    if idempotency_key is None:
+        raise ApplicationError(ErrorKind.INVALID_INPUT, "A valid idempotency key is required")
+    key = idempotency_key.strip()
+    if not key or len(key) > 128:
+        raise ApplicationError(ErrorKind.INVALID_INPUT, "A valid idempotency key is required")
+    existing = repository.usage_reservation_by_key(db, organization.id, metric, key)
+    if existing is not None:
+        if existing.business_id != business_id or existing.user_id != principal.user_id:
+            raise ApplicationError(ErrorKind.CONFLICT, "This idempotency key was already used")
+        return existing, True
+    limits = entitlement.limits or {}
+    limit_name = _USAGE_LIMITS[metric]
+    legacy_default = (
+        _TRIAL_LIMIT_DEFAULTS[limit_name]
+        if status == "trialing"
+        else _MONTHLY_LIMIT_DEFAULTS[limit_name]
+    )
+    limit = limits.get(limit_name, legacy_default)
+    if type(limit) is not int or limit < 0:
+        raise ApplicationError(ErrorKind.UNAVAILABLE, "Trial usage configuration is invalid")
+    period_start = entitlement.current_period_start if status == "active" else None
+    if repository.count_usage(db, organization.id, metric, since=period_start) >= limit:
+        raise ApplicationError(
+            ErrorKind.LIMIT_EXCEEDED,
+            "This trial usage allowance is exhausted",
+            code=ErrorCode.AI_QUOTA_EXHAUSTED,
+        )
+    return repository.insert_usage_reservation(
+        db,
+        organization_id=organization.id,
+        business_id=business_id,
+        user_id=principal.user_id,
+        metric=metric,
+        idempotency_key=key,
+    ), False
+
+
+def finish_usage_batch(
+    db: Session,
+    reservation_ids: list[str],
+    *,
+    succeeded: bool,
+    result_id: str | None = None,
+):
+    status = "succeeded" if succeeded else "uncertain"
+    updated = False
+    for reservation_id in reservation_ids:
+        updated = repository.update_usage_reservation(
+            db, reservation_id, status=status, result_id=result_id,
+        ) or updated
+    if updated:
+        Transactions(db).commit()
+
+
+def finish_usage(db: Session, reservation_id: str, *, succeeded: bool, result_id: str | None = None):
+    finish_usage_batch(
+        db, [reservation_id], succeeded=succeeded, result_id=result_id,
+    )
+
+
+def release_usage_before_provider_call(db: Session, reservation_id: str) -> None:
+    """Release a reservation only when the provider was definitely not called."""
+    if repository.release_usage_reservation(db, reservation_id):
+        Transactions(db).commit()
+
+
+def release_usage_for_nonbillable_failure(
+    db: Session,
+    reservation_ids: list[str],
+) -> None:
+    """Release reservations when a provider definitively rejects a request."""
+    updated = False
+    for reservation_id in sorted(set(reservation_ids)):
+        updated = repository.release_usage_reservation(db, reservation_id) or updated
+    if updated:
+        Transactions(db).commit()
+
+
+def usage_for_business(
+    db: Session,
+    business_id: str,
+    *,
+    context: TenantAccess,
+):
+    if context.business_id != business_id:
+        raise ApplicationError(ErrorKind.FORBIDDEN, "Authorized business context is required")
+    entitlement = repository.entitlement_for_business(db, business_id)
+    if entitlement is None:
+        return None
+    limits = entitlement.limits or {}
+    organization_id = entitlement.organization_id
+    effective = effective_status(entitlement)
+    period_start = entitlement.current_period_start if effective == "active" else None
+    campaign_count = repository.count_campaigns(
+        db, organization_id, since=period_start,
+    )
+    leo_used = repository.count_usage(
+        db, organization_id, "leo_generation", since=period_start,
+    )
+    sofia_used = repository.count_usage(
+        db, organization_id, "sofia_request", since=period_start,
+    )
+    edian_used = repository.count_usage_scoped(
+        db, context, "edian_analysis", since=period_start,
+    )
+    now = datetime.now(timezone.utc)
+    expires_at = entitlement.trial_expires_at
+    if expires_at is not None and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    remaining_days = max(0, ceil((expires_at - now).total_seconds() / 86400)) if expires_at else 0
+    return {
+        "status": effective_status(entitlement),
+        "provider_status": entitlement.payment_provider_status,
+        "trial_started_at": entitlement.trial_started_at,
+        "trial_expires_at": entitlement.trial_expires_at,
+        "days_remaining": remaining_days,
+        "usage": {
+            "businesses": {
+                "used": repository.count_businesses(db, organization_id),
+                "limit": limits.get("businesses", 0),
+            },
+            "leo_generations": {"used": leo_used, "limit": limits.get("leo_generations", 0)},
+            "sofia_requests": {"used": sofia_used, "limit": limits.get("sofia_requests", 0)            },
+            "edian_analyses": {
+                "used": edian_used,
+                "limit": limits.get(
+                    "edian_analyses",
+                    _TRIAL_LIMIT_DEFAULTS["edian_analyses"]
+                    if effective == "trialing"
+                    else _MONTHLY_LIMIT_DEFAULTS["edian_analyses"],
+                ),
+            },
+            "campaigns": {"used": campaign_count, "limit": limits.get("campaigns", 0)},
+            "heygen_generations": {"used": 0, "limit": limits.get("heygen_generations", 0)},
+        },
+        "features": {
+            "leo_generation": effective in {"trialing", "active"} and leo_used < limits.get("leo_generations", 0),
+            "sofia_requests": effective in {"trialing", "active"} and sofia_used < limits.get("sofia_requests", 0),
+            "edian_analyses": (
+                effective in {"trialing", "active"}
+                and edian_used
+                < limits.get(
+                    "edian_analyses",
+                    _TRIAL_LIMIT_DEFAULTS["edian_analyses"]
+                    if effective == "trialing"
+                    else _MONTHLY_LIMIT_DEFAULTS["edian_analyses"],
+                )
+            ),
+            "heygen_generation": False,
+            "facebook_publishing": effective_status(entitlement) == "trialing",
+            "campaign_creation": (
+                effective in {"trialing", "active"}
+                and campaign_count < limits.get("campaigns", 0)
+            ),
+        },
+        "subscription_management": "unavailable",
+    }

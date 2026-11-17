@@ -1,8 +1,14 @@
 """Persistence statements extracted without changing predicates or lock ordering."""
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.models import Business, Conversation, ConversationMessage, Draft
+from app.features.businesses.repository import get_business_scoped
+from app.features.drafts.repository import add_draft_scoped, get_draft_scoped
+
+
+from app.features.access.principal import TenantAccess
+from app.persistence import tenant
 
 
 def get_business(db: Session, business_id: str) -> Business | None:
@@ -135,3 +141,80 @@ def get_conversation(
             Conversation.business_id == business.id,
         )
     )
+
+
+
+
+def get_conversation_scoped(db: Session, context: TenantAccess, conversation_id: str):
+    return tenant.get(db, context, Conversation, conversation_id)
+
+
+def list_conversations_scoped(db: Session, context: TenantAccess, *, limit=100, offset=0):
+    return db.scalars(tenant.page(tenant.selection(Conversation, context)
+        .order_by(Conversation.created_at.desc(), Conversation.id.desc()), limit=limit, offset=offset)).all()
+
+
+def list_messages_scoped(db: Session, context: TenantAccess, conversation_id: str, *, limit=100, offset=0):
+    return db.scalars(tenant.page(tenant.selection(ConversationMessage, context)
+        .where(ConversationMessage.conversation_id == conversation_id)
+        .order_by(ConversationMessage.created_at, ConversationMessage.id), limit=limit, offset=offset)).all()
+
+
+def list_recent_messages_scoped(
+    db: Session,
+    context: TenantAccess,
+    conversation_id: str,
+    *,
+    limit: int,
+):
+    rows = db.scalars(
+        tenant.selection(ConversationMessage, context)
+        .where(ConversationMessage.conversation_id == conversation_id)
+        .order_by(ConversationMessage.created_at.desc(), ConversationMessage.id.desc())
+        .limit(limit)
+    ).all()
+    return list(reversed(rows))
+
+
+def get_message_scoped(db: Session, context: TenantAccess, message_id: str):
+    return db.scalar(tenant.selection(ConversationMessage, context).where(
+        ConversationMessage.id == message_id,
+    ))
+
+
+def add_message_scoped(db: Session, context: TenantAccess, conversation_id: str, *, role: str, content: str):
+    if role not in {"user", "assistant"}:
+        raise ValueError("Unsupported conversation role")
+    return tenant.insert_record(db, context, ConversationMessage(
+        conversation_id=conversation_id, role=role, content=content,
+    ))
+
+
+def add_conversation_scoped(db: Session, context: TenantAccess, record: Conversation):
+    if not isinstance(record, Conversation):
+        raise TypeError("Expected Conversation")
+    return tenant.insert_record(db, context, record)
+
+
+
+def recent_drafts_scoped(db: Session, context: TenantAccess):
+    # Preserve historical prompt selection, including legacy soft-deleted history.
+    return db.scalars(tenant.selection(Draft, context)
+        .order_by(Draft.created_at.desc(), Draft.id.desc()).limit(10)).all()
+
+
+def first_user_message_scoped(db: Session, context: TenantAccess, conversation_id: str):
+    return db.scalar(tenant.selection(ConversationMessage, context).where(
+        ConversationMessage.conversation_id == conversation_id, ConversationMessage.role == "user",
+    ).order_by(ConversationMessage.created_at, ConversationMessage.id).limit(1))
+
+
+def lock_conversation_scoped(db: Session, context: TenantAccess, conversation_id: str):
+    return tenant.get(db, context, Conversation, conversation_id, lock=True)
+
+
+def delete_conversation_scoped(db: Session, context: TenantAccess, conversation_id: str):
+    db.execute(delete(ConversationMessage).where(
+        tenant.predicate(ConversationMessage, context), ConversationMessage.conversation_id == conversation_id))
+    return db.execute(delete(Conversation).where(tenant.predicate(Conversation, context),
+        Conversation.id == conversation_id).returning(Conversation.id)).scalar_one_or_none() is not None

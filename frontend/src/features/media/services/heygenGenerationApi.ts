@@ -4,6 +4,7 @@ export type GenerationRequest = {
   avatar_id: string;
   voice_id: string;
   script: string;
+  confirmed_paid_generation?: boolean;
 };
 export type Generation = {
   attempt_id: string;
@@ -47,15 +48,22 @@ async function request(
     )
       return null;
     if (response.status === 503)
-      throw new Error("HeyGen no está configurado. Contacta al administrador.");
+      throw new Error(
+        "AI Video Studio no está configurado. Contacta al administrador.",
+      );
     if (response.status === 401 || response.status === 403)
       throw new Error("No tienes autorización para realizar esta acción.");
     if (response.status === 409)
       throw new Error(
         "Este borrador no permite generar otro video. Recupera su estado antes de continuar.",
       );
+    if (response.status === 429)
+      throw new Error(
+        body.detail ||
+          "This business has reached its AI video generation allowance.",
+      );
     throw new Error(
-      "No se pudo consultar HeyGen. Comprueba la conexión y recupera el estado; no vuelvas a generar.",
+      "No se pudo consultar el servicio de video. Comprueba la conexión y recupera el estado; no vuelvas a generar.",
     );
   }
   const result = (await response.json()) as Generation;

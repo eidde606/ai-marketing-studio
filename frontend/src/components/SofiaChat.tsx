@@ -4,18 +4,36 @@ import {
   getLatestSofiaConversation,
   getSofiaConversation,
   getSofiaConversations,
+  SofiaApiError,
   sendMessageToSofia,
   type SofiaConversationSummary,
   type SofiaGeneratedDraft,
   type SofiaMessage,
 } from "../services/sofiaApi";
+import {
+  getBillingOverview,
+  type BillingOverview,
+} from "../services/billingApi";
+import { useLocalization } from "../app/useLocalization";
 
 type SofiaChatProps = {
   businessId: string;
+  initialMessage?: string | null;
+  draftMessage?: string;
+  onDraftChange?: (message: string) => void;
+  onInitialMessageConsumed?: () => void;
   onDraftCreated: (draft: SofiaGeneratedDraft) => void;
+  onViewPlans?: () => void;
+  onContinueWithValeria?: () => void;
+  generationError?: string | null;
 };
 
-function formatConversationDate(value: string): string {
+type QuotaNotice = {
+  overview: BillingOverview | null;
+  loading: boolean;
+};
+
+function formatConversationDate(value: string, locale: string): string {
   const normalized = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value)
     ? value
     : `${value}Z`;
@@ -23,30 +41,47 @@ function formatConversationDate(value: string): string {
   const date = new Date(normalized);
 
   if (Number.isNaN(date.getTime())) {
-    return "Fecha no disponible";
+    return "";
   }
 
-  return new Intl.DateTimeFormat("es-US", {
+  return new Intl.DateTimeFormat(locale === "es" ? "es-US" : "en-US", {
     timeZone: "America/New_York",
     day: "numeric",
     month: "short",
     year: "numeric",
     hour: "numeric",
     minute: "2-digit",
-    hour12: true,
+    hour12: locale !== "es",
   }).format(date);
 }
 
-function conversationTitle(conversation: SofiaConversationSummary): string {
-  return conversation.title?.trim() || "Nueva campaña";
+function conversationTitle(
+  conversation: SofiaConversationSummary,
+  fallback: string,
+): string {
+  return conversation.title?.trim() || fallback;
 }
 
 export default function SofiaChat({
   businessId,
+  initialMessage,
+  draftMessage,
+  onDraftChange,
+  onInitialMessageConsumed,
   onDraftCreated,
+  onViewPlans,
+  onContinueWithValeria,
+  generationError,
 }: SofiaChatProps) {
+  const { locale, t } = useLocalization();
+  const tRef = useRef(t);
+  useEffect(() => {
+    tRef.current = t;
+  }, [t]);
   const [messages, setMessages] = useState<SofiaMessage[]>([]);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState(
+    initialMessage ?? draftMessage ?? "",
+  );
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<
     SofiaConversationSummary[]
@@ -59,13 +94,14 @@ export default function SofiaChat({
   const [showHistory, setShowHistory] = useState(false);
   const [historyRetry, setHistoryRetry] = useState(0);
   const [errorAction, setErrorAction] = useState<
-    "history" | "send" | "conversation" | "draft" | null
+    "history" | "send" | "conversation" | "draft" | "billing" | null
   >(null);
   const [retryConversationId, setRetryConversationId] = useState<string | null>(
     null,
   );
 
   const [error, setError] = useState<string | null>(null);
+  const [quotaNotice, setQuotaNotice] = useState<QuotaNotice | null>(null);
   const [generatedDraftTitle, setGeneratedDraftTitle] = useState<string | null>(
     null,
   );
@@ -80,7 +116,6 @@ export default function SofiaChat({
       setError(null);
       setErrorAction(null);
       setMessages([]);
-      setMessage("");
       setConversationId(null);
       setConversations([]);
       setGeneratedDraftTitle(null);
@@ -106,7 +141,7 @@ export default function SofiaChat({
         setError(
           err instanceof Error
             ? err.message
-            : "No se pudo cargar la conversación.",
+            : tRef.current("sofia.conversationLoadError"),
         );
         setErrorAction("history");
       } finally {
@@ -124,6 +159,12 @@ export default function SofiaChat({
   }, [businessId, historyRetry]);
 
   useEffect(() => {
+    if (!initialMessage) return;
+    onDraftChange?.(initialMessage);
+    onInitialMessageConsumed?.();
+  }, [initialMessage, onDraftChange, onInitialMessageConsumed]);
+
+  useEffect(() => {
     messagesEndRef.current?.scrollIntoView?.({
       behavior: "smooth",
       block: "nearest",
@@ -138,7 +179,7 @@ export default function SofiaChat({
       setError(
         err instanceof Error
           ? err.message
-          : "No se pudo actualizar el historial.",
+          : tRef.current("sofia.historyLoadError"),
       );
       setErrorAction("history");
     }
@@ -152,6 +193,7 @@ export default function SofiaChat({
     setErrorAction(null);
     setRetryConversationId(null);
     setGeneratedDraftTitle(null);
+    setQuotaNotice(null);
 
     try {
       const conversation = await getSofiaConversation(businessId, id);
@@ -159,12 +201,13 @@ export default function SofiaChat({
       setConversationId(conversation.conversation_id);
       setMessages(conversation.messages);
       setMessage("");
+      onDraftChange?.("");
       setShowHistory(false);
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
-          : "No se pudo cargar la conversación.",
+          : tRef.current("sofia.conversationLoadError"),
       );
       setErrorAction("conversation");
       setRetryConversationId(id);
@@ -179,8 +222,10 @@ export default function SofiaChat({
     setConversationId(null);
     setMessages([]);
     setMessage("");
+    onDraftChange?.("");
     setError(null);
     setErrorAction(null);
+    setQuotaNotice(null);
     setRetryConversationId(null);
     setGeneratedDraftTitle(null);
     setShowHistory(false);
@@ -196,6 +241,7 @@ export default function SofiaChat({
     setErrorAction(null);
     setGeneratedDraftTitle(null);
     setMessage("");
+    onDraftChange?.("");
 
     setMessages((previous) => [...previous, { role: "user", content: text }]);
 
@@ -216,12 +262,47 @@ export default function SofiaChat({
       void refreshConversations();
     } catch (err) {
       setMessage(text);
+      onDraftChange?.(text);
       setMessages((previous) => previous.slice(0, -1));
 
-      setError(
-        err instanceof Error ? err.message : "No se pudo contactar a Sofía.",
-      );
-      setErrorAction("send");
+      if (err instanceof SofiaApiError && err.code === "ai_quota_exhausted") {
+        setError(null);
+        setErrorAction(null);
+        setQuotaNotice({ overview: null, loading: true });
+        void getBillingOverview(businessId)
+          .then((overview) => {
+            setQuotaNotice({ overview, loading: false });
+          })
+          .catch(() => {
+            setQuotaNotice({ overview: null, loading: false });
+          });
+      } else {
+        setQuotaNotice(null);
+        const code = err instanceof SofiaApiError ? err.code : null;
+        if (
+          code === "ai_entitlement_required" ||
+          code === "ai_subscription_required"
+        ) {
+          setError(tRef.current("sofia.accessRequired"));
+          setErrorAction("billing");
+        } else if (code === "provider_rate_limited") {
+          setError(tRef.current("sofia.providerThrottled"));
+          setErrorAction("send");
+        } else if (err instanceof SofiaApiError && err.status === 429) {
+          setError(tRef.current("sofia.requestLimited"));
+          setErrorAction(null);
+        } else if (
+          code === "upstream_failure" ||
+          !(err instanceof SofiaApiError) ||
+          err.status >= 500
+        ) {
+          setError(tRef.current("sofia.providerUnavailable"));
+          setErrorAction("send");
+        } else {
+          setError(tRef.current("sofia.contactError"));
+          setErrorAction(null);
+        }
+      }
     } finally {
       setLoading(false);
     }
@@ -233,6 +314,8 @@ export default function SofiaChat({
     setGeneratingDraft(true);
     setGeneratedDraftTitle(null);
     setError(null);
+    setErrorAction(null);
+    setQuotaNotice(null);
 
     try {
       const draft = await generateDraftWithLeo(businessId, conversationId);
@@ -240,20 +323,99 @@ export default function SofiaChat({
       setGeneratedDraftTitle(draft.title);
       onDraftCreated(draft);
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "No se pudo generar el borrador.",
-      );
-      setErrorAction("draft");
+      if (err instanceof SofiaApiError) {
+        if (import.meta.env.DEV) {
+          console.warn("[Valeria] draft generation failed", {
+            status: err.status,
+            code: err.code,
+            detail: err.detail,
+          });
+        }
+
+        if (
+          err.code === "ai_quota_exhausted" ||
+          err.detail === "ai_quota_exhausted"
+        ) {
+          setError(tRef.current("sofia.draftQuotaExceeded"));
+          setErrorAction("billing");
+        } else if (
+          err.code === "ai_entitlement_required" ||
+          err.code === "ai_subscription_required" ||
+          err.detail === "ai_entitlement_required" ||
+          err.detail === "ai_subscription_required"
+        ) {
+          setError(tRef.current("sofia.accessRequired"));
+          setErrorAction("billing");
+        } else if (
+          err.detail === "conversation_instructions_missing"
+        ) {
+          setError(tRef.current("sofia.draftConversationMissing"));
+          setErrorAction(null);
+        } else if (err.detail === "context_too_large") {
+          setError(tRef.current("sofia.draftContextTooLarge"));
+          setErrorAction(null);
+        } else if (err.detail === "invalid_idempotency_key") {
+          setError(tRef.current("sofia.draftRequestInvalid"));
+          setErrorAction("draft");
+        } else if (err.code === "provider_rate_limited") {
+          setError(tRef.current("sofia.draftProviderThrottled"));
+          setErrorAction("draft");
+        } else if (err.code === "upstream_failure" || err.status >= 500) {
+          setError(tRef.current("sofia.providerUnavailable"));
+          setErrorAction("draft");
+        } else {
+          setError(tRef.current("sofia.draftError"));
+          setErrorAction(null);
+        }
+      } else {
+        setError(tRef.current("sofia.draftError"));
+        setErrorAction(null);
+      }
     } finally {
       setGeneratingDraft(false);
     }
   }
 
   const chatDisabled =
-    loading ||
-    loadingHistory ||
-    switchingConversation ||
-    generatingDraft;
+    loading || loadingHistory || switchingConversation || generatingDraft;
+  const quotaUsage =
+    quotaNotice?.overview?.usage?.sofia_requests;
+  const valeriaUsage =
+    quotaNotice?.overview?.usage?.leo_generations;
+  const valeriaAvailable = Boolean(
+    onContinueWithValeria &&
+      quotaNotice?.overview &&
+      ["trialing", "active"].includes(quotaNotice.overview.status) &&
+      valeriaUsage &&
+      valeriaUsage.limit > valeriaUsage.used,
+  );
+
+  function quotaPeriodDescription(): string {
+    const overview = quotaNotice?.overview;
+    if (!overview) return "";
+    const periodKey: "sofia.trialPeriod" | "sofia.billingPeriod" =
+      overview.status === "trialing"
+        ? "sofia.trialPeriod"
+        : "sofia.billingPeriod";
+    const endDate =
+      overview.status === "trialing"
+        ? overview.trial_expires_at
+        : overview.current_period_end;
+    const formattedDate = endDate
+      ? new Intl.DateTimeFormat(locale === "es" ? "es-US" : "en-US", {
+          dateStyle: "medium",
+        }).format(new Date(endDate))
+      : "";
+    if (formattedDate) {
+      return t(
+        overview.status === "trialing"
+          ? "sofia.trialPeriodEnding"
+          : "sofia.billingPeriodEnding",
+        { date: formattedDate },
+      );
+    }
+    return t(periodKey);
+  }
 
   function retryFailedAction() {
     const action = errorAction;
@@ -275,36 +437,39 @@ export default function SofiaChat({
   );
 
   const currentTitle = currentConversation
-    ? conversationTitle(currentConversation)
+    ? conversationTitle(currentConversation, t("sofia.newCampaign"))
     : conversationId
-      ? "Conversación actual"
-      : "Nueva conversación";
+      ? t("sofia.currentTitle")
+      : t("sofia.newConversationTitle");
 
   return (
-    <section className="sofia-chat">
+    <section className="sofia-chat" data-guide-target="leo-generation">
       <header>
-        <h2>Hablar con Sofía</h2>
-        <p>Tu estratega de marketing con inteligencia artificial.</p>
+        <h2>{t("sofia.title")}</h2>
+        <p>{t("sofia.description")}</p>
       </header>
 
       <div className="sofia-conversation-toolbar">
         <div className="sofia-conversation-heading">
           <div className="sofia-conversation-heading-text">
             <span className="sofia-conversation-label">
-              CONVERSACIÓN ACTUAL
+              {t("sofia.currentConversation")}
             </span>
 
             <strong>{currentTitle}</strong>
 
             {currentConversation && (
               <small>
-                {formatConversationDate(currentConversation.created_at)}
+                {formatConversationDate(
+                  currentConversation.created_at,
+                  locale,
+                ) || t("sofia.dateUnavailable")}
               </small>
             )}
           </div>
 
           <span className="sofia-conversation-status">
-            {conversationId ? "Activa" : "Sin iniciar"}
+            {conversationId ? t("sofia.active") : t("sofia.notStarted")}
           </span>
         </div>
 
@@ -316,7 +481,7 @@ export default function SofiaChat({
             disabled={chatDisabled}
           >
             <span aria-hidden="true">＋</span>
-            Nueva conversación
+            {t("sofia.newConversation")}
           </button>
 
           <button
@@ -332,20 +497,20 @@ export default function SofiaChat({
             aria-expanded={showHistory}
           >
             <span aria-hidden="true">◷</span>
-            Historial
+            {t("sofia.history")}
             <span aria-hidden="true">{showHistory ? "⌃" : "⌄"}</span>
           </button>
         </div>
 
         {showHistory && (
-          <div className="sofia-history-panel" aria-label="Historial de conversaciones">
+          <div className="sofia-history-panel" aria-label={t("sofia.history")}>
             <div className="sofia-history-heading">
-              <strong>Conversaciones anteriores</strong>
+              <strong>{t("sofia.previousConversations")}</strong>
               <span>{conversations.length}</span>
             </div>
 
             {conversations.length === 0 ? (
-              <p>Todavía no hay conversaciones guardadas.</p>
+              <p>{t("sofia.noConversations")}</p>
             ) : (
               <div className="sofia-history-list">
                 {conversations.map((conversation) => (
@@ -365,14 +530,24 @@ export default function SofiaChat({
                     <span className="sofia-history-item-icon">◉</span>
 
                     <span className="sofia-history-item-details">
-                      <strong>{conversationTitle(conversation)}</strong>
+                      <strong>
+                        {conversationTitle(
+                          conversation,
+                          t("sofia.newCampaign"),
+                        )}
+                      </strong>
                       <small>
-                        {formatConversationDate(conversation.created_at)}
+                        {formatConversationDate(
+                          conversation.created_at,
+                          locale,
+                        ) || t("sofia.dateUnavailable")}
                       </small>
                     </span>
 
                     {conversation.id === conversationId && (
-                      <span className="sofia-history-current">Actual</span>
+                      <span className="sofia-history-current">
+                        {t("sofia.current")}
+                      </span>
                     )}
                   </button>
                 ))}
@@ -385,63 +560,130 @@ export default function SofiaChat({
       <div
         className="sofia-messages"
         role="log"
-        aria-label="Mensajes de la conversación con Sofía"
+        aria-label={t("sofia.messages")}
         aria-live="polite"
         aria-relevant="additions text"
       >
-        {loadingHistory && <p role="status">Cargando conversación…</p>}
+        {loadingHistory && (
+          <p role="status">{t("sofia.loadingConversation")}</p>
+        )}
 
-        {switchingConversation && <p role="status">Cargando conversación…</p>}
+        {switchingConversation && (
+          <p role="status">{t("sofia.loadingConversation")}</p>
+        )}
 
         {!loadingHistory &&
           !switchingConversation &&
           messages.length === 0 &&
-          !error && (
-            <p>
-              ¡Hola! Soy Sofía. Cuéntame qué producto quieres promocionar o qué
-              idea tienes para tu negocio.
-            </p>
-          )}
+          !error && <p>{t("sofia.greeting")}</p>}
 
         {messages.map((item, index) => (
           <div
             key={index}
             className={`sofia-message sofia-message--${item.role}`}
           >
-            <strong>{item.role === "user" ? "Tú" : "Sofía"}</strong>
+            <strong>
+              {item.role === "user" ? t("sofia.you") : t("sofia.agentName")}
+            </strong>
             <p>{item.content}</p>
           </div>
         ))}
 
-        {loading && <p role="status">Sofía está preparando una respuesta…</p>}
+        {loading && <p role="status">{t("sofia.thinking")}</p>}
 
         <div ref={messagesEndRef} />
       </div>
 
+      {quotaNotice && (
+        <section
+          className="sofia-quota-notice"
+          role="status"
+          aria-labelledby="sofia-quota-title"
+        >
+          <div className="sofia-quota-notice__content">
+            <h3 id="sofia-quota-title">{t("sofia.quotaTitle")}</h3>
+            {quotaUsage ? (
+              <p>
+                {t("sofia.quotaUsage", {
+                  used: quotaUsage.used,
+                  limit: quotaUsage.limit,
+                  period: quotaPeriodDescription(),
+                })}
+              </p>
+            ) : (
+              <p>
+                {quotaNotice.loading
+                  ? t("sofia.quotaChecking")
+                  : t("sofia.quotaUsageUnavailable")}
+              </p>
+            )}
+            {valeriaAvailable && valeriaUsage && (
+              <p className="sofia-quota-notice__secondary">
+                {t("sofia.valeriaAvailable", {
+                  remaining: valeriaUsage.limit - valeriaUsage.used,
+                })}
+              </p>
+            )}
+          </div>
+          <div className="sofia-quota-notice__actions">
+            {onViewPlans && (
+              <button type="button" onClick={onViewPlans}>
+                {t("sofia.viewPlans")}
+              </button>
+            )}
+            {valeriaAvailable && (
+              <button
+                type="button"
+                className="sofia-quota-notice__secondary-action"
+                onClick={onContinueWithValeria}
+              >
+                {t("sofia.continueWithValeria")}
+              </button>
+            )}
+          </div>
+        </section>
+      )}
+
+      {generationError && (
+        <p className="workspace-message--error" role="alert">
+          {generationError}
+        </p>
+      )}
+
       {error && (
         <p role="alert">
           {error}
-          <button type="button" onClick={retryFailedAction}>
-            {errorAction === "send"
-              ? "Reintentar mensaje"
-              : errorAction === "draft"
-                ? "Reintentar borrador"
-                : "Reintentar carga"}
-          </button>
+          {errorAction && errorAction !== "billing" && (
+            <button type="button" onClick={retryFailedAction}>
+              {errorAction === "send"
+                ? t("sofia.retryMessage")
+                : errorAction === "draft"
+                  ? t("sofia.retryDraft")
+                  : t("sofia.retryLoad")}
+            </button>
+          )}
+          {errorAction === "billing" && onViewPlans && (
+            <button type="button" onClick={onViewPlans}>
+              {t("sofia.viewPlans")}
+            </button>
+          )}
         </p>
       )}
 
       <form
+        data-guide-target="sofia-guided"
         onSubmit={(event) => {
           event.preventDefault();
           void handleSend();
         }}
       >
         <textarea
-          aria-label="Mensaje para Sofía"
+          aria-label={t("sofia.messageLabel")}
           value={message}
           onChange={(event) => {
-            setMessage(event.target.value);
+            const value = event.target.value;
+            setMessage(value);
+            onDraftChange?.(value);
             if (errorAction === "send") {
               setError(null);
               setErrorAction(null);
@@ -462,16 +704,19 @@ export default function SofiaChat({
           }}
           placeholder={
             loadingHistory
-              ? "Cargando conversación..."
-              : "Escribe tu mensaje para Sofía..."
+              ? t("sofia.loadingPlaceholder")
+              : t("sofia.messagePlaceholder")
           }
           disabled={chatDisabled}
           maxLength={4000}
           rows={2}
         />
 
-        <button type="submit" disabled={chatDisabled || !message.trim()}>
-          {loading ? "Enviando..." : "Enviar"}
+        <button
+          type="submit"
+          disabled={chatDisabled || Boolean(quotaNotice) || !message.trim()}
+        >
+          {loading ? t("sofia.sending") : t("sofia.send")}
         </button>
       </form>
 
@@ -482,15 +727,12 @@ export default function SofiaChat({
           onClick={() => void handleGenerateDraft()}
           disabled={!conversationId || chatDisabled}
         >
-          {generatingDraft
-            ? "Sofía y Leo están trabajando..."
-            : "Crear borrador con Leo"}
+          {generatingDraft ? t("sofia.generating") : t("sofia.createDraft")}
         </button>
 
         {generatedDraftTitle && (
           <p role="status">
-            Borrador creado: <strong>{generatedDraftTitle}</strong>. Puedes
-            revisarlo en Aprobaciones.
+            {t("sofia.draftCreated", { title: generatedDraftTitle })}
           </p>
         )}
       </div>

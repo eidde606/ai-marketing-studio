@@ -1,22 +1,44 @@
 import os
 from uuid import UUID, uuid4
 
-from dotenv import load_dotenv
 from supabase import create_client
 
-load_dotenv(".env")
+from app.environment import load_application_environment
+from app.features.access.principal import TenantAccess
+
+load_application_environment(".env")
 
 MAX_IMAGE_SIZE = 20 * 1024 * 1024  # 20 MB
 MAX_VIDEO_SIZE = 100 * 1024 * 1024  # 100 MB
 
 
+class StorageUnavailableError(RuntimeError):
+    """Storage configuration or provider is unavailable."""
+
+
+def _storage_setting(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise StorageUnavailableError("Supabase Storage is unavailable")
+    return value
+
+
+def _storage_bucket() -> str:
+    return _storage_setting("SUPABASE_STORAGE_BUCKET")
+
+
 def get_storage_client():
     """Create a Supabase client with server-side credentials."""
 
-    return create_client(
-        os.environ["SUPABASE_URL"],
-        os.environ["SUPABASE_SECRET_KEY"],
-    )
+    try:
+        return create_client(
+            _storage_setting("SUPABASE_URL"),
+            _storage_setting("SUPABASE_SECRET_KEY"),
+        )
+    except StorageUnavailableError:
+        raise
+    except Exception:
+        raise StorageUnavailableError("Supabase Storage is unavailable") from None
 
 
 def _validate_image_path(
@@ -102,16 +124,18 @@ def upload_marketing_image(
     )
 
     client = get_storage_client()
-    bucket = os.environ["SUPABASE_STORAGE_BUCKET"]
-
-    client.storage.from_(bucket).upload(
-        path=storage_path,
-        file=image_bytes,
-        file_options={
-            "content-type": content_type,
-            "upsert": "false",
-        },
-    )
+    bucket = _storage_bucket()
+    try:
+        client.storage.from_(bucket).upload(
+            path=storage_path,
+            file=image_bytes,
+            file_options={
+                "content-type": content_type,
+                "upsert": "false",
+            },
+        )
+    except Exception:
+        raise StorageUnavailableError("Supabase Storage is unavailable") from None
 
     return storage_path
 
@@ -135,11 +159,11 @@ def download_marketing_image(
     )
 
     client = get_storage_client()
-    bucket = os.environ["SUPABASE_STORAGE_BUCKET"]
-
-    image_bytes = client.storage.from_(bucket).download(
-        validated_path
-    )
+    bucket = _storage_bucket()
+    try:
+        image_bytes = client.storage.from_(bucket).download(validated_path)
+    except Exception:
+        raise StorageUnavailableError("Supabase Storage is unavailable") from None
 
     if not isinstance(image_bytes, bytes):
         raise ValueError(
@@ -157,14 +181,44 @@ def download_marketing_image(
     return image_bytes
 
 
+def delete_marketing_image(
+        storage_path: str,
+        business_id: str,
+) -> None:
+    """Delete one newly uploaded image after its database attach was rejected."""
+    validated_path = _validate_image_path(
+        storage_path=storage_path,
+        business_id=business_id,
+    )
+    client = get_storage_client()
+    bucket = _storage_bucket()
+    try:
+        client.storage.from_(bucket).remove([validated_path])
+    except Exception:
+        raise StorageUnavailableError("Supabase Storage is unavailable") from None
+
+
 def get_marketing_image_url(
         storage_path: str,
         expires_in: int = 3600,
+        *,
+        context: TenantAccess,
 ) -> str:
-    """Create a temporary URL for viewing a private image."""
+    """Create a temporary URL only for a validated object in the tenant."""
 
-    if not storage_path or not storage_path.strip():
-        raise ValueError("Image storage path cannot be empty.")
+    if not isinstance(context, TenantAccess):
+        raise TypeError("An authorized tenant context is required.")
+    if not isinstance(storage_path, str) or not storage_path:
+        raise ValueError("Storage path cannot be empty.")
+    prefix = f"businesses/{context.business_id}/"
+    suffix = storage_path[len(prefix):] if storage_path.startswith(prefix) else ""
+    if (
+        not suffix
+        or "\\" in suffix
+        or any(part in {"", ".", ".."} for part in suffix.split("/"))
+        or not suffix.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".mp4"))
+    ):
+        raise ValueError("Storage path must belong to the authorized business.")
 
     if expires_in < 1 or expires_in > 3600:
         raise ValueError(
@@ -172,14 +226,15 @@ def get_marketing_image_url(
         )
 
     client = get_storage_client()
-    bucket = os.environ["SUPABASE_STORAGE_BUCKET"]
-
-    response = client.storage.from_(bucket).create_signed_url(
-        path=storage_path,
-        expires_in=expires_in,
-    )
-
-    return response["signedURL"]
+    bucket = _storage_bucket()
+    try:
+        response = client.storage.from_(bucket).create_signed_url(
+            path=storage_path,
+            expires_in=expires_in,
+        )
+        return response["signedURL"]
+    except Exception:
+        raise StorageUnavailableError("Supabase Storage is unavailable") from None
 
 
 def upload_marketing_video(
@@ -215,20 +270,23 @@ def upload_marketing_video(
             not suffix
             or any(part in {"", ".", ".."} for part in suffix.split("/"))
             or "\\" in suffix
+            or "%" in suffix
             or not suffix.lower().endswith(".mp4")
         ):
             raise ValueError("Invalid video storage path.")
 
     client = get_storage_client()
-    bucket = os.environ["SUPABASE_STORAGE_BUCKET"]
-
-    client.storage.from_(bucket).upload(
-        path=storage_path,
-        file=video_bytes,
-        file_options={
-            "content-type": "video/mp4",
-            "upsert": "true" if upsert else "false",
-        },
-    )
+    bucket = _storage_bucket()
+    try:
+        client.storage.from_(bucket).upload(
+            path=storage_path,
+            file=video_bytes,
+            file_options={
+                "content-type": "video/mp4",
+                "upsert": "true" if upsert else "false",
+            },
+        )
+    except Exception:
+        raise StorageUnavailableError("Supabase Storage is unavailable") from None
 
     return storage_path

@@ -2,9 +2,10 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.auth import verify_token
+from app.auth import get_authenticated_principal, verify_token
 from app.database import get_db
 from app.errors import ApplicationError, ErrorKind
+from app.features.access.principal import AuthenticatedPrincipal
 from app.http_errors import http_error
 from . import publishing_service
 from .schemas import FacebookRecoveryRequest
@@ -16,9 +17,12 @@ router = APIRouter(dependencies=[Depends(verify_token)])
 async def publish_draft_to_facebook(
     draft_id: str,
     db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
 ):
     try:
-        return await publishing_service.publish_draft(draft_id, db=db)
+        return await publishing_service.publish_draft(
+            draft_id, db=db, principal=principal,
+        )
     except ApplicationError as exc:
         raise http_error(exc) from exc
 
@@ -27,9 +31,12 @@ async def publish_draft_to_facebook(
 async def verify_facebook_video(
     draft_id: str,
     db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
 ):
     try:
-        return await publishing_service.verify_video(draft_id, db=db)
+        return await publishing_service.verify_video(
+            draft_id, db=db, principal=principal,
+        )
     except ApplicationError as exc:
         raise http_error(exc) from exc
 
@@ -39,6 +46,7 @@ def reset_facebook_publishing(
     draft_id: str,
     request: FacebookRecoveryRequest,
     db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
 ):
     if not request.confirmed_not_published:
         raise http_error(
@@ -48,6 +56,8 @@ def reset_facebook_publishing(
             )
         )
     try:
-        return publishing_service.reset_publication(draft_id, db=db)
+        return publishing_service.reset_publication(
+            draft_id, db=db, principal=principal,
+        )
     except ApplicationError as exc:
         raise http_error(exc) from exc

@@ -163,14 +163,16 @@ afterEach(() => {
 });
 async function selectAssets() {
   await waitFor(() =>
-    expect(screen.getByLabelText("Guion del video")).not.toHaveProperty(
+    expect(screen.getByLabelText("Video script")).not.toHaveProperty(
       "disabled",
       true,
     ),
   );
   // Wait for the restore request to finish (fieldset controls inherit disabled).
-  await screen.findByText("Revisa el guion y selecciona un avatar y una voz.");
-  fireEvent.click(screen.getByRole("button", { name: /Explorar avatares/ }));
+  await screen.findByText("Review the script and select an avatar and voice.");
+  fireEvent.click(
+    screen.getByRole("button", { name: /Explore avatars and voices/ }),
+  );
   await screen.findByRole("option", { name: /Ana/ });
   await screen.findByRole("option", { name: /Voz española/ });
   fireEvent.change(screen.getByLabelText("Avatar"), {
@@ -178,7 +180,7 @@ async function selectAssets() {
   });
   await waitFor(() =>
     expect(
-      screen.getByRole("button", { name: "Generar video con HeyGen" }),
+      screen.getByRole("button", { name: "Generate AI video" }),
     ).toHaveProperty("disabled", false),
   );
 }
@@ -191,53 +193,57 @@ it("shows a clean no-attempt state without reconciliation and allows asset selec
   vi.mocked(assets.getHeyGenVoiceAssets).mockReturnValue(voicePage.promise);
 
   render(<Workspace />);
-  await screen.findByText("Revisa el guion y selecciona un avatar y una voz.");
+  await screen.findByText("Review the script and select an avatar and voice.");
   expect(api.getGeneration).toHaveBeenCalledTimes(1);
   expect(api.reconcileGeneration).not.toHaveBeenCalled();
   expect(
-    screen.queryByRole("button", { name: "Recuperar estado del video" }),
+    screen.queryByRole("button", { name: "Recover video status" }),
   ).toBeNull();
 
-  const script = screen.getByLabelText("Guion del video");
+  const script = screen.getByLabelText("Video script");
   expect(script).toHaveProperty("rows", 8);
   expect(script.getAttribute("aria-describedby")).toBeTruthy();
   fireEvent.click(
     screen.getByRole("button", {
-      name: "Explorar avatares y voces de HeyGen",
+      name: "Explore avatars and voices",
     }),
   );
-  expect(screen.getByText("Cargando avatares...")).toBeTruthy();
-  expect(screen.getByText("Cargando voces...")).toBeTruthy();
+  expect(screen.getByText("Loading avatars…")).toBeTruthy();
+  expect(screen.getByText("Loading voices…")).toBeTruthy();
   expect(screen.getByLabelText("Avatar")).toHaveProperty("disabled", true);
-  expect(screen.getByLabelText("Voz")).toHaveProperty("disabled", true);
+  expect(screen.getByLabelText("Voice")).toHaveProperty("disabled", true);
 
   await act(async () => {
     avatarPage.resolve({
-      data: [{
-        id: "look",
-        name: "Ana",
-        avatar_type: "photo_avatar",
-        default_voice_id: "voice",
-        supported_api_engines: ["avatar_iv"],
-        status: "completed",
-        group_id: null,
-        gender: null,
-        tags: [],
-        preview_image_url: null,
-        preview_video_url: null,
-      }],
+      data: [
+        {
+          id: "look",
+          name: "Ana",
+          avatar_type: "photo_avatar",
+          default_voice_id: "voice",
+          supported_api_engines: ["avatar_iv"],
+          status: "completed",
+          group_id: null,
+          gender: null,
+          tags: [],
+          preview_image_url: null,
+          preview_video_url: null,
+        },
+      ],
       next_token: null,
       has_more: false,
     });
     voicePage.resolve({
-      data: [{
-        voice_id: "voice",
-        name: "Voz española",
-        language: "es",
-        status: "ACTIVE",
-        mode: null,
-        preview_audio_url: null,
-      }],
+      data: [
+        {
+          voice_id: "voice",
+          name: "Voz española",
+          language: "es",
+          status: "ACTIVE",
+          mode: null,
+          preview_audio_url: null,
+        },
+      ],
       next_token: null,
       has_more: false,
     });
@@ -247,13 +253,13 @@ it("shows a clean no-attempt state without reconciliation and allows asset selec
     target: { value: "look" },
   });
   expect(screen.getByLabelText("Avatar")).toHaveProperty("value", "look");
-  expect(screen.getByLabelText("Voz")).toHaveProperty("value", "voice");
-  expect(screen.getByLabelText("Guion del video")).toHaveProperty(
+  expect(screen.getByLabelText("Voice")).toHaveProperty("value", "voice");
+  expect(screen.getByLabelText("Video script")).toHaveProperty(
     "value",
     "Guion original",
   );
   expect(
-    screen.getByRole("button", { name: "Generar video con HeyGen" }),
+    screen.getByRole("button", { name: "Generate AI video" }),
   ).toHaveProperty("disabled", false);
   vi.useFakeTimers();
   await act(async () => {
@@ -267,29 +273,26 @@ it("requires paid confirmation, sends edited script and selected assets once, an
   vi.mocked(api.submitGeneration).mockReturnValue(pending.promise);
   const view = render(<Workspace />);
   await selectAssets();
-  expect(screen.getByLabelText("Guion del video")).toHaveProperty(
+  expect(screen.getByLabelText("Video script")).toHaveProperty(
     "value",
     "Guion original",
   );
-  fireEvent.change(screen.getByLabelText("Guion del video"), {
+  fireEvent.change(screen.getByLabelText("Video script"), {
     target: { value: "Guion editado" },
   });
   vi.mocked(window.confirm).mockReturnValueOnce(false);
-  fireEvent.click(
-    screen.getByRole("button", { name: "Generar video con HeyGen" }),
-  );
+  fireEvent.click(screen.getByRole("button", { name: "Generate AI video" }));
   expect(api.submitGeneration).not.toHaveBeenCalled();
-  fireEvent.click(
-    screen.getByRole("button", { name: "Generar video con HeyGen" }),
-  );
+  fireEvent.click(screen.getByRole("button", { name: "Generate AI video" }));
   expect(api.submitGeneration).toHaveBeenCalledTimes(1);
   expect(api.submitGeneration).toHaveBeenCalledWith("A", "draft-1", {
     avatar_id: "look",
     voice_id: "voice",
     script: "Guion editado",
+    confirmed_paid_generation: true,
   });
   expect(window.confirm).toHaveBeenCalledWith(
-    expect.stringContaining("consume créditos"),
+    expect.stringContaining("uses API credits"),
   );
   expect(screen.getByTestId("locks").textContent).toBe(draft.id);
   view.rerender(<Workspace show={false} />);
@@ -297,7 +300,7 @@ it("requires paid confirmation, sends edited script and selected assets once, an
   expect(api.submitGeneration).toHaveBeenCalledTimes(1);
   expect(updateDraft).not.toHaveBeenCalled();
   await act(async () => pending.resolve(job));
-  await screen.findByText(/HeyGen está procesando/);
+  await screen.findByText(/Your AI video is processing/);
   expect(screen.getByTestId("locks").textContent).toBe(draft.id);
 });
 it("restores stored completion on refresh and uses an authorized renewable private preview", async () => {
@@ -311,9 +314,9 @@ it("restores stored completion on refresh and uses an authorized renewable priva
     .mockResolvedValueOnce({ video_url: "https://private.test/signed-one" })
     .mockResolvedValueOnce({ video_url: "https://private.test/signed-two" });
   const view = render(<Workspace />);
-  await screen.findByText(/Video guardado de forma privada/);
+  await screen.findByText(/Video saved privately/);
   fireEvent.click(
-    screen.getByRole("button", { name: /Actualizar vista previa privada/ }),
+    screen.getByRole("button", { name: /Refresh private preview/ }),
   );
   await waitFor(() =>
     expect(view.container.querySelector("video")?.src).toBe(
@@ -322,9 +325,9 @@ it("restores stored completion on refresh and uses an authorized renewable priva
   );
   expect(fetchVideoPreview).toHaveBeenCalledWith(draft.id);
   fireEvent.error(view.container.querySelector("video")!);
-  await screen.findByText(/La vista previa venció/);
+  await screen.findByText(/The preview expired/);
   fireEvent.click(
-    screen.getByRole("button", { name: /Actualizar vista previa privada/ }),
+    screen.getByRole("button", { name: /Refresh private preview/ }),
   );
   await waitFor(() =>
     expect(view.container.querySelector("video")?.src).toBe(
@@ -333,7 +336,7 @@ it("restores stored completion on refresh and uses an authorized renewable priva
   );
   view.unmount();
   render(<Workspace />);
-  await screen.findByText(/Video guardado de forma privada/);
+  await screen.findByText(/Video saved privately/);
   expect(api.submitGeneration).not.toHaveBeenCalled();
 });
 it("keeps an ambiguous network submission blocked even if recovery initially finds no attempt", async () => {
@@ -343,16 +346,14 @@ it("keeps an ambiguous network submission blocked even if recovery initially fin
   vi.mocked(api.reconcileGeneration).mockResolvedValue(null);
   render(<Workspace />);
   await selectAssets();
-  fireEvent.click(
-    screen.getByRole("button", { name: "Generar video con HeyGen" }),
-  );
+  fireEvent.click(screen.getByRole("button", { name: "Generate AI video" }));
   await screen.findByText("Conexión interrumpida");
-  fireEvent.click(screen.getByRole("button", { name: /Recuperar estado/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Recover video status/ }));
   await waitFor(() =>
     expect(api.reconcileGeneration).toHaveBeenCalledWith("A", draft.id),
   );
   expect(
-    screen.queryByRole("button", { name: "Generar video con HeyGen" }),
+    screen.queryByRole("button", { name: "Generate AI video" }),
   ).toBeNull();
   expect(screen.getByTestId("locks").textContent).toBe(draft.id);
   expect(api.submitGeneration).toHaveBeenCalledTimes(1);
@@ -363,7 +364,9 @@ it.each(["UNKNOWN", "FAILED"] as const)(
     vi.mocked(api.getGeneration).mockResolvedValue({ ...job, status });
     render(<Workspace />);
     await screen.findByText(
-      status === "UNKNOWN" ? /No sabemos si HeyGen/ : /HeyGen no pudo generar/,
+      status === "UNKNOWN"
+        ? /The video service may have received/
+        : /The video could not be generated/,
     );
     expect(api.submitGeneration).not.toHaveBeenCalled();
   },
@@ -375,10 +378,10 @@ it("stops on restore failure and permits recovery without a paid retry", async (
   render(<Workspace />);
   await screen.findByText("Servidor no disponible");
   expect(
-    screen.getByRole("button", { name: "Generar video con HeyGen" }),
+    screen.getByRole("button", { name: "Generate AI video" }),
   ).toHaveProperty("disabled", true);
-  fireEvent.click(screen.getByRole("button", { name: /Recuperar estado/ }));
-  await screen.findByText(/HeyGen está procesando/);
+  fireEvent.click(screen.getByRole("button", { name: /Recover video status/ }));
+  await screen.findByText(/Your AI video is processing/);
   expect(api.submitGeneration).not.toHaveBeenCalled();
 });
 it("ignores a stale A response after A → B → A and after logout", async () => {
@@ -388,12 +391,12 @@ it("ignores a stale A response after A → B → A and after logout", async () =
     .mockResolvedValue(null);
   const view = render(<Workspace />);
   view.rerender(<Workspace business="B" />);
-  await screen.findByText(/Revisa el guion/);
+  await screen.findByText(/Review the script/);
   view.rerender(<Workspace />);
   await act(async () =>
     old.resolve({ ...job, status: "COMPLETED", storage_status: "STORED" }),
   );
-  expect(screen.queryByText(/Video guardado/)).toBeNull();
+  expect(screen.queryByText(/Video saved/)).toBeNull();
   view.unmount();
   expect(api.submitGeneration).not.toHaveBeenCalled();
 });
@@ -404,9 +407,9 @@ it.each([
   { image_status: "generating" },
 ])("blocks ineligible draft %j", async (changes) => {
   render(<Workspace item={{ ...draft, ...changes } as Draft} />);
-  await screen.findByText(/Revisa el guion/);
+  await screen.findByText(/Review the script/);
   expect(
-    screen.getByRole("button", { name: "Generar video con HeyGen" }),
+    screen.getByRole("button", { name: "Generate AI video" }),
   ).toHaveProperty("disabled", true);
   expect(api.submitGeneration).not.toHaveBeenCalled();
 });
@@ -422,11 +425,11 @@ it("polls processing state without another generation request and stops at compl
   await act(async () => {
     render(<Workspace />);
   });
-  expect(screen.getByText(/HeyGen está procesando/)).toBeTruthy();
+  expect(screen.getByText(/Your AI video is processing/)).toBeTruthy();
   await act(async () => {
     await vi.advanceTimersByTimeAsync(5000);
   });
-  expect(screen.getByText(/Video guardado/)).toBeTruthy();
+  expect(screen.getByText(/Video saved/)).toBeTruthy();
   await act(async () => {
     await vi.advanceTimersByTimeAsync(15000);
   });
@@ -435,14 +438,18 @@ it("polls processing state without another generation request and stops at compl
 });
 it("does not enable generation with unavailable assets or missing configuration", async () => {
   vi.mocked(assets.getHeyGenAvatarAssets).mockRejectedValue(
-    new Error("HeyGen no está configurado. Contacta al administrador."),
+    new Error(
+      "AI Video Studio no está configurado. Contacta al administrador.",
+    ),
   );
   render(<Workspace />);
-  await screen.findByText(/Revisa el guion/);
-  fireEvent.click(screen.getByRole("button", { name: /Explorar avatares/ }));
-  await screen.findByText(/HeyGen no está configurado/);
+  await screen.findByText(/Review the script/);
+  fireEvent.click(
+    screen.getByRole("button", { name: /Explore avatars and voices/ }),
+  );
+  await screen.findByText(/AI Video Studio no está configurado/);
   expect(
-    screen.getByRole("button", { name: "Generar video con HeyGen" }),
+    screen.getByRole("button", { name: "Generate AI video" }),
   ).toHaveProperty("disabled", true);
   expect(api.submitGeneration).not.toHaveBeenCalled();
 });
@@ -469,7 +476,7 @@ it("keeps edits locked until the completed draft refresh finishes", async () => 
     storage_status: "STORED",
   });
   render(<Workspace />);
-  await screen.findByText(/Video guardado/);
+  await screen.findByText(/Video saved/);
   expect(screen.getByTestId("locks").textContent).toBe(draft.id);
   await act(async () =>
     fresh.resolve([
@@ -486,14 +493,14 @@ it("keeps edits locked until the completed draft refresh finishes", async () => 
 it("blocks generation after recovery fails for an existing attempt", async () => {
   vi.mocked(api.getGeneration).mockResolvedValue({ ...job, status: "FAILED" });
   render(<Workspace />);
-  await screen.findByText(/HeyGen no pudo generar/);
+  await screen.findByText(/The video could not be generated/);
   vi.mocked(api.reconcileGeneration).mockRejectedValue(
     new Error("Sin conexión"),
   );
-  fireEvent.click(screen.getByRole("button", { name: /Recuperar estado/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Recover video status/ }));
   await screen.findByText("Sin conexión");
   expect(
-    screen.getByRole("button", { name: "Generar video con HeyGen" }),
+    screen.getByRole("button", { name: "Generate AI video" }),
   ).toHaveProperty("disabled", true);
   expect(api.submitGeneration).not.toHaveBeenCalled();
 });
@@ -507,15 +514,20 @@ it.each([
   async (label, mutation) => {
     const pending = deferred<Draft>();
     vi.mocked(mutation).mockReturnValue(pending.promise);
-    vi.mocked(api.getGeneration).mockResolvedValue({ ...job, status: "FAILED" });
+    vi.mocked(api.getGeneration).mockResolvedValue({
+      ...job,
+      status: "FAILED",
+    });
     render(<Workspace />);
-    await screen.findByText(/HeyGen no pudo generar/);
+    await screen.findByText(/The video could not be generated/);
     fireEvent.click(screen.getByRole("button", { name: "Editar prueba" }));
     fireEvent.click(screen.getByRole("button", { name: label }));
     expect(mutation).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("locks").textContent).toBe(draft.id);
-    fireEvent.click(screen.getByRole("button", { name: /Recuperar estado/ }));
-    await screen.findByText(/Espera a que termine la otra operación/);
+    fireEvent.click(
+      screen.getByRole("button", { name: /Recover video status/ }),
+    );
+    await screen.findByText(/Wait for the other draft operation/);
     expect(api.reconcileGeneration).not.toHaveBeenCalled();
     expect(screen.getByTestId("locks").textContent).toBe(draft.id);
     await act(async () => pending.resolve(draft));
@@ -524,8 +536,10 @@ it.each([
       ...job,
       status: "FAILED",
     });
-    fireEvent.click(screen.getByRole("button", { name: /Recuperar estado/ }));
-    await screen.findByText(/HeyGen no pudo generar/);
+    fireEvent.click(
+      screen.getByRole("button", { name: /Recover video status/ }),
+    );
+    await screen.findByText(/The video could not be generated/);
     await waitFor(() =>
       expect(screen.getByTestId("locks").textContent).toBe(""),
     );
@@ -541,11 +555,16 @@ it.each([
   async (label, mutation) => {
     const pending = deferred<api.Generation>();
     vi.mocked(api.reconcileGeneration).mockReturnValue(pending.promise);
-    vi.mocked(api.getGeneration).mockResolvedValue({ ...job, status: "FAILED" });
+    vi.mocked(api.getGeneration).mockResolvedValue({
+      ...job,
+      status: "FAILED",
+    });
     render(<Workspace />);
-    await screen.findByText(/HeyGen no pudo generar/);
+    await screen.findByText(/The video could not be generated/);
     fireEvent.click(screen.getByRole("button", { name: "Editar prueba" }));
-    fireEvent.click(screen.getByRole("button", { name: /Recuperar estado/ }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Recover video status/ }),
+    );
     expect(screen.getByTestId("locks").textContent).toBe(draft.id);
     fireEvent.click(screen.getByRole("button", { name: label }));
     expect(mutation).not.toHaveBeenCalled();

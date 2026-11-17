@@ -15,6 +15,7 @@ _STATUS = {
     ErrorKind.UNSUPPORTED_MEDIA: 415,
     ErrorKind.FORBIDDEN: 403,
     ErrorKind.UNAUTHENTICATED: 401,
+    ErrorKind.LIMIT_EXCEEDED: 429,
 }
 
 
@@ -22,4 +23,5 @@ def http_error(error: ApplicationError) -> HTTPException:
     return HTTPException(
         status_code=_STATUS[error.kind],
         detail=error.detail,
+        headers={"X-Error-Code": error.code or error.kind.value},
     )

@@ -9,6 +9,47 @@ import {
 import type { Section } from "../../../components/Sidebar";
 import type { DraftCollection } from "./useDraftCollection";
 import type { DraftOperations } from "./useDraftOperations";
+import { useLocalization } from "../../../app/useLocalization";
+import type { Translate } from "../../../app/localization";
+import { ApiError } from "../../../lib/apiClient";
+
+const OVERSIZED_CONTEXT_DETAIL =
+  "This AI request contains too much context. Shorten the request or conversation and try again.";
+const INVALID_IDEMPOTENCY_DETAIL = "A valid idempotency key is required";
+const SAFE_ERROR_CODES = new Set([
+  "ai_entitlement_required",
+  "ai_quota_exhausted",
+  "ai_subscription_required",
+  "invalid_input",
+  "provider_rate_limited",
+  "upstream_failure",
+]);
+
+function generationErrorMessage(error: unknown, translate: Translate): string {
+  if (!(error instanceof ApiError)) return translate("draft.generationError");
+  if (error.message === OVERSIZED_CONTEXT_DETAIL) {
+    return translate("draft.generationContextTooLarge");
+  }
+  if (error.code === "ai_quota_exhausted") {
+    return translate("draft.generationQuotaExceeded");
+  }
+  if (
+    error.code === "ai_entitlement_required" ||
+    error.code === "ai_subscription_required"
+  ) {
+    return translate("draft.generationAccessRequired");
+  }
+  if (error.code === "provider_rate_limited") {
+    return translate("draft.generationProviderThrottled");
+  }
+  if (
+    error.code === "invalid_input" ||
+    error.message === INVALID_IDEMPOTENCY_DETAIL
+  ) {
+    return translate("draft.generationInvalidInput");
+  }
+  return translate("draft.generationError");
+}
 
 export function useDraftActions(
   selectedBusinessId: string,
@@ -16,6 +57,11 @@ export function useDraftActions(
   operations: DraftOperations,
   setActiveSection: (section: Section) => void,
 ) {
+  const { t } = useLocalization();
+  const tRef = useRef(t);
+  useEffect(() => {
+    tRef.current = t;
+  }, [t]);
   const [generating, setGenerating] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -55,11 +101,25 @@ export function useDraftActions(
         setActiveSection("Aprobaciones");
       }
     } catch (error) {
-      console.error("Content generation failed:", error);
+      if (import.meta.env.DEV && error instanceof ApiError) {
+        const safeCode =
+          error.code && SAFE_ERROR_CODES.has(error.code)
+            ? error.code
+            : "unknown";
+        const safeDetail =
+          error.message === OVERSIZED_CONTEXT_DETAIL
+            ? "context_too_large"
+            : error.message === INVALID_IDEMPOTENCY_DETAIL
+              ? "invalid_idempotency_key"
+              : "unrecognized";
+        console.warn("Valeria content generation failed", {
+          status: error.status,
+          code: safeCode,
+          detail: safeDetail,
+        });
+      }
       if (isCurrentBusiness() && selectedBusinessRef.current === businessId) {
-        setGenerationError(
-          "No se pudo generar el contenido. Inténtalo de nuevo.",
-        );
+        setGenerationError(generationErrorMessage(error, tRef.current));
       }
     } finally {
       setGenerating(false);
@@ -74,7 +134,7 @@ export function useDraftActions(
   };
   const handleSaveEdit = async (id: string) => {
     if (!editTitle.trim() || !editCaption.trim()) {
-      setApprovalError("El título y el texto no pueden estar vacíos.");
+      setApprovalError(t("draft.requiredFields"));
       return;
     }
     if (busyDraftIds.includes(id) || approvingIds.includes(id)) return;
@@ -90,7 +150,7 @@ export function useDraftActions(
       setEditingId(null);
     } catch {
       if (!isCurrentBusiness()) return;
-      setApprovalError("No se pudo guardar el borrador. Inténtalo de nuevo.");
+      setApprovalError(tRef.current("draft.saveError"));
     } finally {
       setBusyDraftIds((current) => current.filter((value) => value !== id));
     }
@@ -106,7 +166,7 @@ export function useDraftActions(
       return;
     if (
       !window.confirm(
-        "¿Eliminar este elemento de Aprobaciones? Las publicaciones ya realizadas en redes sociales no se eliminarán.",
+        t("draft.deleteConfirm"),
       )
     )
       return;
@@ -122,7 +182,7 @@ export function useDraftActions(
     } catch {
       if (!isCurrentBusiness()) return;
       setApprovalError(
-        "No se pudo eliminar el elemento. Si hay una operación en curso, espera a que termine e inténtalo de nuevo.",
+        tRef.current("draft.deleteError"),
       );
     } finally {
       deleteLocks.current.delete(id);
@@ -139,7 +199,7 @@ export function useDraftActions(
       return;
     if (
       !window.confirm(
-        "¿Rechazar esta publicación? Se conservará en el historial.",
+        t("draft.rejectConfirm"),
       )
     )
       return;
@@ -152,7 +212,7 @@ export function useDraftActions(
       if (editingId === id) setEditingId(null);
     } catch {
       if (!isCurrentBusiness()) return;
-      setApprovalError("No se pudo rechazar el borrador. Inténtalo de nuevo.");
+      setApprovalError(tRef.current("draft.rejectError"));
     } finally {
       setBusyDraftIds((current) => current.filter((value) => value !== id));
     }

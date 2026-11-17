@@ -2,7 +2,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.auth import verify_token
+from app.auth import verify_token, get_authenticated_principal
+from app.features.access.principal import AuthenticatedPrincipal
+from app.errors import ApplicationError
+from app.http_errors import http_error
 from app.database import get_db
 from . import service
 from .schemas import DraftCreate, DraftDestinationsUpdate, DraftUpdate
@@ -25,6 +28,10 @@ _ERROR_RESPONSES = {
         409,
         "TikTok requires an image or video",
     ),
+    service.DraftErrorKind.INSTAGRAM_MEDIA_REQUIRED: (
+        409,
+        "Instagram requires a completed JPEG image and a supported caption",
+    ),
     service.DraftErrorKind.SOCIAL_ACCOUNTS_NOT_CONNECTED: (
         409,
         "Connect the selected social accounts first",
@@ -42,9 +49,15 @@ def draft_http_exception(error: service.DraftError) -> HTTPException:
 
 
 @router.post("/drafts", status_code=201)
-def create_draft(request: DraftCreate, db: Session = Depends(get_db)):
+def create_draft(
+    request: DraftCreate,
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+):
     try:
-        return service.create_draft(request, db)
+        return service.create_draft(request, db, principal=principal)
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
     except service.DraftError as exc:
         raise draft_http_exception(exc) from exc
 
@@ -54,17 +67,26 @@ def list_drafts(
     business_id: str,
     include_deleted_published: bool = False,
     db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
 ):
     try:
-        return service.list_drafts(business_id, include_deleted_published, db)
+        return service.list_drafts(business_id, include_deleted_published, db, principal=principal)
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
     except service.DraftError as exc:
         raise draft_http_exception(exc) from exc
 
 
 @router.delete("/drafts/{draft_id}")
-def delete_draft(draft_id: str, db: Session = Depends(get_db)):
+def delete_draft(
+    draft_id: str,
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+):
     try:
-        return service.delete_draft(draft_id, db)
+        return service.delete_draft(draft_id, db, principal=principal)
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
     except service.DraftError as exc:
         raise draft_http_exception(exc) from exc
 
@@ -74,17 +96,26 @@ def update_draft_destinations(
     draft_id: str,
     request: DraftDestinationsUpdate,
     db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
 ):
     try:
-        return service.update_draft_destinations(draft_id, request, db)
+        return service.update_draft_destinations(draft_id, request, db, principal=principal)
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
     except service.DraftError as exc:
         raise draft_http_exception(exc) from exc
 
 
 @router.patch("/drafts/{draft_id}/approve")
-def approve_draft(draft_id: str, db: Session = Depends(get_db)):
+def approve_draft(
+    draft_id: str,
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+):
     try:
-        return service.approve_draft(draft_id, db)
+        return service.approve_draft(draft_id, db, principal=principal)
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
     except service.DraftError as exc:
         raise draft_http_exception(exc) from exc
 
@@ -94,16 +125,25 @@ def update_draft(
     draft_id: str,
     request: DraftUpdate,
     db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
 ):
     try:
-        return service.update_draft(draft_id, request, db)
+        return service.update_draft(draft_id, request, db, principal=principal)
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
     except service.DraftError as exc:
         raise draft_http_exception(exc) from exc
 
 
 @router.patch("/drafts/{draft_id}/reject")
-def reject_draft(draft_id: str, db: Session = Depends(get_db)):
+def reject_draft(
+    draft_id: str,
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+):
     try:
-        return service.reject_draft(draft_id, db)
+        return service.reject_draft(draft_id, db, principal=principal)
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
     except service.DraftError as exc:
         raise draft_http_exception(exc) from exc

@@ -1,13 +1,41 @@
 import { useRef, useState, type FormEvent, type ReactNode } from "react";
-import { Facebook, Settings2, UserRound } from "lucide-react";
+import {
+  BookOpen,
+  Building2,
+  Facebook,
+  Settings2,
+  UserRound,
+} from "lucide-react";
+import { useLocalization } from "../app/useLocalization";
+import { AccountStatusNotice, CapabilityStatus } from "../app/ProductStatus";
+import type { FeatureAvailability } from "../services/accountApi";
+import type { Business, BusinessUpdate } from "../services/businessesApi";
 
 type SettingsTab = "account" | "integrations";
+type BusinessProfileState = {
+  businessId: string;
+  values: BusinessUpdate;
+};
+type BusinessErrorState = {
+  businessId: string;
+  message: string;
+};
 
 type Props = {
   businessId: string;
   userDisplayName: string;
   userEmail: string;
   onSaveDisplayName: (displayName: string) => Promise<string>;
+  business?: Business | null;
+  membershipRole?: "owner" | "admin" | "member" | null;
+  canEditBusiness?: boolean;
+  onSaveBusiness?: (values: BusinessUpdate) => Promise<void>;
+  onResumeTutorial?: () => void;
+  onRestartTutorial?: () => void;
+  canManageConnections?: boolean;
+  languagePreferences?: ReactNode;
+  features?: FeatureAvailability;
+  showIntegrationsOnMount?: boolean;
   facebookConnection: ReactNode;
   instagramConnection?: ReactNode;
   tiktokConnection: ReactNode;
@@ -18,12 +46,26 @@ export default function SettingsPage({
   userDisplayName,
   userEmail,
   onSaveDisplayName,
+  business = null,
+  membershipRole = null,
+  canEditBusiness = false,
+  onSaveBusiness = async () => {},
+  onResumeTutorial = () => {},
+  onRestartTutorial = () => {},
+  canManageConnections = false,
+  languagePreferences,
+  features,
+  showIntegrationsOnMount = false,
   facebookConnection,
   instagramConnection,
   tiktokConnection,
 }: Props) {
-  const [activeTab, setActiveTab] = useState<SettingsTab>("account");
-  const initialName = userDisplayName === "Mi cuenta" ? "" : userDisplayName;
+  const { t } = useLocalization();
+  const [activeTab, setActiveTab] = useState<SettingsTab>(
+    showIntegrationsOnMount ? "integrations" : "account",
+  );
+  const initialName =
+    userDisplayName === t("shell.myAccount") ? "" : userDisplayName;
   const [displayName, setDisplayName] = useState(initialName);
   const [savedName, setSavedName] = useState(initialName);
   const [saving, setSaving] = useState(false);
@@ -34,6 +76,53 @@ export default function SettingsPage({
   const savingRef = useRef(false);
   const changed = displayName !== savedName;
   const maxNameLength = 80;
+  const [businessProfileState, setBusinessProfileState] =
+    useState<BusinessProfileState | null>(null);
+  const [businessSaving, setBusinessSaving] = useState(false);
+  const [businessErrorState, setBusinessErrorState] =
+    useState<BusinessErrorState | null>(null);
+  const [businessSavedFor, setBusinessSavedFor] = useState<string | null>(null);
+  const initialBusinessProfile: BusinessUpdate = business
+    ? {
+        name: business.name,
+        industry: business.industry,
+        description: business.description,
+        website_url: business.website_url,
+        service_area: business.service_area,
+        products_services: business.products_services,
+        target_audience: business.target_audience,
+        marketing_goals: business.marketing_goals,
+        preferred_platforms: business.preferred_platforms,
+        brand_voice: business.brand_voice,
+      }
+    : {};
+  const businessProfile =
+    businessProfileState && businessProfileState.businessId === business?.id
+      ? businessProfileState.values
+      : initialBusinessProfile;
+  const businessError =
+    businessErrorState && businessErrorState.businessId === business?.id
+      ? businessErrorState.message
+      : "";
+  const businessSaved = !!business && businessSavedFor === business.id;
+
+  function updateBusinessProfile<K extends keyof BusinessUpdate>(
+    key: K,
+    value: BusinessUpdate[K],
+  ) {
+    if (!business) return;
+    setBusinessProfileState((current) => ({
+      businessId: business.id,
+      values: {
+        ...(current?.businessId === business.id
+          ? current.values
+          : initialBusinessProfile),
+        [key]: value,
+      },
+    }));
+    setBusinessErrorState(null);
+    setBusinessSavedFor(null);
+  }
 
   async function handleSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -41,13 +130,16 @@ export default function SettingsPage({
 
     const normalized = displayName.trim();
     if (!normalized) {
-      setFeedback({ type: "error", message: "Escribe un nombre para mostrar." });
+      setFeedback({
+        type: "error",
+        message: t("settings.displayNameRequired"),
+      });
       return;
     }
     if (normalized.length > maxNameLength) {
       setFeedback({
         type: "error",
-        message: "El nombre no puede superar los 80 caracteres.",
+        message: t("settings.displayNameTooLong"),
       });
       return;
     }
@@ -61,15 +153,12 @@ export default function SettingsPage({
       setSavedName(saved);
       setFeedback({
         type: "success",
-        message: "Nombre para mostrar actualizado.",
+        message: t("settings.displayNameSaved"),
       });
-    } catch (error) {
+    } catch {
       setFeedback({
         type: "error",
-        message:
-          error instanceof Error
-            ? error.message
-            : "No se pudo guardar el nombre. Inténtalo de nuevo.",
+        message: t("settings.displayNameSaveError"),
       });
     } finally {
       savingRef.current = false;
@@ -77,18 +166,50 @@ export default function SettingsPage({
     }
   }
 
+  async function handleBusinessSave(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (businessSaving || !business || !canEditBusiness) return;
+    if (!businessProfile.name?.trim()) {
+      setBusinessErrorState({
+        businessId: business.id,
+        message: t("settings.businessNameRequired"),
+      });
+      return;
+    }
+    setBusinessSaving(true);
+    setBusinessErrorState(null);
+    setBusinessSavedFor(null);
+    try {
+      await onSaveBusiness({
+        ...businessProfile,
+        name: businessProfile.name.trim(),
+      });
+      setBusinessSavedFor(business.id);
+    } catch {
+      setBusinessErrorState({
+        businessId: business.id,
+        message: t("settings.businessSaveError"),
+      });
+    } finally {
+      setBusinessSaving(false);
+    }
+  }
+
   return (
     <div className="settings-workspace">
       <section className="page-intro">
         <div>
-          <span className="eyebrow">Tu espacio de trabajo</span>
-          <h2>Configuración</h2>
-          <p>Administra tu cuenta y las conexiones de este negocio.</p>
+          <span className="eyebrow">{t("settings.introEyebrow")}</span>
+          <h2>{t("settings.introTitle")}</h2>
+          <p>{t("settings.introDescription")}</p>
         </div>
       </section>
 
       <div className="settings-layout">
-        <nav className="settings-nav" aria-label="Secciones de configuración">
+        <nav
+          className="settings-nav"
+          aria-label={t("settings.integrationNavigation")}
+        >
           <button
             type="button"
             className={activeTab === "account" ? "is-active" : ""}
@@ -96,7 +217,7 @@ export default function SettingsPage({
             onClick={() => setActiveTab("account")}
           >
             <UserRound size={18} aria-hidden="true" />
-            Cuenta
+            {t("settings.accountTab")}
           </button>
           <button
             type="button"
@@ -105,31 +226,40 @@ export default function SettingsPage({
             onClick={() => setActiveTab("integrations")}
           >
             <Settings2 size={18} aria-hidden="true" />
-            Integraciones
+            {t("settings.integrationsTab")}
           </button>
         </nav>
 
         {activeTab === "account" ? (
-          <section className="settings-account panel" aria-labelledby="account-title">
+          <section
+            className="settings-account panel"
+            aria-labelledby="account-title"
+          >
             <div className="settings-section-heading">
               <span className="settings-section-icon" aria-hidden="true">
                 <UserRound size={20} />
               </span>
               <div>
-                <h3 id="account-title">Información de la cuenta</h3>
-                <p>Datos asociados a tu sesión actual.</p>
+                <h3 id="account-title">{t("settings.accountTitle")}</h3>
+                <p>{t("settings.accountDescription")}</p>
               </div>
             </div>
+            <AccountStatusNotice
+              title={t("account.statusActive")}
+              description={t("account.statusActiveHelp")}
+            />
             <form className="settings-profile-form" onSubmit={handleSave}>
-              <label htmlFor="account-display-name">Nombre para mostrar</label>
+              <label htmlFor="account-display-name">
+                {t("settings.displayName")}
+              </label>
               <input
                 id="account-display-name"
                 name="displayName"
                 type="text"
                 autoComplete="nickname"
-                placeholder="Mi cuenta"
+                placeholder={t("settings.displayNamePlaceholder")}
                 value={displayName}
-                maxLength={120}
+                maxLength={maxNameLength}
                 aria-invalid={feedback?.type === "error"}
                 aria-describedby="account-display-name-help"
                 disabled={saving}
@@ -139,19 +269,18 @@ export default function SettingsPage({
                 }}
               />
               <small id="account-display-name-help">
-                Este nombre aparece en tu espacio de trabajo. Máximo 80
-                caracteres.
+                {t("settings.displayNameHelp")}
               </small>
               <button
                 type="submit"
                 className="primary-button"
                 disabled={!changed || saving}
               >
-                {saving ? "Guardando…" : "Guardar cambios"}
+                {saving ? t("common.saving") : t("common.save")}
               </button>
               {saving && (
                 <p className="settings-profile-feedback" role="status">
-                  Guardando cambios…
+                  {t("common.saving")}
                 </p>
               )}
               {feedback && (
@@ -165,39 +294,248 @@ export default function SettingsPage({
             </form>
             <dl className="settings-account-details">
               <div>
-                <dt>Correo electrónico</dt>
-                <dd>{userEmail || "No disponible"}</dd>
+                <dt>{t("settings.email")}</dt>
+                <dd>{userEmail || t("settings.emailUnavailable")}</dd>
               </div>
+              {membershipRole && (
+                <div>
+                  <dt>{t("settings.membershipRole")}</dt>
+                  <dd>
+                    {membershipRole === "owner"
+                      ? t("settings.role.owner")
+                      : membershipRole === "admin"
+                        ? t("settings.role.admin")
+                        : t("settings.role.member")}
+                  </dd>
+                </div>
+              )}
             </dl>
             <p className="settings-note" role="note">
-              Tu nombre de perfil es privado y solo se usa para personalizar tu
-              cuenta.
+              {t("settings.profileNote")}
             </p>
+            <div data-guide-target="trial-settings">{languagePreferences}</div>
+            {business && (
+              <section
+                className="settings-business-profile"
+                aria-labelledby="business-profile-title"
+              >
+                <div className="settings-section-heading">
+                  <Building2 size={20} aria-hidden="true" />
+                  <div>
+                    <h3 id="business-profile-title">
+                      {t("settings.businessProfile")}
+                    </h3>
+                    <p>{t("settings.businessProfileHelp")}</p>
+                  </div>
+                </div>
+                <form
+                  className="settings-profile-form"
+                  onSubmit={handleBusinessSave}
+                >
+                  <label htmlFor="settings-business-name">
+                    {t("businessForm.name")} *
+                  </label>
+                  <input
+                    id="settings-business-name"
+                    value={businessProfile.name ?? ""}
+                    maxLength={120}
+                    disabled={!canEditBusiness || businessSaving}
+                    onChange={(event) =>
+                      updateBusinessProfile("name", event.target.value)
+                    }
+                  />
+                  <label htmlFor="settings-business-industry">
+                    {t("businessForm.industry")}
+                  </label>
+                  <input
+                    id="settings-business-industry"
+                    value={businessProfile.industry ?? ""}
+                    disabled={!canEditBusiness || businessSaving}
+                    onChange={(event) =>
+                      updateBusinessProfile("industry", event.target.value)
+                    }
+                  />
+                  <label htmlFor="settings-business-description">
+                    {t("businessForm.descriptionLabel")}
+                  </label>
+                  <textarea
+                    id="settings-business-description"
+                    value={businessProfile.description ?? ""}
+                    disabled={!canEditBusiness || businessSaving}
+                    onChange={(event) =>
+                      updateBusinessProfile("description", event.target.value)
+                    }
+                  />
+                  <label htmlFor="settings-business-website">
+                    {t("businessForm.website")}
+                  </label>
+                  <input
+                    id="settings-business-website"
+                    type="url"
+                    value={businessProfile.website_url ?? ""}
+                    disabled={!canEditBusiness || businessSaving}
+                    onChange={(event) =>
+                      updateBusinessProfile("website_url", event.target.value)
+                    }
+                  />
+                  {!canEditBusiness && (
+                    <p role="note">{t("settings.businessEditRestricted")}</p>
+                  )}
+                  {businessError && <p role="alert">{businessError}</p>}
+                  {businessSaved && (
+                    <p role="status">{t("settings.businessSaved")}</p>
+                  )}
+                  {canEditBusiness && (
+                    <button
+                      className="primary-button"
+                      type="submit"
+                      disabled={businessSaving}
+                    >
+                      {businessSaving ? t("common.saving") : t("common.save")}
+                    </button>
+                  )}
+                </form>
+              </section>
+            )}
+            <div className="settings-tutorial-actions">
+              <button
+                type="button"
+                className="secondary-button settings-tutorial-button"
+                onClick={onResumeTutorial}
+              >
+                <BookOpen size={18} aria-hidden="true" />
+                {t("tutorial.resume")}
+              </button>
+              <button
+                type="button"
+                className="reject-button settings-tutorial-button"
+                onClick={onRestartTutorial}
+              >
+                {t("tutorial.restart")}
+              </button>
+            </div>
           </section>
         ) : (
-          <section className="settings-integrations" aria-labelledby="integrations-title">
+          <section
+            className="settings-integrations"
+            aria-labelledby="integrations-title"
+          >
             <header className="settings-integrations-heading">
               <div className="settings-section-icon" aria-hidden="true">
                 <Facebook size={20} />
               </div>
               <div>
-                <h3 id="integrations-title">Redes sociales</h3>
+                <h3 id="integrations-title">{t("settings.socialTitle")}</h3>
                 <p>
-                  Las conexiones y publicaciones se administran por negocio.
-                  {businessId ? "" : " Selecciona un negocio para continuar."}
+                  {t("settings.socialDescription")}
+                  {businessId ? "" : ` ${t("settings.selectBusiness")}`}
                 </p>
               </div>
             </header>
             {!businessId && (
               <p className="settings-note" role="status">
-                No hay un negocio seleccionado.
+                {t("settings.noBusiness")}
               </p>
             )}
-            <div className="settings-integration-list">
-              {facebookConnection}
-              {instagramConnection}
-              {tiktokConnection}
-            </div>
+            {features && (
+              <section
+                className="settings-capabilities"
+                aria-labelledby="feature-availability-title"
+              >
+                <h4 id="feature-availability-title">
+                  {t("settings.featuresTitle")}
+                </h4>
+                <ul>
+                  <CapabilityStatus
+                    label={t("settings.facebookPublishing")}
+                    status={
+                      features.facebook_publishing ? "available" : "unavailable"
+                    }
+                    statusText={
+                      features.facebook_publishing
+                        ? t("capability.available")
+                        : t("capability.unavailable")
+                    }
+                    detail={t("settings.facebookPublishingDetail")}
+                  />
+                  <CapabilityStatus
+                    label={t("settings.tiktokDirect")}
+                    status={
+                      features.tiktok_direct_publishing
+                        ? "available"
+                        : "unavailable"
+                    }
+                    statusText={
+                      features.tiktok_direct_publishing
+                        ? t("capability.available")
+                        : t("capability.unavailable")
+                    }
+                    detail={t("settings.tiktokDirectDetail")}
+                  />
+                  <CapabilityStatus
+                    label={t("settings.tiktokManual")}
+                    status={
+                      features.tiktok_manual_export ? "limited" : "unavailable"
+                    }
+                    statusText={
+                      features.tiktok_manual_export
+                        ? t("capability.limited")
+                        : t("capability.unavailable")
+                    }
+                    detail={t("settings.tiktokManualDetail")}
+                  />
+                  <CapabilityStatus
+                    label={t("settings.instagramConnection")}
+                    status={
+                      features.instagram_connection
+                        ? "available"
+                        : "unavailable"
+                    }
+                    statusText={
+                      features.instagram_connection
+                        ? t("capability.available")
+                        : t("capability.unavailable")
+                    }
+                    detail={t("settings.instagramConnectionDetail")}
+                  />
+                  <CapabilityStatus
+                    label={t("settings.instagramPublishing")}
+                    status={
+                      features.instagram_publishing
+                        ? "available"
+                        : "unavailable"
+                    }
+                    statusText={
+                      features.instagram_publishing
+                        ? t("capability.available")
+                        : t("capability.unavailable")
+                    }
+                    detail={t("settings.instagramPublishingDetail")}
+                  />
+                  <CapabilityStatus
+                    label={t("settings.miaAnalysis")}
+                    status={features.mia_analysis ? "available" : "unavailable"}
+                    statusText={
+                      features.mia_analysis
+                        ? t("capability.available")
+                        : t("capability.unavailable")
+                    }
+                    detail={t("settings.miaAnalysisDetail")}
+                  />
+                </ul>
+              </section>
+            )}
+            {canManageConnections ? (
+              <div className="settings-integration-list">
+                {facebookConnection}
+                {instagramConnection}
+                {tiktokConnection}
+              </div>
+            ) : (
+              <p className="settings-note" role="note">
+                {t("settings.connectionsRestricted")}
+              </p>
+            )}
           </section>
         )}
       </div>

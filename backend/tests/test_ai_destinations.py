@@ -1,4 +1,4 @@
-"""Record current platform/destination behavior, including its known mismatch."""
+"""Verify explicit supported destinations without a silent Facebook fallback."""
 import json
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -8,6 +8,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.features.content import openai_provider
+from tests.tenancy_fixtures import (
+    grant_test_active_entitlement,
+    grant_test_owner,
+)
 from app.models import Business, Conversation, ConversationMessage, Draft
 
 
@@ -19,9 +23,19 @@ def generated_content(platform):
     }
 
 
+def test_ai_instructions_identify_the_renamed_agents():
+    from app.features.content import sofia_provider
+
+    chat_instructions = sofia_provider._instructions("en")
+    assert "Eres Sebastián" in chat_instructions
+    assert "Valeria crea contenido" in chat_instructions
+    assert "Edian analizará resultados" in chat_instructions
+    assert all(name not in chat_instructions for name in ("Sofía", "Leo", "Mía"))
+
+
 @pytest.mark.parametrize("platform", ["Facebook", "TikTok", "Instagram"])
 @pytest.mark.parametrize("workflow", ["automatic", "conversation"])
-def test_ai_platform_is_preserved_but_destination_defaults_to_facebook(
+def test_ai_platform_maps_only_to_supported_destinations(
     isolated_client, monkeypatch, platform, workflow,
 ):
     client, engine = isolated_client
@@ -46,10 +60,14 @@ def test_ai_platform_is_preserved_but_destination_defaults_to_facebook(
                 platform="Facebook",
             ),
         ])
+        principal = grant_test_owner(db, [business.id])
+        grant_test_active_entitlement(
+            db, [business.id], owner_user_id=principal.user_id,
+        )
         db.commit()
         business_id, conversation_id = business.id, conversation.id
 
-    # Exercise the real Sofía→Leo orchestration with only the SDK calls mocked.
+    # Exercise the real Sebastián→Valeria orchestration with only the SDK calls mocked.
     responses = Mock(side_effect=[
         SimpleNamespace(output_text="Estrategia de prueba"),
         SimpleNamespace(output_text=json.dumps(generated_content(platform))),
@@ -59,18 +77,20 @@ def test_ai_platform_is_preserved_but_destination_defaults_to_facebook(
         f"/businesses/{business_id}/generate-content" if workflow == "automatic" else
         f"/businesses/{business_id}/sofia/conversations/{conversation_id}/generate-draft"
     )
-    response = client.post(url)
+    response = client.post(url, json={"idempotency_key": "platform-generation"})
     assert response.status_code == (201 if workflow == "automatic" else 200)
     body = response.json()
     assert body["platform"] == platform
-    # Characterization, not desired future behavior: title-case TikTok still defaults to Facebook.
-    assert body["publish_destinations"] == ["facebook"]
+    expected = {"Facebook": ["facebook"], "TikTok": ["tiktok"], "Instagram": []}[platform]
+    assert body["publish_destinations"] == expected
     assert body["status"] == "pending"
     assert body["source"] == "ai"
     assert body["business_id"] == business_id
     assert body["campaign_id"] is None
     assert responses.call_count == 2
     strategy_call, content_call = responses.call_args_list
+    assert "Eres Sebastián" in strategy_call.kwargs["instructions"]
+    assert "Eres Valeria" in content_call.kwargs["instructions"]
     assert strategy_call.kwargs["model"] == content_call.kwargs["model"] == "gpt-4.1-mini"
     assert "Estrategia de prueba" in content_call.kwargs["input"]
     assert "Otro negocio" not in strategy_call.kwargs["input"]
@@ -81,7 +101,7 @@ def test_ai_platform_is_preserved_but_destination_defaults_to_facebook(
     with Session(engine) as db:
         saved = db.get(Draft, body["id"])
         assert saved.platform == platform
-        assert saved.publish_destinations == ["facebook"]
+        assert saved.publish_destinations == expected
         assert saved.title == body["title"] == "Publicación de prueba"
         assert saved.caption == body["caption"] == "Texto en español"
         assert saved.image_prompt == body["image_prompt"] == "Una imagen de prueba"
@@ -92,9 +112,9 @@ def test_ai_platform_is_preserved_but_destination_defaults_to_facebook(
 
 
 @pytest.mark.parametrize("workflow,expected", [
-    ("automatic", ["tiktok"]), ("conversation", ["facebook"]),
+    ("automatic", ["tiktok"]), ("conversation", ["tiktok"]),
 ])
-def test_lowercase_tiktok_is_handled_differently_by_generation_routes(
+def test_lowercase_tiktok_is_consistent_across_generation_routes(
     isolated_client, monkeypatch, workflow, expected,
 ):
     """Synthetic boundary case: lowercase is not in the current AI output enum."""
@@ -107,6 +127,10 @@ def test_lowercase_tiktok_is_handled_differently_by_generation_routes(
         db.add(conversation)
         db.flush()
         db.add(ConversationMessage(conversation_id=conversation.id, role="user", content="TikTok"))
+        principal = grant_test_owner(db, [business.id])
+        grant_test_active_entitlement(
+            db, [business.id], owner_user_id=principal.user_id,
+        )
         db.commit()
         business_id, conversation_id = business.id, conversation.id
     generate = Mock(return_value=generated_content("tiktok"))
@@ -118,7 +142,7 @@ def test_lowercase_tiktok_is_handled_differently_by_generation_routes(
         f"/businesses/{business_id}/generate-content" if workflow == "automatic" else
         f"/businesses/{business_id}/sofia/conversations/{conversation_id}/generate-draft"
     )
-    response = client.post(url)
+    response = client.post(url, json={"idempotency_key": "lowercase-platform-generation"})
     assert response.status_code == (201 if workflow == "automatic" else 200)
     assert response.json()["platform"] == "tiktok"
     assert response.json()["publish_destinations"] == expected

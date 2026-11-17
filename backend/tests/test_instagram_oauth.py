@@ -10,42 +10,55 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     Business,
+    BusinessMembership,
     InstagramConnection,
     InstagramOAuthState,
     SocialAccount,
 )
+from tests.tenancy_fixtures import grant_test_owner
 
 
-def test_instagram_callback_access_log_redaction_preserves_route_query():
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/auth/facebook/callback",
+        "/auth/instagram/callback",
+        "/api/integrations/tiktok/callback",
+    ],
+)
+def test_oauth_callback_access_log_redaction_preserves_route_query(path):
     from app.features.instagram.routes import (
         InstagramCallbackAccessLogRedactionMiddleware,
     )
 
     observed = {}
+    protocol_scope = {
+        "type": "http",
+        "path": path,
+        "query_string": b"code=private-code&state=private-state",
+    }
 
     async def app(scope, receive, send):
         observed["route_query"] = scope["query_string"]
+        observed["protocol_query_before_response"] = protocol_scope["query_string"]
         await send({"type": "http.response.start", "status": 303, "headers": []})
-        observed["restored_query"] = scope["query_string"]
+        await send({"type": "http.response.body", "body": b"", "more_body": False})
 
     async def send(message):
-        observed["logged_query"] = scope["query_string"]
+        if message["type"] == "http.response.body":
+            observed["logged_query"] = protocol_scope["query_string"]
 
-    scope = {
-        "type": "http",
-        "path": "/auth/instagram/callback",
-        "query_string": b"code=private-code&state=private-state",
-    }
     asyncio.run(
         InstagramCallbackAccessLogRedactionMiddleware(app)(
-            scope, lambda: None, send,
+            protocol_scope, lambda: None, send,
         )
     )
     assert observed == {
         "route_query": b"code=private-code&state=private-state",
+        "protocol_query_before_response": b"",
         "logged_query": b"",
-        "restored_query": b"code=private-code&state=private-state",
     }
+    assert protocol_scope["query_string"] == b"code=private-code&state=private-state"
 
 
 def test_instagram_callback_log_redaction_does_not_change_other_routes():
@@ -54,23 +67,26 @@ def test_instagram_callback_log_redaction_does_not_change_other_routes():
     )
 
     observed = {}
+    protocol_scope = {
+        "type": "http",
+        "path": "/businesses/business-1",
+        "query_string": b"code=facebook-code&state=facebook-state",
+    }
 
     async def app(scope, receive, send):
         await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"", "more_body": False})
 
     async def send(message):
-        observed["query"] = scope["query_string"]
+        if message["type"] == "http.response.body":
+            observed["query"] = protocol_scope["query_string"]
 
-    scope = {
-        "type": "http",
-        "path": "/auth/facebook/callback",
-        "query_string": b"code=facebook-code&state=facebook-state",
-    }
     asyncio.run(
         InstagramCallbackAccessLogRedactionMiddleware(app)(
-            scope, lambda: None, send,
+            protocol_scope, lambda: None, send,
         )
     )
+    assert protocol_scope["query_string"] == b"code=facebook-code&state=facebook-state"
     assert observed["query"] == b"code=facebook-code&state=facebook-state"
 
 
@@ -98,6 +114,7 @@ def create_business(engine, suffix="a"):
         business = Business(name=f"Business {suffix}")
         db.add(business)
         db.flush()
+        grant_test_owner(db, [business.id])
         page = SocialAccount(
             business_id=business.id,
             platform="facebook",
@@ -113,11 +130,12 @@ def create_business(engine, suffix="a"):
 
 def callback_state(engine, business_id, page_id, state="test-state"):
     with Session(engine) as db:
+        principal = grant_test_owner(db, [business_id])
         db.add(
             InstagramOAuthState(
                 state_hash=hashlib.sha256(state.encode()).hexdigest(),
                 business_id=business_id,
-                user_id="test-authorized-user",
+                user_id=principal.subject,
                 facebook_page_id=page_id,
                 expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
             )
@@ -163,13 +181,17 @@ def test_start_uses_instagram_configuration_and_business_page(isolated_client, m
     [
         ("missing_business", 404, "No se encontró el negocio seleccionado."),
         ("disconnected_page", 409, "Conecta primero una página de Facebook para este negocio."),
+        (
+                "multiple_pages",
+                409,
+                "Desconecta las páginas adicionales de Facebook de este negocio antes de conectar Instagram.",
+        ),
         ("configuration", 409, "La conexión de Instagram no está configurada en el servidor."),
         ("value_error", 409, "Invalid authorization URL"),
-        ("business_removed", 404, "Invalid authorization URL"),
     ],
 )
 def test_start_error_contracts_do_not_persist_state(
-    isolated_client, monkeypatch, failure, expected_status, expected_message,
+        isolated_client, monkeypatch, failure, expected_status, expected_message,
 ):
     client, engine = isolated_client
     business_id = "missing-business"
@@ -179,19 +201,23 @@ def test_start_error_contracts_do_not_persist_state(
             with Session(engine) as db:
                 db.get(SocialAccount, page_id).connection_status = "disconnected"
                 db.commit()
+        elif failure == "multiple_pages":
+            with Session(engine) as db:
+                db.add(SocialAccount(
+                    business_id=business_id,
+                    platform="facebook",
+                    platform_account_id="page-b",
+                    account_name="Other Facebook Page",
+                    encrypted_access_token="encrypted-page-token-b",
+                    connection_status="connected",
+                ))
+                db.commit()
 
     build_url = Mock()
     if failure == "configuration":
         build_url.side_effect = RuntimeError("Instagram OAuth is not configured")
-    elif failure in ("value_error", "business_removed"):
+    elif failure == "value_error":
         build_url.side_effect = ValueError("Invalid authorization URL")
-    if failure == "business_removed":
-        # Preserve the existing error classification if the business disappears
-        # between validation and the error-path lookup.
-        monkeypatch.setattr(
-            "app.features.instagram.repository.get_business",
-            Mock(side_effect=[Business(id=business_id, name="Business a"), None]),
-        )
     monkeypatch.setattr("app.features.instagram.provider.build_login_url", build_url)
 
     response = client.get(
@@ -200,12 +226,173 @@ def test_start_error_contracts_do_not_persist_state(
 
     assert response.status_code == expected_status
     assert response.json() == {"detail": expected_message}
-    if failure in ("missing_business", "disconnected_page"):
+    if failure in ("missing_business", "disconnected_page", "multiple_pages"):
         build_url.assert_not_called()
     else:
         build_url.assert_called_once()
     with Session(engine) as db:
         assert db.query(InstagramOAuthState).count() == 0
+
+
+def test_instagram_start_rechecks_permission_before_persisting_state(
+        isolated_client, monkeypatch,
+):
+    from app.errors import ApplicationError, ErrorKind
+    from app.features.instagram import service
+
+    client, engine = isolated_client
+    business_id, _ = create_business(engine)
+    original = service.access.require_permission
+    checks = 0
+
+    def revoke_before_save(db, principal, requested_business, permission, **kwargs):
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            raise ApplicationError(ErrorKind.NOT_FOUND, "Business not found")
+        return original(db, principal, requested_business, permission, **kwargs)
+
+    monkeypatch.setattr(service.access, "require_permission", revoke_before_save)
+    monkeypatch.setattr(
+        "app.features.instagram.provider.build_login_url",
+        lambda state: "https://meta.test/authorize",
+    )
+
+    response = client.get(
+        "/auth/instagram/start", params={"business_id": business_id},
+    )
+
+    assert response.status_code == 404
+    with Session(engine) as db:
+        assert db.query(InstagramOAuthState).count() == 0
+
+
+def test_instagram_start_rejects_untrusted_frontend_origin(
+        isolated_client, monkeypatch,
+):
+    client, engine = isolated_client
+    business_id, _ = create_business(engine)
+    monkeypatch.setattr(
+        "app.features.instagram.provider.build_login_url",
+        lambda state: f"https://meta.test/authorize?state={state}",
+    )
+
+    response = client.get(
+        "/auth/instagram/start",
+        params={"business_id": business_id},
+        headers={"Origin": "https://untrusted.invalid"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Instagram connection origin is not allowed"
+    with Session(engine) as db:
+        assert db.query(InstagramOAuthState).count() == 0
+
+
+def test_instagram_callback_returns_to_allowlisted_initiating_origin(
+        isolated_client, monkeypatch,
+):
+    client, engine = isolated_client
+    business_id, _ = create_business(engine, suffix="origin")
+    monkeypatch.setenv("FRONTEND_BASE_URL", "http://localhost:5173")
+    monkeypatch.setattr(
+        "app.features.instagram.provider.build_login_url",
+        lambda state: f"https://meta.test/authorize?state={state}",
+    )
+    start = client.get(
+        "/auth/instagram/start",
+        params={"business_id": business_id},
+        headers={"Origin": "https://studio.nazborttech.com"},
+    )
+    assert start.status_code == 200
+    state = parse_qs(
+        urlparse(start.json()["authorization_url"]).query,
+    )["state"][0]
+
+    monkeypatch.setattr(
+        "app.features.instagram.provider.exchange_code_for_long_lived_token",
+        _async_value(("fake-access-token", 3600)),
+    )
+    monkeypatch.setattr(
+        "app.features.instagram.provider.get_granted_permissions",
+        _async_value({
+            "pages_show_list", "pages_read_engagement", "instagram_basic",
+            "instagram_content_publish",
+        }),
+    )
+    monkeypatch.setattr(
+        "app.features.instagram.provider.get_managed_pages",
+        _async_value([{"id": "page-origin"}]),
+    )
+    monkeypatch.setattr(
+        "app.features.instagram.provider.get_page_instagram_account",
+        _async_value({
+            "id": "page-origin",
+            "instagram_business_account": {
+                "id": "ig-origin",
+                "username": "business-account",
+            },
+        }),
+    )
+    monkeypatch.setattr(
+        "app.features.instagram.service.encrypt_token",
+        lambda token: f"encrypted:{token}",
+    )
+
+    callback = client.get(
+        "/auth/instagram/callback",
+        params={"state": state, "code": "private-code"},
+        follow_redirects=False,
+    )
+
+    assert callback.status_code == 303
+    assert callback.headers["location"] == (
+        "https://studio.nazborttech.com/#instagram_result=connected_and_authorized"
+    )
+    with Session(engine) as db:
+        saved = db.get(InstagramConnection, business_id)
+        assert saved.status == "connected_and_authorized"
+
+
+def test_instagram_callback_rejects_tampered_origin_inside_state(
+        isolated_client, monkeypatch,
+):
+    client, engine = isolated_client
+    business_id, _ = create_business(engine)
+    monkeypatch.setattr(
+        "app.features.instagram.provider.build_login_url",
+        lambda state: f"https://meta.test/authorize?state={state}",
+    )
+    start = client.get(
+        "/auth/instagram/start",
+        params={"business_id": business_id},
+        headers={"Origin": "https://studio.nazborttech.com"},
+    )
+    state = parse_qs(
+        urlparse(start.json()["authorization_url"]).query,
+    )["state"][0]
+    state_parts = state.split(".", 2)
+    tampered_state = (
+        f"{state_parts[0]}.aHR0cHM6Ly91bnRydXN0ZWQuaW52YWxpZA."
+        f"{state_parts[2]}"
+    )
+    exchange = AsyncMock()
+    monkeypatch.setattr(
+        "app.features.instagram.provider.exchange_code_for_long_lived_token",
+        exchange,
+    )
+
+    callback = client.get(
+        "/auth/instagram/callback",
+        params={"state": tampered_state, "code": "private-code"},
+        follow_redirects=False,
+    )
+
+    assert callback.status_code == 303
+    assert callback.headers["location"] == (
+        "https://studio.test.invalid/#instagram_result=invalid_state"
+    )
+    exchange.assert_not_awaited()
 
 
 @pytest.mark.parametrize("business_exists", [False, True])
@@ -222,16 +409,20 @@ def test_start_service_exposes_typed_application_errors(isolated_client, busines
             if business_exists else service.BusinessNotFoundError
         )
         with pytest.raises(error_type):
-            service.start_connection(db, "business-a", "test-authorized-user")
+            service.start_connection(
+                db, "business-a",
+                grant_test_owner(db, ["business-a"] if business_exists else ()),
+            )
 
 
 def test_start_requires_authentication_without_creating_state(isolated_client):
-    from app.auth import verify_token
+    from app.auth import get_authenticated_principal, verify_token
     from app.main import app
 
     client, engine = isolated_client
     business_id, _ = create_business(engine)
     app.dependency_overrides.pop(verify_token)
+    app.dependency_overrides.pop(get_authenticated_principal)
 
     response = client.get(
         "/auth/instagram/start", params={"business_id": business_id},
@@ -241,6 +432,96 @@ def test_start_requires_authentication_without_creating_state(isolated_client):
     assert response.json() == {"detail": "Authentication required"}
     with Session(engine) as db:
         assert db.query(InstagramOAuthState).count() == 0
+
+
+def test_instagram_member_cannot_manage_connection_or_complete_oauth(
+        isolated_client, monkeypatch,
+):
+    client, engine = isolated_client
+    business_id, page_id = create_business(engine)
+    callback_state(engine, business_id, "page-a")
+    exchange = AsyncMock()
+    monkeypatch.setattr(
+        "app.features.instagram.provider.exchange_code_for_long_lived_token",
+        exchange,
+    )
+    with Session(engine) as db:
+        membership = db.query(BusinessMembership).filter_by(
+            business_id=business_id,
+        ).one()
+        membership.role = "member"
+        db.commit()
+
+    start = client.get(
+        "/auth/instagram/start", params={"business_id": business_id},
+    )
+    listing = client.get(
+        "/auth/instagram/accounts", params={"business_id": business_id},
+    )
+    callback = client.get(
+        "/auth/instagram/callback",
+        params={"state": "test-state", "code": "fake-code"},
+        follow_redirects=False,
+    )
+
+    assert start.status_code == listing.status_code == callback.status_code == 403
+    exchange.assert_not_awaited()
+    with Session(engine) as db:
+        assert db.query(InstagramOAuthState).count() == 1
+        assert db.get(SocialAccount, page_id).connection_status == "connected"
+
+
+def test_instagram_callback_rechecks_membership_before_saving_credentials(
+        isolated_client, monkeypatch,
+):
+    from app.errors import ApplicationError, ErrorKind
+    from app.features.instagram import service
+
+    client, engine = isolated_client
+    business_id, _ = create_business(engine)
+    callback_state(engine, business_id, "page-a")
+    monkeypatch.setattr(
+        "app.features.instagram.provider.exchange_code_for_long_lived_token",
+        _async_value(("fake-access-token", 3600)),
+    )
+    monkeypatch.setattr(
+        "app.features.instagram.provider.get_granted_permissions",
+        _async_value({
+            "pages_show_list", "pages_read_engagement", "instagram_basic",
+            "instagram_content_publish",
+        }),
+    )
+    monkeypatch.setattr(
+        "app.features.instagram.provider.get_managed_pages",
+        _async_value([{"id": "page-a"}]),
+    )
+    monkeypatch.setattr(
+        "app.features.instagram.provider.get_page_instagram_account",
+        _async_value({
+            "id": "page-a",
+            "instagram_business_account": {"id": "ig-a", "username": "account"},
+        }),
+    )
+    original = service.access.require_permission
+    checks = 0
+
+    def revoke_before_save(db, principal, requested_business, permission, **kwargs):
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            raise ApplicationError(ErrorKind.NOT_FOUND, "Business not found")
+        return original(db, principal, requested_business, permission, **kwargs)
+
+    monkeypatch.setattr(service.access, "require_permission", revoke_before_save)
+    response = client.get(
+        "/auth/instagram/callback",
+        params={"state": "test-state", "code": "fake-code"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 404
+    with Session(engine) as db:
+        assert db.get(InstagramConnection, business_id) is None
 
 
 def test_invalid_and_replayed_callbacks_never_call_meta(isolated_client, monkeypatch):
@@ -296,7 +577,7 @@ def test_invalid_and_replayed_callbacks_never_call_meta(isolated_client, monkeyp
 
 
 def test_missing_permissions_are_not_reported_as_authorized(
-    isolated_client, monkeypatch
+        isolated_client, monkeypatch
 ):
     client, engine = isolated_client
     business_id, _ = create_business(engine)
@@ -350,7 +631,7 @@ def test_missing_permissions_are_not_reported_as_authorized(
 
 
 def test_discovery_uses_only_the_businesss_authorized_page(
-    isolated_client, monkeypatch
+        isolated_client, monkeypatch
 ):
     client, engine = isolated_client
     business_id, _ = create_business(engine)
@@ -415,6 +696,104 @@ def test_discovery_uses_only_the_businesss_authorized_page(
         account_lookup.assert_awaited_once_with("fake-access-token", "page-a")
 
 
+def test_page_list_missing_authorized_page_does_not_fall_back_to_another_page(
+        isolated_client, monkeypatch,
+):
+    client, engine = isolated_client
+    business_id, _ = create_business(engine, suffix="missing")
+    callback_state(engine, business_id, "page-missing")
+    monkeypatch.setattr(
+        "app.features.instagram.provider.exchange_code_for_long_lived_token",
+        _async_value(("fake-access-token", 3600)),
+    )
+    monkeypatch.setattr(
+        "app.features.instagram.provider.get_granted_permissions",
+        _async_value({
+            "pages_show_list", "pages_read_engagement", "instagram_basic",
+            "instagram_content_publish",
+        }),
+    )
+    managed_pages = AsyncMock(return_value=[{"id": "unrelated-page"}])
+    monkeypatch.setattr(
+        "app.features.instagram.provider.get_managed_pages",
+        managed_pages,
+    )
+    account_lookup = AsyncMock()
+    monkeypatch.setattr(
+        "app.features.instagram.provider.get_page_instagram_account",
+        account_lookup,
+    )
+
+    callback = client.get(
+        "/auth/instagram/callback",
+        params={"state": "test-state", "code": "private-code"},
+        follow_redirects=False,
+    )
+
+    assert callback.status_code == 303
+    assert callback.headers["location"].endswith(
+        "#instagram_result=discovery_error"
+    )
+    account_lookup.assert_not_awaited()
+    status = client.get(
+        "/auth/instagram/accounts",
+        params={"business_id": business_id},
+    ).json()
+    assert status["status"] == "discovery_error"
+    assert status["facebook_page_id"] == "page-missing"
+    managed_pages.assert_awaited_once_with("fake-access-token")
+
+
+def test_non_expiring_token_is_saved_without_invented_expiry(
+        isolated_client, monkeypatch,
+):
+    client, engine = isolated_client
+    business_id, _ = create_business(engine)
+    callback_state(engine, business_id, "page-a")
+    monkeypatch.setattr(
+        "app.features.instagram.provider.exchange_code_for_long_lived_token",
+        _async_value(("fake-access-token", None)),
+    )
+    monkeypatch.setattr(
+        "app.features.instagram.provider.get_granted_permissions",
+        _async_value({
+            "pages_show_list", "pages_read_engagement", "instagram_basic",
+            "instagram_content_publish",
+        }),
+    )
+    monkeypatch.setattr(
+        "app.features.instagram.provider.get_managed_pages",
+        _async_value([{"id": "page-a", "name": "Business Page"}]),
+    )
+    monkeypatch.setattr(
+        "app.features.instagram.provider.get_page_instagram_account",
+        _async_value({
+            "id": "page-a",
+            "instagram_business_account": {
+                "id": "ig-a",
+                "username": "business-account",
+            },
+        }),
+    )
+    monkeypatch.setattr(
+        "app.features.instagram.service.encrypt_token",
+        lambda token: f"encrypted:{token}",
+    )
+
+    response = client.get(
+        "/auth/instagram/callback",
+        params={"state": "test-state", "code": "fake-code"},
+        follow_redirects=False,
+    )
+
+    assert response.headers["location"].endswith(
+        "#instagram_result=connected_and_authorized"
+    )
+    with Session(engine) as db:
+        saved = db.get(InstagramConnection, business_id)
+        assert saved.token_expires_at is None
+
+
 def test_wrong_page_account_relationship_is_rejected(isolated_client, monkeypatch):
     client, engine = isolated_client
     business_id, _ = create_business(engine)
@@ -455,7 +834,7 @@ def test_wrong_page_account_relationship_is_rejected(isolated_client, monkeypatc
 
 
 def test_missing_instagram_account_is_reported_without_discovery_failure(
-    isolated_client, monkeypatch
+        isolated_client, monkeypatch
 ):
     client, engine = isolated_client
     business_id, _ = create_business(engine)
@@ -483,7 +862,7 @@ def test_missing_instagram_account_is_reported_without_discovery_failure(
 
 
 def test_missing_instagram_username_does_not_reject_account(
-    isolated_client, monkeypatch
+        isolated_client, monkeypatch
 ):
     client, engine = isolated_client
     business_id, _ = create_business(engine)
@@ -518,7 +897,7 @@ def test_missing_instagram_username_does_not_reject_account(
 
 
 def test_page_lookup_must_return_the_authorized_page_id(
-    isolated_client, monkeypatch
+        isolated_client, monkeypatch
 ):
     client, engine = isolated_client
     business_id, _ = create_business(engine)
@@ -551,7 +930,7 @@ def test_page_lookup_must_return_the_authorized_page_id(
 
 
 def test_malformed_page_lookup_response_is_safely_rejected(
-    isolated_client, monkeypatch, caplog
+        isolated_client, monkeypatch, caplog
 ):
     client, engine = isolated_client
     business_id, _ = create_business(engine)
@@ -582,7 +961,7 @@ def test_malformed_page_lookup_response_is_safely_rejected(
 
 
 def test_page_lookup_meta_error_is_logged_without_sensitive_data(
-    isolated_client, monkeypatch, caplog
+        isolated_client, monkeypatch, caplog
 ):
     from app.features.instagram.provider import MetaAPIError
 
@@ -619,7 +998,7 @@ def test_page_lookup_meta_error_is_logged_without_sensitive_data(
 
 
 def test_provider_uses_user_token_for_page_listing_and_separate_page_lookup(
-    monkeypatch,
+        monkeypatch,
 ):
     from app.features.instagram import provider
 
@@ -678,6 +1057,60 @@ def test_provider_uses_user_token_for_page_listing_and_separate_page_lookup(
     assert calls[1][1]["fields"] == "id,instagram_business_account{id,username}"
     assert calls[1][2]["Authorization"].startswith("Bearer ")
     assert calls[1][2]["Authorization"].endswith("test-user-token")
+
+
+def test_provider_follows_page_listing_cursor(monkeypatch):
+    from app.features.instagram import provider
+
+    calls = []
+    responses = [
+        {
+            "data": [{"id": "unrelated-page"}],
+            "paging": {
+                "cursors": {"after": "cursor-two"},
+                "next": "https://graph.facebook.com/next-page",
+            },
+        },
+        {"data": [{"id": "authorized-page"}]},
+    ]
+
+    class FakeResponse:
+        is_error = False
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def json(self):
+            return self.payload
+
+    class FakeClient:
+        def __init__(self, timeout):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, *, params=None, headers=None):
+            calls.append((url, params, headers))
+            return FakeResponse(responses.pop(0))
+
+    monkeypatch.setattr(provider.httpx, "AsyncClient", FakeClient)
+
+    pages = asyncio.run(provider.get_managed_pages("test-user-token"))
+
+    assert [page["id"] for page in pages] == [
+        "unrelated-page",
+        "authorized-page",
+    ]
+    assert calls[0][1] == {"fields": "id,name", "limit": 100}
+    assert calls[1][1] == {
+        "fields": "id,name",
+        "limit": 100,
+        "after": "cursor-two",
+    }
 
 
 def test_provider_rejects_malformed_page_and_page_lookup_responses(monkeypatch):
@@ -771,7 +1204,7 @@ def test_provider_preserves_meta_error_details_without_response_body(monkeypatch
     ],
 )
 def test_short_lived_token_response_validation(
-    monkeypatch, short_payload, expected_reason,
+        monkeypatch, short_payload, expected_reason,
 ):
     from app.features.instagram.provider import TokenExchangeError
 
@@ -789,37 +1222,34 @@ def test_short_lived_token_response_validation(
         ([], "long_token_invalid_response"),
         ({}, "long_token_missing_access_token"),
         (
-            {"access_token": 123, "expires_in": 3600},
-            "long_token_invalid_access_token_type",
+                {"access_token": 123, "expires_in": 3600},
+                "long_token_invalid_access_token_type",
         ),
         (
-            {"access_token": "", "expires_in": 3600},
-            "long_token_invalid_access_token_value",
+                {"access_token": "", "expires_in": 3600},
+                "long_token_invalid_access_token_value",
+        ),
+
+        (
+                {"access_token": "long-token", "expires_in": "3600"},
+                "long_token_invalid_expires_in_type",
         ),
         (
-            {"access_token": "long-token"},
-            "long_token_missing_expires_in",
+                {"access_token": "long-token", "expires_in": True},
+                "long_token_invalid_expires_in_type",
         ),
         (
-            {"access_token": "long-token", "expires_in": "3600"},
-            "long_token_invalid_expires_in_type",
+                {"access_token": "long-token", "expires_in": 0},
+                "long_token_invalid_expires_in_value",
         ),
         (
-            {"access_token": "long-token", "expires_in": True},
-            "long_token_invalid_expires_in_type",
-        ),
-        (
-            {"access_token": "long-token", "expires_in": 0},
-            "long_token_invalid_expires_in_value",
-        ),
-        (
-            {"access_token": "long-token", "expires_in": -1},
-            "long_token_invalid_expires_in_value",
+                {"access_token": "long-token", "expires_in": -1},
+                "long_token_invalid_expires_in_value",
         ),
     ],
 )
 def test_long_lived_token_response_validation(
-    monkeypatch, long_payload, expected_reason,
+        monkeypatch, long_payload, expected_reason,
 ):
     from app.features.instagram.provider import TokenExchangeError
 
@@ -831,6 +1261,252 @@ def test_long_lived_token_response_validation(
             )
         )
     assert error.value.reason_code == expected_reason
+
+
+def test_missing_expiration_uses_debug_token(monkeypatch):
+    from app.features.instagram import provider
+
+    async def fake_expiration(token):
+        assert token == "long-token"
+        return 5_184_000
+
+    monkeypatch.setattr(
+        provider,
+        "get_token_expiration",
+        fake_expiration,
+    )
+
+    result = asyncio.run(
+        _exchange_token_responses(
+            monkeypatch,
+            [
+                {"access_token": "short-token"},
+                {"access_token": "long-token"},
+            ],
+        )
+    )
+
+    assert result == ("long-token", 5_184_000)
+
+
+def test_missing_expiration_preserves_non_expiring_metadata(monkeypatch):
+    from app.features.instagram import provider
+
+    async def no_expiration(_token):
+        return None
+
+    monkeypatch.setattr(provider, "get_token_expiration", no_expiration)
+
+    result = asyncio.run(
+        _exchange_token_responses(
+            monkeypatch,
+            [
+                {"access_token": "short-token"},
+                {"access_token": "long-token"},
+            ],
+        )
+    )
+
+    assert result == ("long-token", None)
+
+
+def _mock_debug_token_client(monkeypatch, payload, *, is_error=False):
+    from app.features.instagram import provider
+
+    calls = []
+
+    class FakeResponse:
+        def __init__(self):
+            self.is_error = is_error
+            self.status_code = 400 if is_error else 200
+
+        def json(self):
+            if isinstance(payload, Exception):
+                raise payload
+            return payload
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.response = FakeResponse()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, *, params, headers):
+            calls.append((url, params, headers))
+            return self.response
+
+    monkeypatch.setattr(provider.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setenv("FACEBOOK_APP_ID", "test-app-id")
+    monkeypatch.setenv("FACEBOOK_APP_SECRET", "test-app-secret")
+    return calls
+
+
+def test_debug_token_uses_app_credentials_in_authorization_header(monkeypatch):
+    from app.features.instagram import provider
+
+    expires_at = int(datetime.now(timezone.utc).timestamp()) + 3600
+    calls = _mock_debug_token_client(
+        monkeypatch,
+        {
+            "data": {
+                "is_valid": True,
+                "app_id": "test-app-id",
+                "expires_at": expires_at,
+            },
+        },
+    )
+
+    remaining = asyncio.run(
+        provider.get_token_expiration("private-input-token")
+    )
+
+    assert remaining is not None
+    assert 3598 <= remaining <= 3600
+    assert calls == [
+        (
+            f"{provider.GRAPH_API_URL}/debug_token",
+            {"input_token": "private-input-token"},
+            {"Authorization": "Bearer test-app-id|test-app-secret"},
+        ),
+    ]
+
+
+def test_debug_token_preserves_explicit_non_expiring_metadata(monkeypatch):
+    from app.features.instagram import provider
+
+    _mock_debug_token_client(
+        monkeypatch,
+        {
+            "data": {
+                "is_valid": True,
+                "app_id": "test-app-id",
+                "expires_at": 0,
+            },
+        },
+    )
+
+    assert asyncio.run(
+        provider.get_token_expiration("private-input-token")
+    ) is None
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_reason"),
+    [
+        (ValueError("private response"), "debug_token_invalid_json"),
+        (TypeError("private response"), "debug_token_invalid_json"),
+        ([], "debug_token_invalid_response"),
+        ({}, "debug_token_missing_data"),
+        ({"data": []}, "debug_token_missing_data"),
+        (
+            {"data": {"is_valid": False, "app_id": "test-app-id"}},
+            "debug_token_invalid_token",
+        ),
+        (
+            {"data": {"is_valid": True, "app_id": "another-app", "expires_at": 9}},
+            "debug_token_app_mismatch",
+        ),
+        (
+            {"data": {"is_valid": True, "app_id": 123, "expires_at": 9}},
+            "debug_token_app_mismatch",
+        ),
+        (
+            {"data": {"is_valid": True, "app_id": "test-app-id"}},
+            "debug_token_invalid_expiration",
+        ),
+        (
+            {
+                "data": {
+                    "is_valid": True,
+                    "app_id": "test-app-id",
+                    "expires_at": "3600",
+                },
+            },
+            "debug_token_invalid_expiration",
+        ),
+        (
+            {
+                "data": {
+                    "is_valid": True,
+                    "app_id": "test-app-id",
+                    "expires_at": True,
+                },
+            },
+            "debug_token_invalid_expiration",
+        ),
+        (
+            {
+                "data": {
+                    "is_valid": True,
+                    "app_id": "test-app-id",
+                    "expires_at": 1,
+                },
+            },
+            "debug_token_expired",
+        ),
+    ],
+)
+def test_debug_token_rejects_invalid_or_expired_metadata(
+    monkeypatch, payload, expected_reason,
+):
+    from app.features.instagram import provider
+
+    _mock_debug_token_client(monkeypatch, payload)
+
+    with pytest.raises(provider.TokenExchangeError) as error:
+        asyncio.run(provider.get_token_expiration("private-input-token"))
+
+    assert error.value.reason_code == expected_reason
+    assert "private-input-token" not in str(error.value)
+    assert "private response" not in str(error.value)
+
+
+def test_debug_token_maps_meta_http_error_without_response_body(monkeypatch):
+    from app.features.instagram import provider
+
+    _mock_debug_token_client(
+        monkeypatch,
+        {"error": {"code": 190, "message": "private provider detail"}},
+        is_error=True,
+    )
+
+    with pytest.raises(provider.MetaAPIError) as error:
+        asyncio.run(provider.get_token_expiration("private-input-token"))
+
+    assert error.value.status_code == 400
+    assert error.value.error_code == 190
+    assert "private provider detail" not in str(error.value)
+    assert "private-input-token" not in str(error.value)
+
+
+def test_debug_token_transport_failure_is_propagated(monkeypatch):
+    from app.features.instagram import provider
+
+    class FailingClient:
+        def __init__(self, timeout):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, *, params, headers):
+            raise provider.httpx.ConnectError("transport unavailable")
+
+    monkeypatch.setattr(provider.httpx, "AsyncClient", FailingClient)
+    monkeypatch.setenv("FACEBOOK_APP_ID", "test-app-id")
+    monkeypatch.setenv("FACEBOOK_APP_SECRET", "test-app-secret")
+
+    with pytest.raises(provider.httpx.ConnectError) as error:
+        asyncio.run(provider.get_token_expiration("private-input-token"))
+
+    assert "transport unavailable" in str(error.value)
 
 
 def test_successful_facebook_token_exchange_preserves_parameters(monkeypatch):
@@ -895,7 +1571,7 @@ def test_successful_facebook_token_exchange_preserves_parameters(monkeypatch):
 
 
 def test_token_exchange_logs_reason_without_sensitive_values(
-    isolated_client, monkeypatch, caplog,
+        isolated_client, monkeypatch, caplog,
 ):
     from app.features.instagram.provider import TokenExchangeError
 
@@ -922,6 +1598,46 @@ def test_token_exchange_logs_reason_without_sensitive_values(
     assert "private response" not in caplog.text
 
 
+def test_token_exchange_transport_failure_logs_only_exception_type(
+        isolated_client, monkeypatch, caplog,
+):
+    from app.features.instagram import provider
+
+    client, engine = isolated_client
+    business_id, _ = create_business(engine)
+    callback_state(engine, business_id, "page-a", state="private-state")
+
+    async def fail_exchange(_code):
+        raise provider.httpx.ConnectError(
+            "private-input-token test-app-secret private-code"
+        )
+
+    monkeypatch.setattr(
+        "app.features.instagram.provider.exchange_code_for_long_lived_token",
+        fail_exchange,
+    )
+    with caplog.at_level(
+            logging.WARNING, logger="app.features.instagram.service",
+    ):
+        response = client.get(
+            "/auth/instagram/callback",
+            params={"state": "private-state", "code": "private-code"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert "ConnectError" in caplog.text
+    assert "private-input-token" not in caplog.text
+    assert "test-app-secret" not in caplog.text
+    assert "private-code" not in caplog.text
+
+    with Session(engine) as db:
+        connection = db.query(InstagramConnection).filter_by(
+            business_id=business_id,
+        ).one()
+        assert connection.status == "discovery_error"
+
+
 def test_accounts_existing_business_preserves_unconnected_response(isolated_client):
     client, engine = isolated_client
     business_id, _ = create_business(engine)
@@ -946,7 +1662,7 @@ def test_accounts_existing_business_preserves_unconnected_response(isolated_clie
 
 
 def test_failed_reauthorization_preserves_authorized_connection_without_commit(
-    isolated_client, monkeypatch,
+        isolated_client, monkeypatch,
 ):
     from app.features.instagram.service import _save_status
 
@@ -962,7 +1678,10 @@ def test_failed_reauthorization_preserves_authorized_connection_without_commit(
         db.commit()
     with Session(engine) as db:
         monkeypatch.setattr(db, "commit", lambda: pytest.fail("No downgrade commit"))
-        _save_status(db, business_id, status="discovery_error")
+        _save_status(
+            db, business_id, grant_test_owner(db, [business_id]),
+            status="discovery_error",
+        )
     with Session(engine) as db:
         connection = db.get(InstagramConnection, business_id)
         assert connection.status == "connected_and_authorized"
@@ -982,15 +1701,15 @@ def test_accounts_missing_business_preserves_not_found_response(isolated_client)
 
 
 def test_connection_service_raises_typed_error_for_missing_business(isolated_client):
-    from app.features.instagram.service import (
-        BusinessNotFoundError,
-        connection_response,
-    )
+    from app.errors import ApplicationError, ErrorKind
+    from app.features.instagram.service import connection_response
 
     _, engine = isolated_client
     with Session(engine) as db:
-        with pytest.raises(BusinessNotFoundError):
-            connection_response(db, "missing-business")
+        principal = grant_test_owner(db)
+        with pytest.raises(ApplicationError) as raised:
+            connection_response(db, "missing-business", principal)
+        assert raised.value.kind is ErrorKind.NOT_FOUND
 
 
 def test_saved_connection_is_not_ready_after_business_page_changes(isolated_client):
@@ -1022,7 +1741,7 @@ def test_saved_connection_is_not_ready_after_business_page_changes(isolated_clie
 
 
 def test_business_isolation_and_facebook_account_survive_instagram_reconnect(
-    isolated_client, monkeypatch
+        isolated_client, monkeypatch
 ):
     client, engine = isolated_client
     business_a, _ = create_business(engine, "a")
@@ -1160,3 +1879,169 @@ def _mock_authorized_user(monkeypatch):
         "app.features.instagram.service.encrypt_token",
         lambda token: f"encrypted:{token}",
     )
+
+
+def test_instagram_disconnect_is_business_scoped_and_clears_credentials(
+        isolated_client,
+):
+    client, engine = isolated_client
+    business_a = client.post(
+        "/businesses",
+        json={"name": "Instagram business A"},
+    ).json()["id"]
+    with Session(engine) as db:
+        business_b = Business(name="Instagram business B")
+        db.add(business_b)
+        db.flush()
+        db.add_all([
+            InstagramConnection(
+                business_id=business_a,
+                instagram_account_id="ig-a",
+                username="account-a",
+                facebook_page_id="page-a",
+                encrypted_access_token="encrypted:secret-a",
+                granted_permissions=["instagram_basic"],
+                status="connected_and_authorized",
+            ),
+            InstagramConnection(
+                business_id=business_b.id,
+                instagram_account_id="ig-b",
+                username="account-b",
+                facebook_page_id="page-b",
+                encrypted_access_token="encrypted:secret-b",
+                granted_permissions=["instagram_basic"],
+                status="connected_and_authorized",
+            ),
+        ])
+        business_b_id = business_b.id
+        db.commit()
+
+    cross_tenant = client.delete(
+        "/auth/instagram/accounts",
+        params={"business_id": business_b_id},
+    )
+    disconnected = client.delete(
+        "/auth/instagram/accounts",
+        params={"business_id": business_a},
+    )
+
+    assert cross_tenant.status_code == 404
+    assert disconnected.status_code == 200
+    assert disconnected.json() == {"status": "not_connected"}
+    with Session(engine) as db:
+        assert db.get(InstagramConnection, business_a).encrypted_access_token is None
+        assert db.get(InstagramConnection, business_a).status == "not_connected"
+        assert db.get(InstagramConnection, business_b_id).encrypted_access_token == (
+            "encrypted:secret-b"
+        )
+
+
+@pytest.mark.parametrize(
+    "environment, diagnostic_runs",
+    [("development", True), ("production", False)],
+)
+def test_callback_diagnostic_is_dev_only_and_does_not_change_authorization(
+        isolated_client, monkeypatch, caplog, environment, diagnostic_runs,
+):
+    import logging
+
+    client, engine = isolated_client
+    business_id, page_record_id = create_business(
+        engine,
+        suffix=f"diagnostic-{environment}",
+    )
+    with Session(engine) as db:
+        db.get(SocialAccount, page_record_id).platform_account_id = (
+            "1122820307587663"
+        )
+        db.commit()
+    callback_state(
+        engine,
+        business_id,
+        "1122820307587663",
+        state="private-state-value",
+    )
+    callback_token = "private-callback-token"
+    callback_code = "private-authorization-code"
+    app_secret = "private-app-secret"
+    monkeypatch.setenv("INSTAGRAM_OAUTH_DIAGNOSTICS_ENABLED", "true")
+    monkeypatch.setenv("AI_MARKETING_STUDIO_ENV", environment)
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+psycopg://ai_marketing_studio_dev:local-only@localhost:5432/"
+        "ai_marketing_studio_dev",
+    )
+    monkeypatch.setenv("FACEBOOK_APP_SECRET", app_secret)
+    monkeypatch.setattr(
+        "app.features.instagram.provider.exchange_code_for_long_lived_token",
+        _async_value((callback_token, 3600)),
+    )
+    monkeypatch.setattr(
+        "app.features.instagram.provider.get_granted_permissions",
+        _async_value({
+            "pages_show_list",
+            "pages_read_engagement",
+            "instagram_basic",
+            "instagram_content_publish",
+        }),
+    )
+    monkeypatch.setattr(
+        "app.features.instagram.provider.get_managed_pages",
+        _async_value([{"id": "unrelated-page"}]),
+    )
+    account_lookup = AsyncMock()
+    monkeypatch.setattr(
+        "app.features.instagram.provider.get_page_instagram_account",
+        account_lookup,
+    )
+    diagnostic_result = {
+        "token_type": "USER",
+        "token_valid": True,
+        "app_id_match": True,
+        "debug_scopes": ["instagram_basic"],
+        "permissions": [{"name": "instagram_basic", "status": "granted"}],
+        "page_ids": ["998877"],
+        "page_tasks": {"998877": ["MANAGE"]},
+        "page_result_count": 1,
+        "authorized_page_id": "1122820307587663",
+        "authorized_page_match": False,
+        "page_list_complete": True,
+        "errors": [],
+    }
+    diagnostic_call = AsyncMock(return_value=diagnostic_result)
+    monkeypatch.setattr(
+        "app.features.instagram.diagnostics.collect_oauth_diagnostics",
+        diagnostic_call,
+    )
+    caplog.set_level(logging.INFO, logger="app.features.instagram.service")
+
+    callback = client.get(
+        "/auth/instagram/callback",
+        params={"state": "private-state-value", "code": callback_code},
+        follow_redirects=False,
+    )
+
+    assert callback.status_code == 303
+    assert callback.headers["location"].endswith(
+        "#instagram_result=discovery_error"
+    )
+    if diagnostic_runs:
+        diagnostic_call.assert_awaited_once_with(
+            callback_token,
+            "1122820307587663",
+        )
+    else:
+        diagnostic_call.assert_not_awaited()
+    account_lookup.assert_not_awaited()
+    with Session(engine) as db:
+        saved = db.get(InstagramConnection, business_id)
+        assert saved.status == "discovery_error"
+        assert saved.encrypted_access_token is None
+
+    for sensitive_value in (
+        callback_token,
+        callback_code,
+        "private-state-value",
+        app_secret,
+    ):
+        assert sensitive_value not in caplog.text

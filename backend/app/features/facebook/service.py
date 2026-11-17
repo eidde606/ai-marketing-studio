@@ -3,12 +3,17 @@ import hashlib
 import json
 import os
 import secrets
+import base64
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit
 
 import httpx
 from sqlalchemy.orm import Session
 
 from app.errors import ApplicationError, ErrorKind
+from app.features.access import service as access
+from app.features.access.permissions import Permission
+from app.features.access.principal import AuthenticatedPrincipal
 from app.models import FacebookOAuthState, SocialAccount
 from app.token_service import decrypt_token, encrypt_token
 from app.transactions import Transactions
@@ -40,23 +45,31 @@ async def page_info() -> dict:
 
 def start_connection(
     business_id: str,
-    user_id: str,
+    principal: AuthenticatedPrincipal,
     *,
     db: Session,
+    frontend_origin: str | None = None,
 ) -> str:
-    business = repository.get_business(db, business_id)
-    if business is None:
-        raise ApplicationError(ErrorKind.NOT_FOUND, "Business not found")
+    context = access.require_permission(
+        db, principal, business_id, Permission.MANAGE_CONNECTIONS, lock=True,
+    )
 
-    state = secrets.token_urlsafe(32)
+    state = _encode_oauth_state(frontend_origin or _configured_frontend_origin())
     state_hash = hashlib.sha256(state.encode("utf-8")).hexdigest()
-    login_url = provider.get_facebook_login_url(state)
-    repository.add_oauth_state(
+    try:
+        login_url = provider.get_facebook_login_url(state)
+    except RuntimeError as exc:
+        raise ApplicationError(
+            ErrorKind.UNAVAILABLE,
+            "Facebook connection is not configured",
+        ) from exc
+    repository.add_oauth_state_scoped(
         db,
+        context,
         FacebookOAuthState(
             state_hash=state_hash,
-            business_id=business.id,
-            user_id=user_id,
+            business_id=business_id,
+            user_id=principal.subject,
             expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
         ),
     )
@@ -72,10 +85,20 @@ async def complete_callback(
     db: Session,
 ) -> str:
     state_hash = hashlib.sha256(state.encode("utf-8")).hexdigest()
-    authorization = repository.consume_oauth_state(
-        db,
-        state_hash,
-        datetime.now(timezone.utc),
+    now = datetime.now(timezone.utc)
+    identity = repository.oauth_state_identity(db, state_hash, now)
+    if identity is None:
+        raise ApplicationError(
+            ErrorKind.INVALID_INPUT,
+            "Invalid, expired, or previously used authorization",
+        )
+    business_id, initiator_id = identity
+    principal = access.resolve_oauth_initiator(db, initiator_id)
+    context = access.require_permission(
+        db, principal, business_id, Permission.MANAGE_CONNECTIONS,
+    )
+    authorization = repository.consume_oauth_state_scoped(
+        db, context, state_hash, initiator_id, now,
     )
     Transactions(db).commit()
 
@@ -117,12 +140,16 @@ async def complete_callback(
     selection_hash = hashlib.sha256(
         selection_token.encode("utf-8"),
     ).hexdigest()
-    repository.add_pending_selection(
+    context = access.require_permission(
+        db, principal, business_id, Permission.MANAGE_CONNECTIONS, lock=True,
+    )
+    repository.add_oauth_state_scoped(
         db,
+        context,
         FacebookOAuthState(
             state_hash=hashlib.sha256(secrets.token_bytes(32)).hexdigest(),
-            business_id=authorization[0],
-            user_id=authorization[1],
+            business_id=business_id,
+            user_id=initiator_id,
             expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
             encrypted_pages=encrypted_pages,
             selection_token_hash=selection_hash,
@@ -132,18 +159,45 @@ async def complete_callback(
     return selection_token
 
 
+def callback_frontend_origin(state: str, *, db: Session) -> tuple[str, str] | None:
+    state_hash = hashlib.sha256(state.encode("utf-8")).hexdigest()
+    identity = repository.oauth_state_identity(
+        db,
+        state_hash,
+        datetime.now(timezone.utc),
+    )
+    if identity is None:
+        return None
+    business_id, _ = identity
+    return business_id, _decode_oauth_state_origin(state) or _configured_frontend_origin()
+
+
 def handoff_pages(
     token: str,
-    user_id: str,
+    requested_business_id: str,
+    principal: AuthenticatedPrincipal,
     *,
     db: Session,
 ) -> dict:
     token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    pending = repository.get_pending_handoff(
-        db,
-        token_hash,
-        user_id,
-        datetime.now(timezone.utc),
+    now = datetime.now(timezone.utc)
+    identity = repository.pending_selection_identity(db, token_hash, now)
+    if identity is None:
+        raise ApplicationError(
+            ErrorKind.INVALID_INPUT,
+            "Invalid or expired Facebook handoff",
+        )
+    business_id, user_id = identity
+    if user_id != principal.subject or business_id != requested_business_id:
+        raise ApplicationError(
+            ErrorKind.FORBIDDEN,
+            "Facebook handoff is not available for this account or business",
+        )
+    context = access.require_permission(
+        db, principal, business_id, Permission.MANAGE_CONNECTIONS,
+    )
+    pending = repository.get_pending_selection_scoped(
+        db, context, token_hash, principal.subject, now,
     )
     if pending is None or not pending.encrypted_pages:
         raise ApplicationError(
@@ -163,8 +217,9 @@ def handoff_pages(
 
 def select_page(
     selection_token: str,
+    requested_business_id: str,
     page_id: str,
-    user_id: str,
+    principal: AuthenticatedPrincipal,
     *,
     db: Session,
 ) -> dict[str, str]:
@@ -172,11 +227,23 @@ def select_page(
     selection_hash = hashlib.sha256(
         selection_token.encode("utf-8"),
     ).hexdigest()
-    pending = repository.lock_pending_selection(
-        db,
-        selection_hash,
-        user_id,
-        now,
+    identity = repository.pending_selection_identity(db, selection_hash, now)
+    if identity is None:
+        raise ApplicationError(
+            ErrorKind.INVALID_INPUT,
+            "Invalid or expired Page selection",
+        )
+    business_id, user_id = identity
+    if user_id != principal.subject or business_id != requested_business_id:
+        raise ApplicationError(
+            ErrorKind.FORBIDDEN,
+            "Facebook Page selection is not available for this account or business",
+        )
+    context = access.require_permission(
+        db, principal, business_id, Permission.MANAGE_CONNECTIONS, lock=True,
+    )
+    pending = repository.get_pending_selection_scoped(
+        db, context, selection_hash, principal.subject, now, lock=True,
     )
     if pending is None or not pending.encrypted_pages:
         raise ApplicationError(
@@ -202,42 +269,100 @@ def select_page(
             "Facebook did not provide a Page access token",
         )
 
-    account = repository.get_page_account(
-        db,
-        pending.business_id,
-        selected_page["id"],
-    )
+    account = repository.get_page_account_scoped(db, context, selected_page["id"])
     if account is None:
-        account = SocialAccount(
-            business_id=pending.business_id,
+        repository.add_account_scoped(db, context, SocialAccount(
+            business_id=business_id,
             platform="facebook",
             platform_account_id=selected_page["id"],
             account_name=selected_page["name"],
             encrypted_access_token=encrypt_token(page_token),
             connection_status="connected",
-        )
-        repository.add_social_account(db, account)
+        ))
     else:
-        account.account_name = selected_page["name"]
-        account.encrypted_access_token = encrypt_token(page_token)
-        account.connection_status = "connected"
+        repository.update_account_scoped(db, context, account.id, {
+            "account_name": selected_page["name"],
+            "encrypted_access_token": encrypt_token(page_token),
+            "connection_status": "connected",
+        })
 
     result = {
         "status": "connected",
-        "business_id": pending.business_id,
+        "business_id": business_id,
         "page_id": selected_page["id"],
         "page_name": selected_page["name"],
     }
-    repository.delete_pending_selection(db, pending)
+    repository.delete_pending_selection_scoped(
+        db, context, selection_hash, principal.subject,
+    )
     Transactions(db).commit()
     return result
 
 
-def list_accounts(business_id: str, *, db: Session) -> dict:
-    if repository.get_business(db, business_id) is None:
-        raise ApplicationError(ErrorKind.NOT_FOUND, "Business not found")
+def _configured_frontend_origin() -> str:
+    frontend_url = os.getenv("FRONTEND_BASE_URL", "").rstrip("/")
+    parsed = urlsplit(frontend_url)
+    if (
+        parsed.scheme not in ("http", "https")
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise RuntimeError("Invalid frontend URL configuration")
+    if parsed.scheme == "http" and parsed.hostname not in ("localhost", "127.0.0.1"):
+        raise RuntimeError("Production frontend must use HTTPS")
+    return f"{parsed.scheme}://{parsed.netloc}"
 
-    accounts = repository.list_page_accounts(db, business_id)
+
+def _encode_oauth_state(frontend_origin: str) -> str:
+    encoded_origin = base64.urlsafe_b64encode(
+        frontend_origin.encode("utf-8"),
+    ).decode("ascii").rstrip("=")
+    return f"v1.{encoded_origin}.{secrets.token_urlsafe(32)}"
+
+
+def _decode_oauth_state_origin(state: str) -> str | None:
+    parts = state.split(".", 2)
+    if len(parts) != 3 or parts[0] != "v1" or not parts[2]:
+        return None
+    try:
+        encoded_origin = parts[1] + "=" * (-len(parts[1]) % 4)
+        origin = base64.urlsafe_b64decode(encoded_origin).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return None
+    parsed = urlsplit(origin)
+    if (
+        parsed.scheme not in ("http", "https")
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+    ):
+        return None
+    return origin
+
+
+def list_accounts(
+    business_id: str,
+    *,
+    db: Session,
+    principal: AuthenticatedPrincipal,
+) -> dict:
+    context = access.require_permission(
+        db, principal, business_id, Permission.MANAGE_CONNECTIONS,
+    )
+    accounts = []
+    while True:
+        page = repository.list_accounts_scoped(
+            db, context, limit=100, offset=len(accounts),
+        )
+        accounts.extend(page)
+        if len(page) < 100:
+            break
     return {
         "accounts": [
             {
@@ -245,8 +370,47 @@ def list_accounts(business_id: str, *, db: Session) -> dict:
                 "platform": account.platform,
                 "page_id": account.platform_account_id,
                 "page_name": account.account_name,
-                "connection_status": account.connection_status,
+                "connection_status": _account_status(account),
             }
             for account in accounts
         ]
     }
+
+
+def disconnect_account(
+    account_id: str,
+    business_id: str,
+    *,
+    db: Session,
+    principal: AuthenticatedPrincipal,
+) -> dict[str, str]:
+    context = access.require_permission(
+        db, principal, business_id, Permission.MANAGE_CONNECTIONS,
+        lock=True,
+    )
+    account = repository.get_account_scoped(db, context, account_id)
+    if account is None:
+        raise ApplicationError(ErrorKind.NOT_FOUND, "Facebook Page not found")
+    if not repository.update_account_scoped(db, context, account_id, {
+        "encrypted_access_token": encrypt_token(""),
+        "encrypted_refresh_token": None,
+        "token_expires_at": None,
+        "connection_status": "disconnected",
+    }):
+        raise ApplicationError(ErrorKind.NOT_FOUND, "Facebook Page not found")
+    Transactions(db).commit()
+    return {"status": "disconnected"}
+
+
+def _account_status(account: SocialAccount) -> str:
+    expires_at = account.token_expires_at
+    if expires_at is None:
+        return account.connection_status
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if (
+        expires_at <= datetime.now(timezone.utc)
+        and account.connection_status == "connected"
+    ):
+        return "reauthorization_required"
+    return account.connection_status

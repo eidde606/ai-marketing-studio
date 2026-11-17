@@ -2,6 +2,7 @@ from datetime import date, datetime, timezone
 from uuid import uuid4
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
@@ -20,6 +21,264 @@ class Base(DeclarativeBase):
     pass
 
 
+class User(Base):
+    """Local identity; creating a user grants no business access."""
+
+    __tablename__ = "app_users"
+    __table_args__ = (
+        UniqueConstraint("auth_issuer", "auth_subject", name="uq_app_users_identity"),
+        CheckConstraint("status IN ('active', 'disabled')", name="ck_app_users_status"),
+        CheckConstraint(
+            "length(trim(auth_issuer)) > 0 AND length(trim(auth_subject)) > 0",
+            name="ck_app_users_identity_not_empty",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    auth_issuer: Mapped[str] = mapped_column(String(512), nullable=False)
+    auth_subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active", server_default="active")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
+class CustomerOrganization(Base):
+    """Durable trial-eligibility owner for one customer account."""
+
+    __tablename__ = "customer_organizations"
+    __table_args__ = (
+        UniqueConstraint("owner_user_id", name="uq_customer_organizations_owner"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    owner_user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("app_users.id"), nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
+class CustomerEntitlement(Base):
+    """Application access state, distinct from payment-provider status."""
+
+    __tablename__ = "customer_entitlements"
+    __table_args__ = (
+        UniqueConstraint("organization_id", name="uq_customer_entitlements_organization"),
+        UniqueConstraint("stripe_customer_id", name="uq_customer_entitlements_stripe_customer"),
+        UniqueConstraint("stripe_subscription_id", name="uq_customer_entitlements_stripe_subscription"),
+        CheckConstraint(
+            "status IN ('trialing', 'active', 'past_due', 'canceled', 'expired', 'operator_granted')",
+            name="ck_customer_entitlements_status",
+        ),
+        CheckConstraint(
+            "trial_started_at IS NULL OR trial_expires_at IS NULL OR trial_expires_at > trial_started_at",
+            name="ck_customer_entitlements_trial_dates",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    organization_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("customer_organizations.id"), nullable=False,
+    )
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    trial_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    trial_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    payment_provider_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    stripe_customer_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    stripe_subscription_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    stripe_price_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    stripe_event_created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    current_period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    current_period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancel_at_period_end: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false"),
+    )
+    limits: Mapped[dict[str, int]] = mapped_column(
+        JSON, nullable=False, default=dict, server_default=text("'{}'"),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
+class StripeWebhookEvent(Base):
+    """Durable event-ID ledger; processed atomically with entitlement updates."""
+
+    __tablename__ = "stripe_webhook_events"
+
+    event_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    event_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    processed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
+class AIUsageReservation(Base):
+    """Concurrency-safe, idempotent provider-attempt accounting."""
+
+    __tablename__ = "ai_usage_reservations"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "metric", "idempotency_key",
+            name="uq_ai_usage_organization_metric_key",
+        ),
+        CheckConstraint(
+            "metric IN ('sofia_request', 'leo_generation', 'edian_analysis')",
+            name="ck_ai_usage_reservations_metric",
+        ),
+        CheckConstraint(
+            "status IN ('reserved', 'succeeded', 'failed', 'uncertain')",
+            name="ck_ai_usage_reservations_status",
+        ),
+        Index("ix_ai_usage_reservations_org_metric_status", "organization_id", "metric", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    organization_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("customer_organizations.id"), nullable=False,
+    )
+    business_id: Mapped[str] = mapped_column(String(36), ForeignKey("businesses.id"), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("app_users.id"), nullable=False)
+    metric: Mapped[str] = mapped_column(String(32), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="reserved")
+    result_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
+class EdianAnalysis(Base):
+    """Cached Edian output for one unchanged, tenant-scoped metric snapshot."""
+
+    __tablename__ = "edian_analyses"
+    __table_args__ = (
+        UniqueConstraint(
+            "business_id", "input_fingerprint",
+            name="uq_edian_analyses_business_fingerprint",
+        ),
+        CheckConstraint(
+            "status IN ('processing', 'succeeded', 'failed')",
+            name="ck_edian_analyses_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    business_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("businesses.id"), nullable=False,
+    )
+    input_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="processing")
+    result: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
+class OnboardingProgress(Base):
+    __tablename__ = "onboarding_progress"
+    __table_args__ = (
+        CheckConstraint("current_step BETWEEN 1 AND 6", name="ck_onboarding_progress_step"),
+    )
+
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("app_users.id"), primary_key=True,
+    )
+    business_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("businesses.id"), nullable=True, unique=True,
+    )
+    current_step: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
+    data: Mapped[dict[str, object]] = mapped_column(
+        JSON, nullable=False, default=dict, server_default=text("'{}'"),
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    tutorial_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
+class UserPreferences(Base):
+    __tablename__ = "user_preferences"
+    __table_args__ = (
+        CheckConstraint("interface_language IN ('en', 'es')", name="ck_user_preferences_interface"),
+        CheckConstraint("conversation_language IN ('en', 'es')", name="ck_user_preferences_conversation"),
+    )
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("app_users.id"), primary_key=True)
+    interface_language: Mapped[str] = mapped_column(String(2), default="en", server_default="en")
+    conversation_language: Mapped[str] = mapped_column(String(2), default="en", server_default="en")
+
+
+class BusinessPreferences(Base):
+    __tablename__ = "business_preferences"
+    __table_args__ = (
+        CheckConstraint("marketing_content_language IN ('en', 'es')", name="ck_business_preferences_content"),
+    )
+    business_id: Mapped[str] = mapped_column(String(36), ForeignKey("businesses.id"), primary_key=True)
+    marketing_content_language: Mapped[str] = mapped_column(String(2), default="en", server_default="en")
+
+
+class BusinessMembership(Base):
+    __tablename__ = "business_memberships"
+    __table_args__ = (
+        UniqueConstraint("business_id", "user_id", name="uq_business_memberships_business_user"),
+        CheckConstraint("role IN ('owner', 'admin', 'member')", name="ck_business_memberships_role"),
+        CheckConstraint("status IN ('active', 'suspended', 'revoked')", name="ck_business_memberships_status"),
+        Index("ix_business_memberships_user_status", "user_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    business_id: Mapped[str] = mapped_column(String(36), ForeignKey("businesses.id"), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("app_users.id"), nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active", server_default="active")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
 class Business(Base):
     __tablename__ = "businesses"
 
@@ -27,6 +286,9 @@ class Business(Base):
         String(36),
         primary_key=True,
         default=lambda: str(uuid4()),
+    )
+    customer_organization_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("customer_organizations.id"), nullable=True, index=True,
     )
 
     name: Mapped[str] = mapped_column(String, nullable=False)
@@ -86,6 +348,7 @@ class Campaign(Base):
 
 class Draft(Base):
     __tablename__ = "drafts"
+    marketing_content_language: Mapped[str | None] = mapped_column(String(2), nullable=True)
 
     id: Mapped[str] = mapped_column(
         String(36),
@@ -121,6 +384,28 @@ class Draft(Base):
         nullable=False,
         default="not_published",
         server_default="not_published",
+    )
+
+    instagram_media_id: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
+    instagram_permalink: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
+    instagram_publish_status: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="not_published",
+        server_default="not_published",
+    )
+
+    instagram_published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
     )
 
     tiktok_publish_status: Mapped[str] = mapped_column(
@@ -324,6 +609,50 @@ class HeyGenWebhookDelivery(Base):
     callback_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class HeyGenAssetAccess(Base):
+    """Explicitly shared stock assets or assets assigned to one business."""
+
+    __tablename__ = "heygen_asset_access"
+    __table_args__ = (
+        CheckConstraint(
+            "asset_type IN ('avatar', 'voice')",
+            name="ck_heygen_asset_access_type",
+        ),
+        CheckConstraint(
+            "access_scope IN ('platform_stock', 'business_private')",
+            name="ck_heygen_asset_access_scope",
+        ),
+        CheckConstraint(
+            "(access_scope = 'platform_stock' AND business_id IS NULL "
+            "AND assigned_by_user_id IS NULL) OR "
+            "(access_scope = 'business_private' AND business_id IS NOT NULL "
+            "AND assigned_by_user_id IS NOT NULL)",
+            name="ck_heygen_asset_access_business_scope",
+        ),
+        UniqueConstraint(
+            "asset_type",
+            "provider_asset_id",
+            name="uq_heygen_asset_access_provider_asset",
+        ),
+        Index("ix_heygen_asset_access_business", "business_id", "asset_type"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    asset_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    provider_asset_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    access_scope: Mapped[str] = mapped_column(String(30), nullable=False)
+    business_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("businesses.id"), nullable=True,
+    )
+    assigned_by_user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("app_users.id"), nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        default=lambda: datetime.now(timezone.utc), server_default=text("CURRENT_TIMESTAMP"),
+    )
 
 
 class ImageRevision(Base):
@@ -534,9 +863,10 @@ class InstagramConnection(Base):
 
 
 class Conversation(Base):
-    """A conversation with Sofía for a specific business."""
+    """A conversation with Sebastián for a specific business."""
 
     __tablename__ = "conversations"
+    language: Mapped[str | None] = mapped_column(String(2), nullable=True)
 
     id: Mapped[str] = mapped_column(
         String(36),
@@ -565,7 +895,7 @@ class Conversation(Base):
 
 
 class ConversationMessage(Base):
-    """One message sent by the owner or Sofía."""
+    """One message sent by the owner or Sebastián."""
 
     __tablename__ = "conversation_messages"
 

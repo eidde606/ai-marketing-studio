@@ -59,7 +59,8 @@ def test_draft_create_and_list_contract(isolated_client):
     assert draft["platform"] == "instagram"
     assert draft["media_type"] == "text"
     assert draft["status"] == "pending"
-    assert draft["publish_destinations"] == ["facebook"]
+    assert draft["publish_destinations"] == []
+    assert draft["marketing_content_language"] == "en"
 
     assert client.get(
         "/drafts", params={"business_id": business["id"]},
@@ -185,6 +186,8 @@ def test_deleted_published_drafts_only_appear_in_history(isolated_client):
             facebook_post_id="page-post",
         )
         db.add(draft)
+        from tests.tenancy_fixtures import grant_test_owner
+        grant_test_owner(db, [business.id])
         db.commit()
         engine_business_id = business.id
         draft_id = draft.id

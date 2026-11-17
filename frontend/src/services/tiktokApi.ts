@@ -53,3 +53,21 @@ export async function getConnectedTikTokAccounts(
     await response.json();
   return Array.isArray(data) ? data : data.accounts;
 }
+
+export async function disconnectTikTokAccount(
+  businessId: string,
+  accountId: string,
+): Promise<void> {
+  const token = await getAccessToken();
+  const url = new URL(
+    `${API_BASE_URL}/api/integrations/tiktok/accounts/${encodeURIComponent(accountId)}`,
+  );
+  url.searchParams.set("business_id", businessId);
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    throw new Error("No se pudo desconectar TikTok.");
+  }
+}

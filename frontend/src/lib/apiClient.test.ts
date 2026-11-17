@@ -129,9 +129,16 @@ describe("shared authenticated JSON response client", () => {
 
   it("uses string backend detail and does not retry HTTP failures", async () => {
     fetchMock.mockResolvedValue(
-      new Response('{"detail":"Acceso denegado"}', { status: 403 }),
+      new Response('{"detail":"Acceso denegado"}', {
+        status: 403,
+        headers: { "X-Error-Code": "facebook_permission_required" },
+      }),
     );
-    await expect(apiRequest("/example")).rejects.toThrow("Acceso denegado");
+    const request = apiRequest("/example");
+    await expect(request).rejects.toThrow("Acceso denegado");
+    await request.catch((error) => {
+      expect(error.code).toBe("facebook_permission_required");
+    });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 

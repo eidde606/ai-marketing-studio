@@ -1,4 +1,5 @@
 import { supabase } from "./supabaseClient";
+import { apiRequest } from "../lib/apiClient";
 
 export type ImageStatus = "not_started" | "generating" | "completed" | "failed";
 
@@ -10,9 +11,14 @@ export type Draft = {
   title: string;
   caption: string;
   platform: string;
-  publish_destinations: ("facebook" | "tiktok")[];
+  publish_destinations: ("facebook" | "instagram" | "tiktok")[];
   status: string;
   facebook_post_id: string | null;
+  instagram_media_id?: string | null;
+  instagram_permalink?: string | null;
+  instagram_publish_status?:
+    "not_published" | "publishing" | "published" | "failed" | "needs_review";
+  instagram_published_at?: string | null;
   tiktok_publish_id: string | null;
   tiktok_publish_status:
     "not_published" | "publishing" | "published" | "needs_review";
@@ -44,6 +50,12 @@ export type Draft = {
 export type DraftImageResponse = {
   draft_id: string;
   image_status: ImageStatus;
+  image_url: string;
+};
+
+export type ReusableDraftImage = {
+  draft_id: string;
+  title: string;
   image_url: string;
 };
 
@@ -107,7 +119,10 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 // --------------------------------------------------
 
 // Get drafts belonging to the selected business.
-export function getDrafts(businessId: string, includeDeletedPublished = false): Promise<Draft[]> {
+export function getDrafts(
+  businessId: string,
+  includeDeletedPublished = false,
+): Promise<Draft[]> {
   return request<Draft[]>(
     `/drafts?business_id=${encodeURIComponent(businessId)}&include_deleted_published=${includeDeletedPublished}`,
   );
@@ -122,7 +137,7 @@ export function approveDraft(id: string): Promise<Draft> {
 
 export function updateDraftDestinations(
   id: string,
-  destinations: ("facebook" | "tiktok")[],
+  destinations: ("facebook" | "instagram" | "tiktok")[],
 ): Promise<Draft> {
   return request<Draft>(`/drafts/${encodeURIComponent(id)}/destinations`, {
     method: "PATCH",
@@ -134,10 +149,18 @@ export function updateDraftDestinations(
 }
 
 // Generate AI marketing content.
-export function generateContent(businessId: string): Promise<Draft> {
-  return request<Draft>(
+export function generateContent(
+  businessId: string,
+  idempotencyKey: string = crypto.randomUUID(),
+): Promise<Draft> {
+  return apiRequest<Draft>(
     `/businesses/${encodeURIComponent(businessId)}/generate-content`,
-    { method: "POST" },
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ idempotency_key: idempotencyKey }),
+    },
+    "Content could not be generated.",
   );
 }
 
@@ -151,6 +174,21 @@ export function publishDraftToFacebook(
 ): Promise<FacebookPublishResponse> {
   return request<FacebookPublishResponse>(
     `/drafts/${encodeURIComponent(id)}/publish-facebook`,
+    { method: "POST" },
+  );
+}
+
+export type InstagramPublishResponse = {
+  status: "published";
+  instagram_media_id: string;
+  instagram_permalink: string | null;
+};
+
+export function publishDraftToInstagram(
+  id: string,
+): Promise<InstagramPublishResponse> {
+  return request<InstagramPublishResponse>(
+    `/drafts/${encodeURIComponent(id)}/publish-instagram`,
     { method: "POST" },
   );
 }
@@ -264,6 +302,40 @@ export function generateDraftImage(id: string): Promise<DraftImageResponse> {
   );
 }
 
+export function uploadDraftImage(
+  id: string,
+  file: File,
+): Promise<DraftImageResponse> {
+  const form = new FormData();
+  form.append("file", file);
+  return request<DraftImageResponse>(
+    `/drafts/${encodeURIComponent(id)}/upload-image`,
+    { method: "POST", body: form },
+  );
+}
+
+export function getReusableDraftImages(
+  id: string,
+): Promise<ReusableDraftImage[]> {
+  return request<ReusableDraftImage[]>(
+    `/drafts/${encodeURIComponent(id)}/reusable-images`,
+  );
+}
+
+export function reuseDraftImage(
+  id: string,
+  sourceDraftId: string,
+): Promise<DraftImageResponse> {
+  return request<DraftImageResponse>(
+    `/drafts/${encodeURIComponent(id)}/reuse-image`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source_draft_id: sourceDraftId }),
+    },
+  );
+}
+
 // Retrieve a temporary preview URL for an existing image.
 // This does NOT generate a new image.
 export function getDraftImage(id: string): Promise<DraftImageResponse> {
@@ -368,17 +440,26 @@ export type FacebookAnalytics = {
   draft_id: string;
   platform: string;
   post_id: string;
-  reactions: number;
-  comments: number;
-  shares: number;
+  reactions: number | null;
+  comments: number | null;
+  shares: number | null;
   permalink_url: string | null;
+  post_status?: "available" | "unavailable" | "unverified";
+  authorization_status?:
+    "connected" | "permission_required" | "reauthorization_required";
+  metric_status?: Record<
+    "reactions" | "comments" | "shares",
+    "available" | "unavailable" | "permission_required"
+  >;
 };
 
 export function getFacebookAnalytics(
   draftId: string,
 ): Promise<FacebookAnalytics> {
-  return request<FacebookAnalytics>(
+  return apiRequest<FacebookAnalytics>(
     `/drafts/${encodeURIComponent(draftId)}/analytics/facebook`,
+    undefined,
+    "Facebook metrics could not be loaded.",
   );
 }
 
@@ -403,5 +484,7 @@ export function verifyFacebookVideo(
 
 // Hide a draft while retaining its publication history.
 export function deleteDraft(id: string): Promise<Draft> {
-  return request<Draft>(`/drafts/${encodeURIComponent(id)}`, { method: "DELETE" });
+  return request<Draft>(`/drafts/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
 }

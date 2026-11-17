@@ -14,21 +14,24 @@ from fastapi import (
 )
 from sqlalchemy.orm import Session
 
-from app.auth import verify_token
+from app.auth import get_authenticated_principal, verify_token
 from app.database import get_db
 from app.errors import ApplicationError, ErrorKind
+from app.features.access.principal import AuthenticatedPrincipal
 from app.http_errors import http_error
-from . import generation_service, service, workflows_service
+from . import asset_access_service, generation_service, workflows_service
 from .heygen_provider import HeyGenConfigurationError
 from .schemas import (
     AvatarLook,
     AvatarLookPage,
     AvatarOwnership,
     AvatarType,
+    HeyGenAssetAssignmentRequest,
     HeyGenGenerationRequest,
     HeyGenGenerationResponse,
     HeyGenVoice,
     HeyGenVoicePage,
+    ImageReuseRequest,
     ImageRevisionRequest,
     VoiceType,
 )
@@ -40,11 +43,14 @@ webhook_router = APIRouter()
 @router.post("/drafts/{draft_id}/upload-video")
 def upload_draft_video(
     draft_id: str,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
     try:
-        draft = workflows_service.prepare_manual_video_upload(db, draft_id)
+        draft = workflows_service.prepare_manual_video_upload(
+            db, principal, draft_id,
+        )
         if file.content_type != "video/mp4":
             raise http_error(
                 ApplicationError(
@@ -62,8 +68,72 @@ def upload_draft_video(
             )
         return workflows_service.save_manual_video_upload(
             db,
+            principal,
             draft,
             video_bytes,
+        )
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
+
+
+@router.post("/drafts/{draft_id}/upload-image")
+def upload_draft_image(
+    draft_id: str,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    try:
+        _context, draft = workflows_service.prepare_manual_image_upload(
+            db, principal, draft_id,
+        )
+        image_bytes = file.file.read(
+            workflows_service.MAX_MANUAL_IMAGE_SIZE + 1,
+        )
+        if len(image_bytes) > workflows_service.MAX_MANUAL_IMAGE_SIZE:
+            raise http_error(
+                ApplicationError(
+                    ErrorKind.TOO_LARGE,
+                    "Image exceeds the 20 MB limit",
+                )
+            )
+        return workflows_service.save_manual_image_upload(
+            db,
+            principal,
+            draft,
+            image_bytes,
+        )
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
+
+
+@router.get("/drafts/{draft_id}/reusable-images")
+def get_reusable_images(
+    draft_id: str,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+    db: Session = Depends(get_db),
+):
+    try:
+        return workflows_service.list_reusable_images(
+            db, principal, draft_id,
+        )
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
+
+
+@router.post("/drafts/{draft_id}/reuse-image")
+def reuse_draft_image(
+    draft_id: str,
+    request: ImageReuseRequest,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+    db: Session = Depends(get_db),
+):
+    try:
+        return workflows_service.reuse_image(
+            db,
+            principal,
+            draft_id,
+            request.source_draft_id,
         )
     except ApplicationError as exc:
         raise http_error(exc) from exc
@@ -72,10 +142,11 @@ def upload_draft_video(
 @router.get("/drafts/{draft_id}/video-preview")
 def get_draft_video_preview(
     draft_id: str,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
     db: Session = Depends(get_db),
 ):
     try:
-        return workflows_service.video_preview(db, draft_id)
+        return workflows_service.video_preview(db, principal, draft_id)
     except ApplicationError as exc:
         raise http_error(exc) from exc
 
@@ -83,10 +154,11 @@ def get_draft_video_preview(
 @router.post("/drafts/{draft_id}/generate-image")
 def generate_draft_image(
     draft_id: str,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
     db: Session = Depends(get_db),
 ):
     try:
-        return workflows_service.generate_image(db, draft_id)
+        return workflows_service.generate_image(db, principal, draft_id)
     except ApplicationError as exc:
         raise http_error(exc) from exc
 
@@ -94,10 +166,11 @@ def generate_draft_image(
 @router.get("/drafts/{draft_id}/image")
 def get_draft_image(
     draft_id: str,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
     db: Session = Depends(get_db),
 ):
     try:
-        return workflows_service.image_preview(db, draft_id)
+        return workflows_service.image_preview(db, principal, draft_id)
     except ApplicationError as exc:
         raise http_error(exc) from exc
 
@@ -105,10 +178,11 @@ def get_draft_image(
 @router.post("/drafts/{draft_id}/reset-image")
 def reset_stuck_image(
     draft_id: str,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
     db: Session = Depends(get_db),
 ):
     try:
-        return workflows_service.reset_image(db, draft_id)
+        return workflows_service.reset_image(db, principal, draft_id)
     except ApplicationError as exc:
         raise http_error(exc) from exc
 
@@ -120,11 +194,13 @@ def reset_stuck_image(
 def create_image_revision(
     draft_id: str,
     request: ImageRevisionRequest,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
     db: Session = Depends(get_db),
 ):
     try:
         return workflows_service.create_image_revision(
             db,
+            principal,
             draft_id,
             request.instructions,
         )
@@ -135,10 +211,11 @@ def create_image_revision(
 @router.get("/drafts/{draft_id}/image-revisions")
 def list_image_revisions(
     draft_id: str,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
     db: Session = Depends(get_db),
 ):
     try:
-        return workflows_service.list_image_revisions(db, draft_id)
+        return workflows_service.list_image_revisions(db, principal, draft_id)
     except ApplicationError as exc:
         raise http_error(exc) from exc
 
@@ -147,11 +224,13 @@ def list_image_revisions(
 def accept_image_revision(
     draft_id: str,
     revision_id: str,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
     db: Session = Depends(get_db),
 ):
     try:
         return workflows_service.accept_image_revision(
             db,
+            principal,
             draft_id,
             revision_id,
         )
@@ -163,11 +242,13 @@ def accept_image_revision(
 def reject_image_revision(
     draft_id: str,
     revision_id: str,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
     db: Session = Depends(get_db),
 ):
     try:
         return workflows_service.reject_image_revision(
             db,
+            principal,
             draft_id,
             revision_id,
         )
@@ -179,70 +260,124 @@ def _raise_provider_error(exc: Exception) -> None:
     if isinstance(exc, HeyGenConfigurationError):
         raise HTTPException(
             status_code=503,
-            detail="HeyGen is not configured",
+            detail="AI Video Studio is not configured",
         ) from exc
     if isinstance(exc, httpx.HTTPStatusError):
         raise HTTPException(
             status_code=502,
-            detail="HeyGen could not return the requested assets",
+            detail="The video service could not return the requested assets",
         ) from exc
     if isinstance(exc, httpx.RequestError):
         raise HTTPException(
             status_code=502,
-            detail="HeyGen connection failed",
+            detail="The video service connection failed",
         ) from exc
     raise HTTPException(
         status_code=502,
-        detail="HeyGen returned an invalid asset response",
+        detail="The video service returned an invalid asset response",
     ) from exc
 
 
 @router.get("/heygen/avatars")
-def list_legacy_avatars():
+def list_legacy_avatars(
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+    db: Session = Depends(get_db),
+):
     try:
-        return service.legacy_avatar_looks()
+        return asset_access_service.list_platform_stock_avatars(db, principal)
     except (httpx.HTTPError, HeyGenConfigurationError, ValueError) as exc:
         _raise_provider_error(exc)
 
 
 @router.get("/heygen/voices")
-def list_legacy_voices():
+def list_legacy_voices(
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+    db: Session = Depends(get_db),
+):
     try:
-        return service.legacy_voices()
+        return asset_access_service.list_platform_stock_voices(db, principal)
     except (httpx.HTTPError, HeyGenConfigurationError, ValueError) as exc:
         _raise_provider_error(exc)
 
 
+@router.post(
+    "/businesses/{business_id}/heygen/assets/assignments",
+    status_code=201,
+)
+def assign_private_heygen_asset(
+    business_id: str,
+    request: HeyGenAssetAssignmentRequest,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+    db: Session = Depends(get_db),
+):
+    try:
+        return asset_access_service.assign_private_asset(
+            db, principal, business_id,
+            request.asset_type, request.provider_asset_id,
+        )
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
+
+
+@router.post("/businesses/{business_id}/heygen/assets/assignments/revoke")
+def revoke_private_heygen_asset(
+    business_id: str,
+    request: HeyGenAssetAssignmentRequest,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+    db: Session = Depends(get_db),
+):
+    try:
+        asset_access_service.remove_private_asset(
+            db, principal, business_id,
+            request.asset_type, request.provider_asset_id,
+        )
+        return {"revoked": True}
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
+
+
 @router.get("/heygen/assets/avatars", response_model=AvatarLookPage)
 def list_avatar_assets(
+    business_id: str | None = None,
     avatar_type: AvatarType | None = None,
     ownership: AvatarOwnership = "private",
     limit: int = Query(default=20, ge=1, le=50),
     token: str | None = Query(default=None, min_length=1, max_length=4096),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+    db: Session = Depends(get_db),
 ):
     try:
-        return service.avatar_looks(
+        return asset_access_service.list_avatar_assets(
+            db, principal, business_id,
             avatar_type=avatar_type,
             ownership=ownership,
             limit=limit,
             token=token,
         )
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
     except (httpx.HTTPError, HeyGenConfigurationError, ValueError) as exc:
         _raise_provider_error(exc)
 
 
 @router.get("/heygen/assets/voices", response_model=HeyGenVoicePage)
 def list_voice_assets(
+    business_id: str | None = None,
     voice_type: VoiceType = Query(default="private", alias="type"),
     limit: int = Query(default=20, ge=1, le=100),
     token: str | None = Query(default=None, min_length=1, max_length=4096),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+    db: Session = Depends(get_db),
 ):
     try:
-        return service.voices(
+        return asset_access_service.list_voice_assets(
+            db, principal, business_id,
             voice_type=voice_type,
             limit=limit,
             token=token,
         )
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
     except (httpx.HTTPError, HeyGenConfigurationError, ValueError) as exc:
         _raise_provider_error(exc)
 
@@ -255,17 +390,30 @@ def submit_video_generation(
     business_id: str,
     draft_id: str,
     request: HeyGenGenerationRequest,
-    user: dict = Depends(verify_token),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
     db: Session = Depends(get_db),
 ):
     try:
         return generation_service.submit_generation(
             db,
-            user_id=user["sub"],
+            principal=principal,
             business_id=business_id,
             draft_id=draft_id,
             request=request,
         )
+    except ApplicationError as exc:
+        raise http_error(exc) from exc
+
+
+@router.get("/businesses/{business_id}/heygen/usage")
+def get_heygen_usage(
+    business_id: str,
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
+    db: Session = Depends(get_db),
+):
+    from . import usage_service
+    try:
+        return usage_service.usage(db, principal, business_id)
     except ApplicationError as exc:
         raise http_error(exc) from exc
 
@@ -277,13 +425,13 @@ def submit_video_generation(
 def get_video_generation_status(
     business_id: str,
     draft_id: str,
-    user: dict = Depends(verify_token),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
     db: Session = Depends(get_db),
 ):
     try:
         return generation_service.get_latest_generation(
             db,
-            user_id=user["sub"],
+            principal=principal,
             business_id=business_id,
             draft_id=draft_id,
         )
@@ -298,13 +446,13 @@ def get_video_generation_status(
 def reconcile_video_generation(
     business_id: str,
     draft_id: str,
-    user: dict = Depends(verify_token),
+    principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
     db: Session = Depends(get_db),
 ):
     try:
         return generation_service.get_latest_generation(
             db,
-            user_id=user["sub"],
+            principal=principal,
             business_id=business_id,
             draft_id=draft_id,
         )

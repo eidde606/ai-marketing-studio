@@ -2,10 +2,12 @@
 import os
 import time
 from urllib.parse import urljoin, urlparse
-import httpx
-from dotenv import load_dotenv
 
-load_dotenv(".env")
+import httpx
+
+from app.environment import load_application_environment
+
+load_application_environment(".env")
 
 HEYGEN_API_URL = "https://api.heygen.com"
 HEYGEN_VIDEO_HOSTS = frozenset({

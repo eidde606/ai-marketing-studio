@@ -7,8 +7,27 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import SettingsPage from "./SettingsPage";
+import type { Business } from "../services/businessesApi";
 
 afterEach(cleanup);
+
+function business(id: string, name: string): Business {
+  return {
+    id,
+    name,
+    description: null,
+    target_audience: null,
+    brand_voice: null,
+    industry: null,
+    products_services: null,
+    service_area: null,
+    website_url: null,
+    marketing_goals: null,
+    preferred_platforms: null,
+    posting_frequency: null,
+    created_at: "2026-01-01T00:00:00Z",
+  };
+}
 
 describe("SettingsPage", () => {
   it("loads the configured profile name and keeps email read-only", () => {
@@ -24,13 +43,15 @@ describe("SettingsPage", () => {
     );
 
     expect(
-      (screen.getByLabelText("Nombre para mostrar") as HTMLInputElement).value,
+      (screen.getByLabelText("Display name") as HTMLInputElement).value,
     ).toBe("María");
     expect(screen.getByText("user@example.com")).toBeTruthy();
     expect(
-      (screen.getByRole("button", {
-        name: "Guardar cambios",
-      }) as HTMLButtonElement).disabled,
+      (
+        screen.getByRole("button", {
+          name: "Save changes",
+        }) as HTMLButtonElement
+      ).disabled,
     ).toBe(true);
   });
 
@@ -38,7 +59,7 @@ describe("SettingsPage", () => {
     render(
       <SettingsPage
         businessId="business-1"
-        userDisplayName="Mi cuenta"
+        userDisplayName="My account"
         userEmail="user@example.com"
         onSaveDisplayName={vi.fn()}
         facebookConnection={<div>Facebook conexión</div>}
@@ -48,17 +69,17 @@ describe("SettingsPage", () => {
     );
 
     expect(
-      (screen.getByLabelText("Nombre para mostrar") as HTMLInputElement).value,
+      (screen.getByLabelText("Display name") as HTMLInputElement).value,
     ).toBe("");
     expect(
-      screen.getByLabelText("Nombre para mostrar").getAttribute("placeholder"),
-    ).toBe("Mi cuenta");
+      screen.getByLabelText("Display name").getAttribute("placeholder"),
+    ).toBe("My account");
   });
 
   it.each([
-    ["", "Escribe un nombre para mostrar."],
-    ["   ", "Escribe un nombre para mostrar."],
-    ["n".repeat(81), "El nombre no puede superar los 80 caracteres."],
+    ["", "Enter a display name."],
+    ["   ", "Enter a display name."],
+    ["n".repeat(81), "Name must be 80 characters or fewer."],
   ])("validates the display name %j", (value, message) => {
     const save = vi.fn(async (name: string) => name);
     render(
@@ -72,9 +93,9 @@ describe("SettingsPage", () => {
       />,
     );
 
-    const input = screen.getByLabelText("Nombre para mostrar");
+    const input = screen.getByLabelText("Display name");
     fireEvent.change(input, { target: { value } });
-    fireEvent.click(screen.getByRole("button", { name: "Guardar cambios" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
     expect(screen.getByRole("alert").textContent).toBe(message);
     expect(save).not.toHaveBeenCalled();
@@ -99,24 +120,29 @@ describe("SettingsPage", () => {
       />,
     );
 
-    fireEvent.change(screen.getByLabelText("Nombre para mostrar"), {
+    fireEvent.change(screen.getByLabelText("Display name"), {
       target: { value: "  Ana Pérez  " },
     });
-    const button = screen.getByRole("button", { name: "Guardar cambios" });
+    const button = screen.getByRole("button", { name: "Save changes" });
     fireEvent.click(button);
     fireEvent.click(button);
 
     expect(save).toHaveBeenCalledTimes(1);
     expect(save).toHaveBeenCalledWith("Ana Pérez");
     expect((button as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByRole("status").textContent).toContain("Guardando");
+    expect(
+      screen
+        .getAllByRole("status")
+        .some((element) => element.textContent?.includes("Saving")),
+    ).toBe(true);
     await act(async () => resolve("Ana Pérez"));
 
-    expect(screen.getByRole("status").textContent).toBe(
-      "Nombre para mostrar actualizado.",
-    );
     expect(
-      (screen.getByLabelText("Nombre para mostrar") as HTMLInputElement).value,
+      document.querySelector(".settings-profile-feedback[role='status']")
+        ?.textContent,
+    ).toBe("Display name updated.");
+    expect(
+      (screen.getByLabelText("Display name") as HTMLInputElement).value,
     ).toBe("Ana Pérez");
     expect((button as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText("user@example.com")).toBeTruthy();
@@ -129,7 +155,7 @@ describe("SettingsPage", () => {
     render(
       <SettingsPage
         businessId="business-1"
-        userDisplayName="Mi cuenta"
+        userDisplayName="My account"
         userEmail=""
         onSaveDisplayName={save}
         facebookConnection={<div />}
@@ -137,18 +163,20 @@ describe("SettingsPage", () => {
       />,
     );
 
-    const input = screen.getByLabelText("Nombre para mostrar");
+    const input = screen.getByLabelText("Display name");
     fireEvent.change(input, { target: { value: "Ana" } });
-    fireEvent.click(screen.getByRole("button", { name: "Guardar cambios" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
     expect((await screen.findByRole("alert")).textContent).toContain(
-      "No se pudo guardar",
+      "Name couldn't be saved",
     );
     expect((input as HTMLInputElement).value).toBe("Ana");
     expect(
-      (screen.getByRole("button", {
-        name: "Guardar cambios",
-      }) as HTMLButtonElement).disabled,
+      (
+        screen.getByRole("button", {
+          name: "Save changes",
+        }) as HTMLButtonElement
+      ).disabled,
     ).toBe(false);
   });
 
@@ -159,6 +187,7 @@ describe("SettingsPage", () => {
         userDisplayName="María"
         userEmail="maria@example.com"
         onSaveDisplayName={vi.fn()}
+        canManageConnections
         facebookConnection={<div>Facebook conexión</div>}
         instagramConnection={<div>Instagram conexión</div>}
         tiktokConnection={<div>TikTok conexión</div>}
@@ -166,18 +195,65 @@ describe("SettingsPage", () => {
     );
 
     expect(screen.queryByText("Facebook conexión")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Integraciones" }));
+    fireEvent.click(screen.getByRole("button", { name: "Integrations" }));
     expect(screen.getByText("Facebook conexión")).toBeTruthy();
     expect(screen.getByText("Instagram conexión")).toBeTruthy();
     expect(screen.getByText("TikTok conexión")).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Redes sociales" })).toBeTruthy();
+    expect(
+      screen.getByRole("heading", { name: "Social accounts" }),
+    ).toBeTruthy();
+  });
+
+  it("shows Edian as available while other feature statuses remain accurate", () => {
+    render(
+      <SettingsPage
+        businessId="business-1"
+        userDisplayName="María"
+        userEmail=""
+        onSaveDisplayName={vi.fn()}
+        features={{
+          public_registration: false,
+          facebook_publishing: true,
+          tiktok_direct_publishing: false,
+          tiktok_manual_export: true,
+          instagram_publishing: false,
+          instagram_connection: true,
+          mia_analysis: true,
+          scheduling: false,
+        }}
+        facebookConnection={<div />}
+        instagramConnection={<div />}
+        tiktokConnection={<div />}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Integrations" }));
+
+    expect(
+      screen.getByText("Publish approved posts to connected Facebook Pages."),
+    ).toBeTruthy();
+    expect(
+      document.querySelector(".capability-status--available"),
+    ).toBeTruthy();
+    expect(document.querySelector(".capability-status--limited")).toBeTruthy();
+    expect(
+      document.querySelector(".capability-status--unavailable"),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Edian interprets available Facebook engagement metrics after you request an analysis. Instagram and TikTok analytics are unavailable.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("Instagram publishing is not currently supported."),
+    ).toBeTruthy();
   });
 
   it("explains when no business is selected", () => {
     render(
       <SettingsPage
         businessId=""
-        userDisplayName="Mi cuenta"
+        userDisplayName="My account"
         userEmail=""
         onSaveDisplayName={vi.fn()}
         facebookConnection={<div>Facebook conexión</div>}
@@ -185,7 +261,53 @@ describe("SettingsPage", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Integraciones" }));
-    expect(screen.getByText("No hay un negocio seleccionado.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Integrations" }));
+    expect(screen.getByText("No business selected.")).toBeTruthy();
+  });
+
+  it("does not mount social connection controls for a member", () => {
+    render(
+      <SettingsPage
+        businessId="business-1"
+        userDisplayName="Member"
+        userEmail="member@example.com"
+        onSaveDisplayName={vi.fn()}
+        facebookConnection={<button>Connect Facebook</button>}
+        tiktokConnection={<button>Connect TikTok</button>}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Integrations" }));
+    expect(
+      screen.queryByRole("button", { name: "Connect Facebook" }),
+    ).toBeNull();
+    expect(screen.getByText(/can't manage social connections/)).toBeTruthy();
+  });
+
+  it("discards unsaved business profile edits when switching tenants", () => {
+    const save = vi.fn(async () => {});
+    const props = {
+      businessId: "business-1",
+      userDisplayName: "Owner",
+      userEmail: "owner@example.com",
+      onSaveDisplayName: vi.fn(async (name: string) => name),
+      canEditBusiness: true,
+      onSaveBusiness: save,
+      facebookConnection: <div />,
+      tiktokConnection: <div />,
+    };
+    const { rerender } = render(
+      <SettingsPage {...props} business={business("business-1", "First")} />,
+    );
+    const name = screen.getByLabelText(/Business name/);
+    fireEvent.change(name, { target: { value: "Unsaved first" } });
+    expect((name as HTMLInputElement).value).toBe("Unsaved first");
+
+    rerender(
+      <SettingsPage {...props} business={business("business-2", "Second")} />,
+    );
+    expect(
+      (screen.getByLabelText(/Business name/) as HTMLInputElement).value,
+    ).toBe("Second");
+    expect(save).not.toHaveBeenCalled();
   });
 });

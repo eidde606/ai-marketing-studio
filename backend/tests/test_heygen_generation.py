@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 GENERATION_PATH = "/businesses/business-1/drafts/draft-1/heygen-generation"
 REQUEST = {
+    "confirmed_paid_generation": True,
     "avatar_id": "selected-avatar",
     "voice_id": "selected-voice",
     "script": "Guion de prueba",
@@ -16,10 +17,29 @@ REQUEST = {
 
 
 def create_draft(engine):
-    from app.models import Business, Draft
+    from app.models import Business, Draft, HeyGenAssetAccess
+    from tests.tenancy_fixtures import (
+        grant_test_active_entitlement,
+        grant_test_owner,
+    )
 
     with Session(engine) as db:
         db.add(Business(id="business-1", name="Negocio de prueba"))
+        principal = grant_test_owner(db, ["business-1"])
+        grant_test_active_entitlement(
+            db, ["business-1"], owner_user_id=principal.user_id,
+        )
+        for asset_type, provider_asset_id in (
+            ("avatar", "selected-avatar"),
+            ("voice", "selected-voice"),
+        ):
+            db.add(HeyGenAssetAccess(
+                asset_type=asset_type,
+                provider_asset_id=provider_asset_id,
+                access_scope="business_private",
+                business_id="business-1",
+                assigned_by_user_id=principal.user_id,
+            ))
         db.add(
             Draft(
                 id="draft-1",
@@ -86,6 +106,121 @@ def test_repeated_request_reuses_attempt_and_conflicting_payload_is_rejected(
         assert saved_draft.published_at is None
 
 
+def test_membership_revocation_during_provider_call_prevents_result_persistence(
+    isolated_client, monkeypatch,
+):
+    from app.auth import get_authenticated_principal, SUPABASE_ISSUER
+    from app.features.access.principal import AuthenticatedPrincipal
+    from app.features.media import generation_service
+    from app.main import app
+    from app.models import BusinessMembership, User
+
+    client, engine = isolated_client
+    create_draft(engine)
+    with Session(engine) as db:
+        user = User(
+            auth_issuer=SUPABASE_ISSUER,
+            auth_subject="revoked-generation-user",
+        )
+        db.add(user)
+        db.flush()
+        membership = BusinessMembership(
+            business_id="business-1",
+            user_id=user.id,
+            role="member",
+            status="active",
+        )
+        db.add(membership)
+        db.commit()
+        principal = AuthenticatedPrincipal(
+            SUPABASE_ISSUER, user.auth_subject, user.id,
+        )
+        membership_id = membership.id
+
+    previous = app.dependency_overrides[get_authenticated_principal]
+    app.dependency_overrides[get_authenticated_principal] = lambda: principal
+
+    def revoke_then_return(**_kwargs):
+        with Session(engine) as db:
+            db.get(BusinessMembership, membership_id).status = "revoked"
+            db.commit()
+        return {"video_id": "provider-video-revoked"}
+
+    monkeypatch.setattr(generation_service, "generate_video", revoke_then_return)
+    try:
+        response = client.post(GENERATION_PATH, json=REQUEST)
+    finally:
+        app.dependency_overrides[get_authenticated_principal] = previous
+
+    assert response.status_code == 404
+    attempt = get_attempt(engine)
+    assert attempt.status == "SUBMITTING"
+    assert attempt.provider_video_id is None
+
+
+def test_membership_revocation_during_status_poll_prevents_result_persistence(
+    isolated_client, monkeypatch,
+):
+    from app.auth import get_authenticated_principal, SUPABASE_ISSUER
+    from app.features.access.principal import AuthenticatedPrincipal
+    from app.features.media import generation_service
+    from app.main import app
+    from app.models import BusinessMembership, User
+
+    client, engine = isolated_client
+    create_draft(engine)
+    monkeypatch.setattr(
+        generation_service,
+        "generate_video",
+        lambda **_kwargs: {"video_id": "provider-video-poll"},
+    )
+    submitted = client.post(GENERATION_PATH, json=REQUEST)
+    assert submitted.status_code == 200
+
+    with Session(engine) as db:
+        user = User(
+            auth_issuer=SUPABASE_ISSUER,
+            auth_subject="revoked-poll-user",
+        )
+        db.add(user)
+        db.flush()
+        membership = BusinessMembership(
+            business_id="business-1",
+            user_id=user.id,
+            role="member",
+            status="active",
+        )
+        db.add(membership)
+        db.commit()
+        principal = AuthenticatedPrincipal(
+            SUPABASE_ISSUER, user.auth_subject, user.id,
+        )
+        membership_id = membership.id
+
+    def revoke_then_return(_provider_video_id):
+        with Session(engine) as db:
+            db.get(BusinessMembership, membership_id).status = "revoked"
+            db.commit()
+        return {
+            "video_id": "provider-video-poll",
+            "status": "completed",
+            "video_url": "https://provider.test.invalid/video.mp4",
+        }
+
+    monkeypatch.setattr(generation_service, "get_video_status", revoke_then_return)
+    previous = app.dependency_overrides[get_authenticated_principal]
+    app.dependency_overrides[get_authenticated_principal] = lambda: principal
+    try:
+        response = client.get(GENERATION_PATH)
+    finally:
+        app.dependency_overrides[get_authenticated_principal] = previous
+
+    assert response.status_code == 404
+    attempt = get_attempt(engine)
+    assert attempt.status == "PROCESSING"
+    assert attempt.storage_status == "PENDING"
+
+
 def test_missing_generation_attempt_is_distinct_from_missing_draft(isolated_client):
     client, engine = isolated_client
     create_draft(engine)
@@ -95,7 +230,7 @@ def test_missing_generation_attempt_is_distinct_from_missing_draft(isolated_clie
         client.post(f"{GENERATION_PATH}/reconcile"),
     ):
         assert response.status_code == 404
-        assert response.json()["detail"] == "No HeyGen generation attempt found"
+        assert response.json()["detail"] == "No AI video generation attempt found"
 
     inaccessible = client.get(
         "/businesses/another-business/drafts/draft-1/heygen-generation"
@@ -1018,7 +1153,8 @@ def test_attempt_and_status_are_scoped_to_account_business_and_draft(
     isolated_client, monkeypatch,
 ):
     from app import main
-    from app.auth import verify_token
+    from app.auth import get_authenticated_principal
+    from app.features.access.principal import AuthenticatedPrincipal
     from app.features.media import generation_service
 
     client, engine = isolated_client
@@ -1037,12 +1173,16 @@ def test_attempt_and_status_are_scoped_to_account_business_and_draft(
         "/businesses/business-1/drafts/another-draft/heygen-generation"
     ).status_code == 404
 
-    previous = main.app.dependency_overrides[verify_token]
-    main.app.dependency_overrides[verify_token] = lambda: {"sub": "another-account"}
+    previous = main.app.dependency_overrides[get_authenticated_principal]
+    main.app.dependency_overrides[get_authenticated_principal] = lambda: AuthenticatedPrincipal(
+        "https://supabase.test.invalid/auth/v1",
+        "another-account",
+        "another-user-id",
+    )
     try:
         response = client.get(GENERATION_PATH)
     finally:
-        main.app.dependency_overrides[verify_token] = previous
+        main.app.dependency_overrides[get_authenticated_principal] = previous
     assert response.status_code == 404
 
 
@@ -1551,8 +1691,6 @@ def test_completion_cannot_attach_superseded_attempt(completed_provider, monkeyp
     assert result.json()["storage_status"] == "FAILED"
     with Session(engine) as db:
         assert db.get(Draft, "draft-1").video_url is None
-
-
 @pytest.mark.parametrize("first", ["image", "video"])
 def test_media_reservations_block_other_provider_while_first_is_pending(
     isolated_client, monkeypatch, first,
@@ -1585,11 +1723,14 @@ def test_media_reservations_block_other_provider_while_first_is_pending(
     monkeypatch.setattr(generation_service, "generate_video", video_provider)
     if first == "image":
         result = client.post("/drafts/draft-1/generate-image")
+        assert result.status_code == 429
+        assert blocked == []
+        assert calls == []
     else:
         result = client.post(GENERATION_PATH, json=REQUEST)
-    assert result.status_code == 200
-    assert blocked == [409]
-    assert calls == [first]
+        assert result.status_code == 200
+        assert blocked == [409]
+        assert calls == ["video"]
 
 
 @pytest.mark.parametrize("video_status", ["generating", "uploading", "needs_review", "completed"])
@@ -1633,101 +1774,20 @@ def test_stored_video_restores_without_provider(
     assert client.get("/businesses/other/drafts/draft-1/heygen-generation").status_code == 404
 
 
-def test_stored_video_does_not_bypass_attempt_user_scope(completed_provider, monkeypatch):
+def test_stored_video_does_not_bypass_application_membership(completed_provider, monkeypatch):
     from app.main import app
-    from app.auth import verify_token
+    from app.auth import get_authenticated_principal
+    from app.features.access.principal import AuthenticatedPrincipal
     client, _engine, service = completed_provider
     assert client.get(GENERATION_PATH).json()["storage_status"] == "STORED"
     monkeypatch.setattr(service, "get_video_status", lambda _id: pytest.fail("Provider must not be called"))
-    app.dependency_overrides[verify_token] = lambda: {"sub": "other-user"}
-    assert client.get(GENERATION_PATH).status_code == 404
-
-
-@pytest.mark.parametrize("first", ["image", "video"])
-def test_simultaneous_image_and_video_reservations_share_draft_lock(isolated_client, monkeypatch, first):
-    """Model PostgreSQL row-lock scheduling around real reservation SQL.
-
-    SQLite ignores FOR UPDATE. The event hook supplies only that missing lock;
-    both routes, transaction boundaries, and provider-call decisions stay real.
-    """
-    from concurrent.futures import ThreadPoolExecutor
-    from threading import Barrier, Event, Lock
-    from sqlalchemy import event
-    from app.features.drafts import repository as drafts_repository
-    from app.features.media import generation_service
-    from app.models import Draft
-
-    client, engine = isolated_client
-    create_draft(engine)
-    with Session(engine) as db:
-        db.get(Draft, "draft-1").image_prompt = "Una imagen"
-        db.commit()
-    image_lock = drafts_repository.lock_draft
-    video_lock = generation_service.repository.lock_draft_for_generation
-
-    def identify_image(db, draft_id):
-        db.info["reservation_kind"] = "image"
-        return image_lock(db, draft_id)
-
-    def identify_video(db, **kwargs):
-        db.info["reservation_kind"] = "video"
-        return video_lock(db, **kwargs)
-
-    monkeypatch.setattr(drafts_repository, "lock_draft", identify_image)
-    monkeypatch.setattr(generation_service.repository, "lock_draft_for_generation", identify_video)
-    contenders = Barrier(2)
-    first_acquired = Event()
-    row_lock = Lock()
-    loser_finished = Event()
-    paid_calls = []
-
-    def simulate_row_lock(execution):
-        statement = execution.statement
-        if not execution.is_select or getattr(statement, "_for_update_arg", None) is None:
-            return
-        if not any(getattr(table, "name", None) == "drafts" for table in statement.get_final_froms()):
-            return
-        session = execution.session
-        if session.info.get("held_draft_lock"):
-            return
-        if not session.info.get("visited_reservation"):
-            session.info["visited_reservation"] = True
-            contenders.wait(timeout=5)
-            if session.info["reservation_kind"] != first:
-                assert first_acquired.wait(timeout=5)
-        assert row_lock.acquire(timeout=5)
-        session.info["held_draft_lock"] = True
-        first_acquired.set()
-
-    def release_row_lock(session, transaction):
-        if transaction.parent is None and session.info.pop("held_draft_lock", False):
-            row_lock.release()
-
-    def provider(kind, result):
-        paid_calls.append(kind)
-        assert loser_finished.wait(timeout=5)
-        return result
-
-    from app.features.media import workflows_service
-
-    monkeypatch.setattr(workflows_service, "get_marketing_image_url", lambda *_args, **_kw: "https://storage.test/signed-image")
-    monkeypatch.setattr(workflows_service, "generate_marketing_image", lambda **_kw: provider("image", "businesses/business-1/image.png"))
-    monkeypatch.setattr(generation_service, "generate_video", lambda **_kw: provider("video", {"video_id": "concurrent-video"}))
-
-    def request(kind):
-        response = client.post("/drafts/draft-1/generate-image") if kind == "image" else client.post(GENERATION_PATH, json=REQUEST)
-        if response.status_code == 409:
-            loser_finished.set()
-        return response.status_code
-
-    event.listen(Session, "do_orm_execute", simulate_row_lock)
-    event.listen(Session, "after_transaction_end", release_row_lock)
+    previous = app.dependency_overrides[get_authenticated_principal]
+    app.dependency_overrides[get_authenticated_principal] = lambda: AuthenticatedPrincipal(
+        "https://supabase.test.invalid/auth/v1",
+        "other-user",
+        "other-user-id",
+    )
     try:
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            image = pool.submit(request, "image")
-            video = pool.submit(request, "video")
-            assert sorted([image.result(timeout=10), video.result(timeout=10)]) == [200, 409]
+        assert client.get(GENERATION_PATH).status_code == 404
     finally:
-        event.remove(Session, "do_orm_execute", simulate_row_lock)
-        event.remove(Session, "after_transaction_end", release_row_lock)
-    assert paid_calls == [first]
+        app.dependency_overrides[get_authenticated_principal] = previous

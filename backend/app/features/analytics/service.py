@@ -4,7 +4,10 @@ import logging
 import httpx
 from sqlalchemy.orm import Session
 
-from app.errors import ApplicationError, ErrorKind
+from app.errors import ApplicationError, ErrorCode, ErrorKind
+from app.features.access import service as access
+from app.features.access.permissions import Permission
+from app.features.access.principal import AuthenticatedPrincipal
 from app.features.facebook.publishing_provider import get_post_insights, get_post_reach
 from app.token_service import decrypt_token
 from . import repository
@@ -12,8 +15,19 @@ from . import repository
 logger = logging.getLogger(__name__)
 
 
-def _published_facebook_post(db: Session, draft_id: str, *, reach: bool):
-    draft = repository.get_draft(db, draft_id)
+def _published_facebook_post(
+    db: Session,
+    draft_id: str,
+    principal: AuthenticatedPrincipal,
+    *,
+    reach: bool,
+):
+    context = access.require_draft_permission(
+        db, principal, draft_id, Permission.READ, include_deleted=True,
+    )
+    draft = repository.get_draft_scoped(
+        db, context, draft_id, include_deleted=True,
+    )
     if draft is None:
         raise ApplicationError(ErrorKind.NOT_FOUND, "Draft not found")
 
@@ -23,7 +37,7 @@ def _published_facebook_post(db: Session, draft_id: str, *, reach: bool):
         )
         raise ApplicationError(ErrorKind.CONFLICT, detail)
 
-    account = repository.get_connected_facebook_account(db, draft.business_id)
+    account = repository.get_connected_facebook_account_scoped(db, context)
     if account is None:
         detail = "Facebook not connected" if reach else (
             "Connect a Facebook Page to this business first"
@@ -37,10 +51,12 @@ async def facebook_post_analytics(
     draft_id: str,
     *,
     db: Session,
+    principal: AuthenticatedPrincipal,
 ) -> dict[str, object]:
     draft, access_token = _published_facebook_post(
         db,
         draft_id,
+        principal,
         reach=False,
     )
 
@@ -59,14 +75,15 @@ async def facebook_post_analytics(
             error_data = {}
 
         logger.warning(
-            "Facebook analytics error: status=%s, code=%s, message=%s",
+            "Facebook analytics error: status=%s, code=%s, type=%s",
             exc.response.status_code,
             error_data.get("code"),
-            error_data.get("message"),
+            error_data.get("type"),
         )
         raise ApplicationError(
             ErrorKind.UPSTREAM_FAILURE,
             "Unable to retrieve Facebook analytics",
+            code=ErrorCode.FACEBOOK_PROVIDER_ERROR,
         ) from exc
     except httpx.RequestError as exc:
         logger.warning(
@@ -76,19 +93,39 @@ async def facebook_post_analytics(
         raise ApplicationError(
             ErrorKind.UPSTREAM_FAILURE,
             "Facebook analytics service is unavailable",
+            code=ErrorCode.FACEBOOK_PROVIDER_ERROR,
         ) from exc
 
-    def metric_count(name: str):
+    access.require_draft_permission(
+        db, principal, draft_id, Permission.READ, include_deleted=True,
+    )
+
+    def metric_count(name: str) -> int | None:
         metric = data.get(name)
         if not isinstance(metric, dict):
             return None
         summary = metric.get("summary")
         if not isinstance(summary, dict):
             return None
-        return summary.get("total_count")
+        count = summary.get("total_count")
+        return count if type(count) is int and count >= 0 else None
 
     shares = data.get("shares")
-    share_count = shares.get("count") if isinstance(shares, dict) else None
+    raw_share_count = shares.get("count") if isinstance(shares, dict) else None
+    share_count = (
+        raw_share_count
+        if type(raw_share_count) is int and raw_share_count >= 0
+        else None
+    )
+    metric_status = data.get("metric_status")
+    if not isinstance(metric_status, dict):
+        metric_status = {}
+
+    def status_for(name: str, value: int | None) -> str:
+        status = metric_status.get(name)
+        if status in {"available", "unavailable", "permission_required"}:
+            return status
+        return "available" if value is not None else "unavailable"
 
     return {
         "draft_id": draft.id,
@@ -98,6 +135,15 @@ async def facebook_post_analytics(
         "comments": metric_count("comments"),
         "shares": share_count,
         "permalink_url": data.get("permalink_url"),
+        "post_status": data.get("post_status", "available"),
+        "authorization_status": data.get(
+            "authorization_status", "connected",
+        ),
+        "metric_status": {
+            "reactions": status_for("reactions", metric_count("reactions")),
+            "comments": status_for("comments", metric_count("comments")),
+            "shares": status_for("shares", share_count),
+        },
     }
 
 
@@ -105,15 +151,20 @@ async def facebook_post_reach(
     draft_id: str,
     *,
     db: Session,
+    principal: AuthenticatedPrincipal,
 ) -> dict[str, object]:
     draft, access_token = _published_facebook_post(
         db,
         draft_id,
+        principal,
         reach=True,
     )
 
     try:
         data = await get_post_reach(draft.facebook_post_id, access_token)
+        access.require_draft_permission(
+            db, principal, draft_id, Permission.READ, include_deleted=True,
+        )
 
         unique_media_viewers = next(
             (
@@ -127,14 +178,25 @@ async def facebook_post_reach(
         )
         return {"unique_media_viewers": unique_media_viewers}
     except httpx.HTTPStatusError as exc:
-        error_data = exc.response.json()
-        facebook_error = error_data.get("error", {})
+        try:
+            error_data = exc.response.json().get("error", {})
+            if not isinstance(error_data, dict):
+                error_data = {}
+        except ValueError:
+            error_data = {}
+        facebook_error = error_data
         logger.warning(
-            "Facebook reach error: code=%s, message=%s",
+            "Facebook reach error: status=%s, code=%s, type=%s",
+            exc.response.status_code,
             facebook_error.get("code"),
-            facebook_error.get("message"),
+            facebook_error.get("type"),
         )
         raise ApplicationError(
             ErrorKind.UPSTREAM_FAILURE,
             "Facebook did not return reach data",
+        ) from exc
+    except httpx.RequestError as exc:
+        raise ApplicationError(
+            ErrorKind.UPSTREAM_FAILURE,
+            "Facebook analytics service is unavailable",
         ) from exc

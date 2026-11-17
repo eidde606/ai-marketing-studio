@@ -5,11 +5,13 @@ import {
   render,
   screen,
   within,
+  waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Session, AuthChangeEvent } from "@supabase/supabase-js";
 import type { ComponentProps } from "react";
 import App from "./App";
+import { ApiError } from "./lib/apiClient";
 import type ApprovalPage from "./components/ApprovalPage";
 import type DashboardOverview from "./components/DashboardOverview";
 import type { Business } from "./services/businessesApi";
@@ -20,9 +22,23 @@ const mocks = vi.hoisted(() => ({
   updateUser: vi.fn(),
   unsubscribe: vi.fn(),
   onAuthStateChange: vi.fn(),
+  getAccount: vi.fn(),
+  getPublicConfig: vi.fn(),
+  registerAccount: vi.fn(),
+  updateAccountPreferences: vi.fn(),
+  getBusinessPreferences: vi.fn(),
+  updateBusinessPreferences: vi.fn(),
+  getHeyGenUsage: vi.fn(),
+  getBusinessEntitlement: vi.fn(),
+  getBillingOverview: vi.fn(),
+  getOnboarding: vi.fn(),
+  saveOnboarding: vi.fn(),
+  activateOnboarding: vi.fn(),
+  updateTutorialCompletion: vi.fn(),
   getBusinesses: vi.fn(),
   getDrafts: vi.fn(),
   getConnectedFacebookAccounts: vi.fn(),
+  getInstagramConnection: vi.fn(),
   generateContent: vi.fn(),
   publishDraftToFacebook: vi.fn(),
   approveDraft: vi.fn(),
@@ -43,6 +59,20 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./services/supabaseClient", () => ({ supabase: { auth: mocks } }));
 vi.mock("./services/businessesApi", () => ({
   getBusinesses: mocks.getBusinesses,
+}));
+vi.mock("./services/accountApi", async (original) => ({
+  ...(await original<object>()),
+  getAccount: mocks.getAccount,
+  getPublicConfig: mocks.getPublicConfig,
+  registerAccount: mocks.registerAccount,
+  updateAccountPreferences: mocks.updateAccountPreferences,
+  getBusinessPreferences: mocks.getBusinessPreferences,
+  updateBusinessPreferences: mocks.updateBusinessPreferences,
+  getHeyGenUsage: mocks.getHeyGenUsage,
+}));
+vi.mock("./services/billingApi", async (original) => ({
+  ...(await original<object>()),
+  getBillingOverview: mocks.getBillingOverview,
 }));
 vi.mock("./services/draftsApi", async (original) => ({
   ...(await original<object>()),
@@ -67,6 +97,17 @@ vi.mock("./services/draftsApi", async (original) => ({
 vi.mock("./services/facebookApi", () => ({
   getConnectedFacebookAccounts: mocks.getConnectedFacebookAccounts,
 }));
+vi.mock("./services/instagramApi", () => ({
+  getInstagramConnection: mocks.getInstagramConnection,
+}));
+vi.mock("./services/onboardingApi", async (original) => ({
+  ...(await original<object>()),
+  getBusinessEntitlement: mocks.getBusinessEntitlement,
+  getOnboarding: mocks.getOnboarding,
+  saveOnboarding: mocks.saveOnboarding,
+  activateOnboarding: mocks.activateOnboarding,
+  updateTutorialCompletion: mocks.updateTutorialCompletion,
+}));
 vi.mock("./components/AuthPage", () => ({
   default: ({
     recoveryMode,
@@ -80,8 +121,62 @@ vi.mock("./components/AuthPage", () => ({
     </button>
   ),
 }));
-vi.mock("./components/SofiaChat", () => ({ default: () => null }));
+vi.mock("./components/AnalyticsPage", () => ({
+  default: ({
+    onDiscussWithSebastian,
+  }: {
+    onDiscussWithSebastian?: (summary: string) => void;
+  }) => (
+    <section>
+      <h2>Resultados</h2>
+      <button
+        type="button"
+        onClick={() =>
+          onDiscussWithSebastian?.("tenant-local analytics summary")
+        }
+      >
+        Discuss with Sebastián
+      </button>
+    </section>
+  ),
+}));
+vi.mock("./components/SofiaChat", () => ({
+  default: ({
+    businessId,
+    initialMessage,
+    draftMessage,
+    onDraftChange,
+    onViewPlans,
+    onContinueWithValeria,
+    generationError,
+  }: {
+    businessId: string;
+    initialMessage?: string | null;
+    draftMessage?: string;
+    onDraftChange?: (message: string) => void;
+    onViewPlans?: () => void;
+    onContinueWithValeria?: () => void;
+    generationError?: string | null;
+  }) => (
+    <div data-testid="strategy-handoff-chat" data-business-id={businessId}>
+      <textarea
+        aria-label="Strategy handoff"
+        value={initialMessage ?? draftMessage ?? ""}
+        onChange={(event) => onDraftChange?.(event.target.value)}
+      />
+      <button type="button" onClick={onContinueWithValeria}>
+        Continue with Valeria
+      </button>
+      {generationError && <p role="alert">{generationError}</p>}
+      <button type="button" onClick={onViewPlans}>
+        Open billing from chat test
+      </button>
+    </div>
+  ),
+}));
 vi.mock("./components/FacebookConnection", () => ({ default: () => null }));
+vi.mock("./components/InstagramConnection", () => ({ default: () => null }));
+vi.mock("./components/TikTokConnection", () => ({ default: () => null }));
 vi.mock("./components/DashboardOverview", () => ({
   default: (props: ComponentProps<typeof DashboardOverview>) => (
     <div>
@@ -218,6 +313,13 @@ function business(id: string): Business {
     description: null,
     target_audience: null,
     brand_voice: null,
+    industry: null,
+    products_services: null,
+    service_area: null,
+    website_url: null,
+    marketing_goals: null,
+    preferred_platforms: null,
+    posting_frequency: null,
     created_at: "2026-01-01",
   };
 }
@@ -237,13 +339,16 @@ async function openApp() {
   await screen.findByRole("option", { name: "Negocio a" });
 }
 function select(id: string) {
-  fireEvent.change(screen.getByLabelText("Seleccionar negocio"), {
-    target: { value: id },
-  });
+  fireEvent.change(
+    screen.getByLabelText(/(Seleccionar negocio|Select business)/),
+    { target: { value: id } },
+  );
 }
 beforeEach(() => {
   vi.resetAllMocks();
   localStorage.clear();
+  sessionStorage.clear();
+  localStorage.setItem("ai-marketing-studio:interface-language", "es");
   vi.stubGlobal(
     "fetch",
     vi.fn(() => {
@@ -257,12 +362,98 @@ beforeEach(() => {
     return { data: { subscription: { unsubscribe: mocks.unsubscribe } } };
   });
   mocks.signOut.mockImplementation(async () => authChange("SIGNED_OUT", null));
+  mocks.getAccount.mockResolvedValue({
+    user_id: "user-1",
+    preferences: { interface_language: "en", conversation_language: "en" },
+    businesses: ["a", "b"].map((id) => ({
+      id,
+      name: `Negocio ${id}`,
+      membership_id: `membership-${id}`,
+      role: "owner",
+      capabilities: ["publish"],
+    })),
+    features: {
+      public_registration: false,
+      facebook_publishing: true,
+      tiktok_direct_publishing: false,
+      tiktok_manual_export: true,
+      instagram_publishing: false,
+      instagram_connection: true,
+      mia_analysis: false,
+      scheduling: false,
+    },
+  });
+  mocks.getPublicConfig.mockResolvedValue({
+    public_registration: false,
+    google_sign_in: false,
+    facebook_sign_in: false,
+    apple_sign_in: false,
+    trial_available: false,
+  });
+  mocks.registerAccount.mockResolvedValue({});
+  mocks.updateAccountPreferences.mockResolvedValue({
+    interface_language: "es",
+    conversation_language: "en",
+  });
+  mocks.getBusinessPreferences.mockResolvedValue({
+    marketing_content_language: "en",
+  });
+  mocks.updateBusinessPreferences.mockResolvedValue({
+    marketing_content_language: "en",
+  });
+  mocks.getHeyGenUsage.mockResolvedValue({
+    business_id: "a",
+    configured: false,
+    limits: null,
+    attempts_used: 0,
+    active_jobs: 0,
+    remaining_generations: 0,
+    period: "lifetime",
+    unit: "generation_attempts",
+  });
+  mocks.getBusinessEntitlement.mockResolvedValue({
+    status: "operator_granted",
+    provider_status: null,
+    trial_started_at: null,
+    trial_expires_at: null,
+    days_remaining: null,
+    usage: null,
+    features: {},
+    subscription_management: "unavailable",
+  });
+  mocks.getBillingOverview.mockRejectedValue(new Error("Billing unavailable"));
+  mocks.getOnboarding.mockResolvedValue({
+    current_step: 1,
+    business_profile: {},
+    interface_language: "en",
+    conversation_language: "en",
+    marketing_content_language: "en",
+    social_accounts_skipped: false,
+    completed: false,
+    tutorial_completed: false,
+    tutorial_step: 0,
+  });
+  mocks.updateTutorialCompletion.mockResolvedValue({
+    completed: false,
+    current_step: 0,
+  });
   mocks.getBusinesses.mockResolvedValue([business("a"), business("b")]);
   mocks.getDrafts.mockResolvedValue([]);
   mocks.getConnectedFacebookAccounts.mockResolvedValue([]);
+  mocks.getInstagramConnection.mockResolvedValue({
+    status: "not_connected",
+    username: null,
+    facebook_page_id: null,
+    facebook_page_name: null,
+    granted_permissions: [],
+    missing_permissions: [],
+    message: null,
+  });
 });
 afterEach(() => {
   cleanup();
+  sessionStorage.clear();
+  window.history.replaceState(null, "", window.location.pathname);
   expect(fetch).not.toHaveBeenCalled();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -277,6 +468,140 @@ it("waits for authentication and unsubscribes", async () => {
   expect(screen.getByText("Iniciar sesión")).toBeTruthy();
   view.unmount();
   expect(mocks.unsubscribe).toHaveBeenCalledTimes(1);
+});
+it("restores a Facebook handoff into its business integrations after auth", async () => {
+  window.history.replaceState(
+    null,
+    "",
+    "/#facebook_handoff=handoff-token&business_id=b",
+  );
+
+  render(<App />);
+
+  const businessSelector = await screen.findByLabelText(
+    /(Seleccionar negocio|Select business)/,
+  );
+  await waitFor(() =>
+    expect((businessSelector as HTMLSelectElement).value).toBe("b"),
+  );
+  expect(window.location.hash).toBe("");
+  expect(window.location.href).not.toContain("handoff-token");
+  expect(
+    screen
+      .getByRole("button", { name: "Integraciones" })
+      .getAttribute("aria-current"),
+  ).toBe("page");
+});
+it("keeps a Facebook handoff while the session is missing, then restores it after sign-in", async () => {
+  mocks.getSession.mockResolvedValue({ data: { session: null } });
+  window.history.replaceState(
+    null,
+    "",
+    "/#facebook_handoff=handoff-token&business_id=b",
+  );
+
+  render(<App />);
+
+  expect(await screen.findByText("Iniciar sesión")).toBeTruthy();
+  expect(
+    window.sessionStorage.getItem("ai-marketing-studio:facebook-handoff"),
+  ).toContain("handoff-token");
+  await act(async () => authChange("SIGNED_IN", session));
+
+  const businessSelector = await screen.findByLabelText(
+    /(Seleccionar negocio|Select business)/,
+  );
+  await waitFor(() =>
+    expect((businessSelector as HTMLSelectElement).value).toBe("b"),
+  );
+  expect(window.location.href).not.toContain("handoff-token");
+  expect(
+    screen
+      .getByRole("button", { name: "Integraciones" })
+      .getAttribute("aria-current"),
+  ).toBe("page");
+});
+it("automatically launches an unfinished guide and persists completion", async () => {
+  mocks.getOnboarding.mockResolvedValue({
+    current_step: 6,
+    business_profile: {},
+    interface_language: "en",
+    conversation_language: "en",
+    marketing_content_language: "en",
+    social_accounts_skipped: true,
+    completed: true,
+    tutorial_completed: false,
+    tutorial_step: 0,
+  });
+  await openApp();
+
+  expect(
+    await screen.findByRole("complementary", { name: "Guía del producto" }),
+  ).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Omitir guía" }));
+  await waitFor(() => {
+    expect(mocks.updateTutorialCompletion).toHaveBeenCalledWith(true, 0);
+  });
+});
+it("provisions a verified OAuth session only when the server gate allows it", async () => {
+  const account = {
+    user_id: "user-1",
+    preferences: { interface_language: "en", conversation_language: "en" },
+    businesses: ["a", "b"].map((id) => ({
+      id,
+      name: `Negocio ${id}`,
+      membership_id: `membership-${id}`,
+      role: "owner",
+      capabilities: ["publish"],
+    })),
+    features: {
+      public_registration: true,
+      facebook_publishing: true,
+      tiktok_direct_publishing: false,
+      tiktok_manual_export: true,
+      instagram_publishing: false,
+      instagram_connection: true,
+      mia_analysis: false,
+      scheduling: false,
+    },
+  };
+  mocks.getAccount
+    .mockRejectedValueOnce(new ApiError("not provisioned", 403))
+    .mockResolvedValue(account);
+  mocks.getPublicConfig.mockResolvedValue({
+    public_registration: true,
+    google_sign_in: true,
+    facebook_sign_in: false,
+    apple_sign_in: false,
+    trial_available: true,
+  });
+  await openApp();
+
+  expect(mocks.registerAccount).toHaveBeenCalledOnce();
+  expect(mocks.getBusinesses).toHaveBeenCalled();
+});
+it("restarts the product guide from Settings at its first step", async () => {
+  mocks.getOnboarding.mockResolvedValue({
+    current_step: 6,
+    business_profile: {},
+    interface_language: "en",
+    conversation_language: "en",
+    marketing_content_language: "en",
+    social_accounts_skipped: true,
+    completed: true,
+    tutorial_completed: true,
+    tutorial_step: 8,
+  });
+  await openApp();
+
+  fireEvent.click(screen.getByRole("button", { name: "Configuración" }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Reiniciar la guía" }),
+  );
+  expect(
+    await screen.findByText("Te damos la bienvenida a tu espacio de marketing"),
+  ).toBeTruthy();
+  expect(mocks.updateTutorialCompletion).toHaveBeenCalledWith(false, 0);
 });
 it("handles session initialization failure", async () => {
   mocks.getSession.mockRejectedValue(new Error("offline"));
@@ -369,7 +694,10 @@ it("keeps all navigation destinations keyboard-focusable and closes mobile navig
   const mobileNavigation = within(dialog).getByRole("navigation", {
     name: "Navegación principal",
   });
-  expect(within(mobileNavigation).getAllByRole("button")).toHaveLength(7);
+  expect(within(mobileNavigation).getAllByRole("button")).toHaveLength(8);
+  expect(
+    within(mobileNavigation).getByRole("button", { name: "Facturación" }),
+  ).toBeTruthy();
   fireEvent.keyDown(dialog, { key: "Escape" });
   expect(screen.queryByRole("dialog")).toBeNull();
 
@@ -388,7 +716,7 @@ it("keeps all navigation destinations keyboard-focusable and closes mobile navig
 
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(
-    screen.getByRole("heading", { name: "Analíticas", level: 2 }),
+    screen.getByRole("heading", { name: "Resultados", level: 2 }),
   ).toBeTruthy();
   expect(localStorage.getItem("ai-marketing-studio:section")).toBe(
     "Analíticas",
@@ -397,7 +725,11 @@ it("keeps all navigation destinations keyboard-focusable and closes mobile navig
 it("selects the first business and remembers changes per user", async () => {
   await openApp();
   expect(
-    (screen.getByLabelText("Seleccionar negocio") as HTMLSelectElement).value,
+    (
+      screen.getByLabelText(
+        /(Seleccionar negocio|Select business)/,
+      ) as HTMLSelectElement
+    ).value,
   ).toBe("a");
   select("b");
   expect(localStorage.getItem("ai-marketing-studio:business:user-1")).toBe("b");
@@ -427,20 +759,18 @@ it("works without browser storage", async () => {
 it("handles empty businesses", async () => {
   mocks.getBusinesses.mockResolvedValue([]);
   render(<App />);
-  await screen.findByText("Sin negocios");
-  expect(
-    (screen.getByLabelText("Seleccionar negocio") as HTMLSelectElement)
-      .disabled,
-  ).toBe(true);
+  await screen.findByRole("heading", {
+    name: "Te damos la bienvenida a tu espacio",
+  });
+  expect(screen.getByLabelText("Idioma de la interfaz")).toBeTruthy();
   expect(mocks.getDrafts).not.toHaveBeenCalled();
 });
 it("shows business failures without retries", async () => {
   mocks.getBusinesses.mockRejectedValue(new Error("offline"));
   render(<App />);
-  expect(await screen.findByRole("alert")).toHaveProperty(
-    "textContent",
-    "No se pudieron cargar los negocios.",
-  );
+  expect(
+    await screen.findByText("No se pudieron cargar los negocios."),
+  ).toBeTruthy();
   expect(mocks.getBusinesses).toHaveBeenCalledTimes(1);
 });
 it.each([false, true])(
@@ -451,7 +781,7 @@ it.each([false, true])(
       id === "a" ? old.promise : Promise.resolve([draft("b")]),
     );
     await openApp();
-    expect(await screen.findByText("Cargando borradores...")).toBeTruthy();
+    expect(await screen.findByText("Cargando borradores…")).toBeTruthy();
     select("b");
     await screen.findByText("Borrador b");
     await act(async () => {
@@ -467,7 +797,9 @@ it("ignores businesses arriving after logout", async () => {
   const old = deferred<Business[]>();
   mocks.getBusinesses.mockReturnValue(old.promise);
   render(<App />);
-  await screen.findByRole("heading", { name: "Resumen" });
+  await screen.findByRole("heading", {
+    name: "Iniciando tu espacio de trabajo…",
+  });
   act(() => authChange("SIGNED_OUT", null));
   await act(async () => old.resolve([business("a")]));
   expect(mocks.getDrafts).not.toHaveBeenCalled();
@@ -478,7 +810,11 @@ it("creates and selects a business; navigation closes its form", async () => {
   fireEvent.click(screen.getByText("+ Agregar negocio"));
   fireEvent.click(screen.getByText("Crear negocio de prueba"));
   expect(
-    (screen.getByLabelText("Seleccionar negocio") as HTMLSelectElement).value,
+    (
+      screen.getByLabelText(
+        /(Seleccionar negocio|Select business)/,
+      ) as HTMLSelectElement
+    ).value,
   ).toBe("c");
   fireEvent.click(screen.getByText("+ Agregar negocio"));
   fireEvent.click(screen.getByRole("button", { name: "Campañas" }));
@@ -496,7 +832,7 @@ it("preserves Spanish navigation restoration and fallback", async () => {
   localStorage.setItem("ai-marketing-studio:section", "Analíticas");
   render(<App />);
   expect(
-    await screen.findByRole("heading", { name: "Analíticas", level: 2 }),
+    await screen.findByRole("heading", { name: "Resultados", level: 2 }),
   ).toBeTruthy();
 });
 it("shows draft loading failures", async () => {
@@ -585,7 +921,7 @@ it("still displays publishing errors for the current business", async () => {
   fireEvent.click(screen.getByRole("button", { name: /^Aprobaciones/ }));
   fireEvent.click(await screen.findByText("Publicar a"));
   expect((await screen.findByRole("alert")).textContent).toContain(
-    "No se pudo confirmar la publicación",
+    "No se pudo completar la publicación en Facebook",
   );
   select("b");
   expect(screen.queryByRole("alert")).toBeNull();
@@ -629,7 +965,7 @@ it("does not reload businesses or drafts on token refresh", async () => {
   expect(mocks.getBusinesses).toHaveBeenCalledTimes(businessCalls);
   expect(mocks.getDrafts).toHaveBeenCalledTimes(draftCalls);
 });
-it("ignores stale Facebook connection status after switching businesses", async () => {
+it("presents Edian as available without overstating platform analytics", async () => {
   const old = deferred<unknown[]>();
   mocks.getConnectedFacebookAccounts.mockImplementation((id: string) =>
     id === "a" ? old.promise : Promise.resolve([]),
@@ -637,18 +973,102 @@ it("ignores stale Facebook connection status after switching businesses", async 
   await openApp();
   select("b");
   fireEvent.click(screen.getByRole("button", { name: "Equipo IA" }));
-  await screen.findByText(
-    "Conecta una página de Facebook para consultar estadísticas",
-  );
+  expect(screen.getAllByText("Edian").length).toBeGreaterThan(0);
+  expect(
+    screen.getByText(
+      "Lista para interpretar las métricas disponibles de Facebook",
+    ),
+  ).toBeTruthy();
+  expect(
+    screen.queryByText(
+      "Conecta una página de Facebook para consultar estadísticas",
+    ),
+  ).toBeNull();
   await act(async () => old.resolve([{ id: "old-account" }]));
   expect(
     screen.queryByText("Análisis de interacciones de Facebook disponible"),
   ).toBeNull();
   expect(
-    screen.getByText(
+    screen.queryByText(
       "Conecta una página de Facebook para consultar estadísticas",
     ),
+  ).toBeNull();
+});
+it("routes the selected business's Edian summary to Sebastián's chat", async () => {
+  await openApp();
+  select("b");
+  const businessSelector = screen.getByLabelText(
+    "Seleccionar negocio",
+  ) as HTMLSelectElement;
+  await waitFor(() => expect(businessSelector.value).toBe("b"));
+  fireEvent.click(screen.getByRole("button", { name: "Analíticas" }));
+  fireEvent.click(
+    screen.getByRole("button", { name: "Discuss with Sebastián" }),
+  );
+
+  expect(
+    await screen.findByRole("heading", { name: "Equipo IA" }),
   ).toBeTruthy();
+  const strategyChat = screen.getByTestId("strategy-handoff-chat");
+  expect(strategyChat.getAttribute("data-business-id")).toBe("b");
+  expect(
+    (within(strategyChat).getByRole("textbox") as HTMLTextAreaElement).value,
+  ).toBe("tenant-local analytics summary");
+  expect(mocks.generateContent).not.toHaveBeenCalled();
+
+  select("a");
+  await waitFor(() => expect(businessSelector.value).toBe("a"));
+  const switchedChat = screen.getByTestId("strategy-handoff-chat");
+  expect(switchedChat.getAttribute("data-business-id")).toBe("a");
+  expect(
+    (within(switchedChat).getByRole("textbox") as HTMLTextAreaElement).value,
+  ).toBe("");
+
+  fireEvent.click(screen.getByRole("button", { name: "Analíticas" }));
+  fireEvent.click(
+    screen.getByRole("button", { name: "Discuss with Sebastián" }),
+  );
+  const secondHandoffComposer = within(
+    screen.getByTestId("strategy-handoff-chat"),
+  ).getByRole("textbox") as HTMLTextAreaElement;
+  expect(secondHandoffComposer.value).toBe("tenant-local analytics summary");
+  act(() => authChange("SIGNED_OUT", null));
+  expect(
+    await screen.findByRole("button", { name: "Iniciar sesión" }),
+  ).toBeTruthy();
+  act(() => authChange("SIGNED_IN", session));
+  await screen.findByRole("option", { name: "Negocio a" });
+  await screen.findByRole("heading", { name: "Equipo IA" });
+  const loggedInComposer = within(
+    screen.getByTestId("strategy-handoff-chat"),
+  ).getByRole("textbox") as HTMLTextAreaElement;
+  expect(loggedInComposer.value).toBe("");
+});
+it("preserves the chat draft while navigating to Billing and back", async () => {
+  await openApp();
+  fireEvent.click(screen.getByRole("button", { name: "Equipo IA" }));
+  const composer = screen.getByRole("textbox", {
+    name: "Strategy handoff",
+  }) as HTMLTextAreaElement;
+  fireEvent.change(composer, { target: { value: "Keep this strategy draft" } });
+
+  fireEvent.click(
+    screen.getByRole("button", { name: "Open billing from chat test" }),
+  );
+  expect(
+    screen
+      .getByRole("button", { name: "Facturación" })
+      .getAttribute("aria-current"),
+  ).toBe("page");
+  fireEvent.click(screen.getByRole("button", { name: "Equipo IA" }));
+
+  expect(
+    (
+      screen.getByRole("textbox", {
+        name: "Strategy handoff",
+      }) as HTMLTextAreaElement
+    ).value,
+  ).toBe("Keep this strategy draft");
 });
 it("keeps the mobile Spanish navigation working", async () => {
   await openApp();
@@ -670,13 +1090,47 @@ it("adds current generated content and opens approvals", async () => {
   expect(mocks.generateContent).toHaveBeenCalledWith("a");
 });
 
+it.each([
+  [
+    "en",
+    "This business has too much saved context for content generation. Shorten its profile or recent drafts, then try again.",
+  ],
+  [
+    "es",
+    "Este negocio tiene demasiado contexto guardado para generar contenido. Acorta el perfil o los borradores recientes e inténtalo de nuevo.",
+  ],
+])(
+  "shows a localized safe Valeria validation error (%s)",
+  async (locale, message) => {
+    localStorage.setItem("ai-marketing-studio:interface-language", locale);
+    mocks.generateContent.mockRejectedValue(
+      new ApiError(
+        "This AI request contains too much context. Shorten the request or conversation and try again.",
+        400,
+        "invalid_input",
+      ),
+    );
+    await openApp();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: locale === "es" ? "Equipo IA" : "AI team",
+      }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Continue with Valeria" }),
+    );
+    expect((await screen.findByRole("alert")).textContent).toBe(message);
+    expect(mocks.generateContent).toHaveBeenCalledWith("a");
+  },
+);
+
 it.each([false, true])(
   "ignores pending draft responses after logout (failure: %s)",
   async (failure) => {
     const old = deferred<Draft[]>();
     mocks.getDrafts.mockReturnValueOnce(old.promise).mockResolvedValue([]);
     await openApp();
-    await screen.findByText("Cargando borradores...");
+    await screen.findByText("Cargando borradores…");
     act(() => authChange("SIGNED_OUT", null));
     expect(screen.getByText("Iniciar sesión")).toBeTruthy();
     act(() => authChange("SIGNED_IN", session));
@@ -936,7 +1390,7 @@ it("saves destinations before approving and blocks another approval while pendin
   expect(mocks.updateDraftDestinations).toHaveBeenCalledTimes(1);
   expect(mocks.approveDraft).not.toHaveBeenCalled();
   await act(async () => saved.resolve(editableDraft));
-  expect(mocks.updateDraftDestinations).toHaveBeenCalledWith("a", ["facebook"]);
+  expect(mocks.updateDraftDestinations).toHaveBeenCalledWith("a", []);
   expect(mocks.approveDraft).toHaveBeenCalledTimes(1);
   expect(screen.getByTestId("draft-state-a").textContent).toContain("approved");
 });
@@ -1062,3 +1516,31 @@ it("retains Facebook video verification interval and cleans it up at logout", as
   act(() => authChange("SIGNED_OUT", null));
   expect(clearInterval).toHaveBeenCalledWith(intervalId);
 });
+
+it.each<{ destinations: ("facebook" | "tiktok")[] }>([
+  { destinations: [] },
+  { destinations: ["tiktok"] },
+])(
+  "approves manual-use content without enabling direct publication ($destinations)",
+  async ({ destinations }) => {
+    const manual = { ...editableDraft, publish_destinations: destinations };
+    mocks.getDrafts.mockResolvedValue([manual]);
+    mocks.updateDraftDestinations.mockResolvedValue({
+      ...manual,
+      publish_destinations: [],
+    });
+    mocks.approveDraft.mockResolvedValue({
+      ...manual,
+      status: "approved",
+      publish_destinations: [],
+    });
+    await openApp();
+    fireEvent.click(screen.getByRole("button", { name: /^Aprobaciones/ }));
+    fireEvent.click(await screen.findByText("Aprobar a"));
+    await act(async () => {});
+    expect(mocks.updateDraftDestinations).toHaveBeenCalledWith("a", []);
+    expect(mocks.approveDraft).toHaveBeenCalledTimes(1);
+    expect(mocks.publishDraftToFacebook).not.toHaveBeenCalled();
+    expect(mocks.publishDraftToTikTok).not.toHaveBeenCalled();
+  },
+);

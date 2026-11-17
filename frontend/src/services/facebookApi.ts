@@ -5,6 +5,16 @@ export type FacebookPage = {
   name: string;
 };
 
+export class FacebookApiError extends Error {
+  constructor(
+    message: string,
+    readonly status?: number,
+  ) {
+    super(message);
+    this.name = "FacebookApiError";
+  }
+}
+
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL?.trim() || "http://127.0.0.1:8000";
 
@@ -88,7 +98,7 @@ async function getFacebookAccessToken(): Promise<string> {
   } = await supabase.auth.getSession();
 
   if (error || !session?.access_token) {
-    throw new Error("Debes iniciar sesión.");
+    throw new FacebookApiError("Debes iniciar sesión.", 401);
   }
 
   return session.access_token;
@@ -96,6 +106,7 @@ async function getFacebookAccessToken(): Promise<string> {
 
 export async function getFacebookHandoff(
   handoffToken: string,
+  businessId: string,
 ): Promise<FacebookHandoff> {
   const accessToken = await getFacebookAccessToken();
 
@@ -107,11 +118,15 @@ export async function getFacebookHandoff(
     },
     body: JSON.stringify({
       handoff_token: handoffToken,
+      business_id: businessId,
     }),
   });
 
   if (!response.ok) {
-    throw new Error("La conexión con Facebook expiró o no es válida.");
+    throw new FacebookApiError(
+      "La conexión con Facebook expiró o no es válida.",
+      response.status,
+    );
   }
 
   return response.json() as Promise<FacebookHandoff>;
@@ -119,6 +134,7 @@ export async function getFacebookHandoff(
 
 export async function selectFacebookPage(
   selectionToken: string,
+  businessId: string,
   pageId: string,
 ): Promise<FacebookConnectionResult> {
   const accessToken = await getFacebookAccessToken();
@@ -131,12 +147,16 @@ export async function selectFacebookPage(
     },
     body: JSON.stringify({
       selection_token: selectionToken,
+      business_id: businessId,
       page_id: pageId,
     }),
   });
 
   if (!response.ok) {
-    throw new Error("No se pudo conectar la página de Facebook.");
+    throw new FacebookApiError(
+      "No se pudo conectar la página de Facebook.",
+      response.status,
+    );
   }
 
   return response.json() as Promise<FacebookConnectionResult>;
@@ -160,8 +180,25 @@ export async function getConnectedFacebookAccounts(
     throw new Error("No se pudieron recuperar las cuentas de Facebook.");
   }
 
-  const data: { accounts: ConnectedFacebookAccount[] } =
-    await response.json();
+  const data: { accounts: ConnectedFacebookAccount[] } = await response.json();
 
   return data.accounts;
+}
+
+export async function disconnectFacebookAccount(
+  businessId: string,
+  accountId: string,
+): Promise<void> {
+  const accessToken = await getFacebookAccessToken();
+  const url = new URL(
+    `${API_BASE_URL}/auth/facebook/accounts/${encodeURIComponent(accountId)}`,
+  );
+  url.searchParams.set("business_id", businessId);
+  const response = await fetch(url.toString(), {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    throw new Error("Unable to disconnect Facebook Page");
+  }
 }

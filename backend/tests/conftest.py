@@ -15,8 +15,11 @@ os.environ.update({
     "SUPABASE_SECRET_KEY": "test-only-secret",
     "SUPABASE_STORAGE_BUCKET": "test-only-bucket",
     "ALLOWED_USER_ID": "test-authorized-user",
+    "PUBLIC_REGISTRATION_ENABLED": "false",
+    "SUPABASE_GOOGLE_SIGN_IN_ENABLED": "false",
     "OPENAI_API_KEY": "test-only-openai-key",
     "HEYGEN_API_KEY": "test-only-heygen-key",
+    "HEYGEN_BUSINESS_ALLOWANCES": '{"business-1":{"max_generations":100,"max_script_characters":5000,"max_concurrent_jobs":10}}',
     "FRONTEND_BASE_URL": "https://studio.test.invalid",
 })
 
@@ -43,20 +46,20 @@ def block_external_requests(monkeypatch):
 
 
 @pytest.fixture
-def isolated_client():
+def isolated_client(tmp_path):
     """A fresh database and in-process HTTP client for each new baseline test."""
     from fastapi.testclient import TestClient
     from sqlalchemy import create_engine, event
     from sqlalchemy.orm import Session
-    from sqlalchemy.pool import StaticPool
 
-    from app.auth import verify_token
+    from app.auth import verify_token, get_authenticated_principal
     from app.database import get_db
     from app.main import app
     from app.models import Base
 
     engine = create_engine(
-        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool,
+        f"sqlite:///{tmp_path / 'isolated.sqlite'}",
+        connect_args={"check_same_thread": False},
     )
 
     @event.listens_for(engine, "connect")
@@ -64,6 +67,10 @@ def isolated_client():
         connection.execute("PRAGMA foreign_keys=ON")
 
     Base.metadata.create_all(engine)
+    from tests.tenancy_fixtures import grant_test_owner
+    with Session(engine) as db:
+        principal = grant_test_owner(db)
+        db.commit()
 
     def override_db():
         with Session(engine) as db:
@@ -71,6 +78,7 @@ def isolated_client():
 
     previous_overrides = app.dependency_overrides.copy()
     app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_authenticated_principal] = lambda: principal
     app.dependency_overrides[verify_token] = lambda: {"sub": "test-authorized-user"}
     try:
         with TestClient(app) as client:

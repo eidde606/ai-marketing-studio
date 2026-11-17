@@ -9,10 +9,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from app import auth
-from app.auth import verify_token
+from app.auth import verify_token, get_authenticated_principal
+from tests.tenancy_fixtures import grant_test_owner
 from app.database import get_db
 from app.main import app
-from app.models import Base, Business, Draft, SocialAccount
+from app.models import Base, Business, Draft, SocialAccount, User
 
 
 @pytest.fixture
@@ -35,12 +36,15 @@ def drafts_client():
         db.commit()
         ids = [draft.id for draft in drafts]
         business_id = business.id
+        principal = grant_test_owner(db, [business_id], subject="test")
+        db.commit()
 
     def override_db():
         with Session(engine) as db:
             yield db
 
     app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_authenticated_principal] = lambda: principal
     app.dependency_overrides[verify_token] = lambda: {"sub": "test"}
     try:
         with TestClient(app) as client:
@@ -103,13 +107,23 @@ def test_busy_draft_cannot_be_deleted(drafts_client, field, value):
 def test_delete_enforces_real_authorization(drafts_client, monkeypatch):
     client, engine, _, ids = drafts_client
     del app.dependency_overrides[verify_token]
+    del app.dependency_overrides[get_authenticated_principal]
     assert client.delete(f"/drafts/{ids[0]}").status_code == 401
     monkeypatch.setattr(auth.jwks_client, "get_signing_key_from_jwt", lambda token: SimpleNamespace(key="fake"))
-    monkeypatch.setattr(auth.jwt, "decode", lambda *args, **kwargs: {"sub": "unauthorized"})
+    monkeypatch.setattr(auth.jwt, "decode", lambda *args, **kwargs: {
+        "sub": "unauthorized", "iss": auth.SUPABASE_ISSUER,
+    })
     assert client.delete(f"/drafts/{ids[0]}", headers={"Authorization": "Bearer fake"}).status_code == 403
     with Session(engine) as db:
         assert db.get(Draft, ids[0]).deleted_at is None
-    monkeypatch.setattr(auth.jwt, "decode", lambda *args, **kwargs: {"sub": auth.ALLOWED_USER_ID})
+    monkeypatch.setattr(auth.jwt, "decode", lambda *args, **kwargs: {
+        "sub": auth.ALLOWED_USER_ID, "iss": auth.SUPABASE_ISSUER,
+    })
+    assert client.delete(f"/drafts/{ids[0]}", headers={"Authorization": "Bearer fake"}).status_code == 403
+    with Session(engine) as db:
+        assert db.get(Draft, ids[0]).deleted_at is None
+        grant_test_owner(db, [db.get(Draft, ids[0]).business_id])
+        db.commit()
     assert client.delete(f"/drafts/{ids[0]}", headers={"Authorization": "Bearer fake"}).status_code == 200
 
 

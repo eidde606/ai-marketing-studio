@@ -10,7 +10,7 @@ async def get_creator_info(access_token: str) -> dict:
         response = await client.post(
             f"{TIKTOK_API_URL}/post/publish/creator_info/query/",
             headers={
-                "Authorization": f"******",
+                "Authorization": f"Bearer {access_token}",
                 "Content-Type": "application/json",
             },
             json={},
@@ -50,7 +50,7 @@ async def publish_tiktok_video(
         response = await client.post(
             f"{TIKTOK_API_URL}/post/publish/video/init/",
             headers={
-                "Authorization": f"******",
+                "Authorization": f"Bearer {access_token}",
                 "Content-Type": "application/json",
             },
             json=payload,
@@ -94,7 +94,7 @@ async def publish_tiktok_video_file(
     async with httpx.AsyncClient(timeout=120.0) as client:
         response = await client.post(
             f"{TIKTOK_API_URL}/post/publish/video/init/",
-            headers={"Authorization": f"******"},
+            headers={"Authorization": f"Bearer {access_token}"},
             json=payload,
         )
         if response.is_error:
@@ -148,7 +148,7 @@ async def publish_tiktok_photo(
         response = await client.post(
             f"{TIKTOK_API_URL}/post/publish/content/init/",
             headers={
-                "Authorization": f"******",
+                "Authorization": f"Bearer {access_token}",
                 "Content-Type": "application/json",
             },
             json=payload,
@@ -169,7 +169,7 @@ async def get_tiktok_publish_status(
         response = await client.post(
             f"{TIKTOK_API_URL}/post/publish/status/fetch/",
             headers={
-                "Authorization": f"******",
+                "Authorization": f"Bearer {access_token}",
                 "Content-Type": "application/json",
             },
             json={"publish_id": publish_id},

@@ -21,3 +21,24 @@ class Transactions:
 
     def expire_all(self) -> None:
         self._session.expire_all()
+
+
+def rollback_on_failure(workflow):
+    """Explicit service opt-in: release locks/rollback pending writes on failure.
+
+    Commits remain at the workflow's existing boundaries. Requires a named db
+    argument; preserves the service signature for HTTP wiring and direct callers.
+    """
+    from functools import wraps
+    from inspect import signature
+    parameters = signature(workflow)
+
+    @wraps(workflow)
+    def run(*args, **kwargs):
+        db = parameters.bind(*args, **kwargs).arguments["db"]
+        try:
+            return workflow(*args, **kwargs)
+        except Exception:
+            Transactions(db).rollback()
+            raise
+    return run

@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timezone
 from urllib.parse import urlencode
 
 import httpx
@@ -52,7 +53,61 @@ def _raise_meta_error(response: httpx.Response) -> None:
         raise MetaAPIError(response.status_code, code if isinstance(code, int) else None)
 
 
-async def exchange_code_for_long_lived_token(code: str) -> tuple[str, int]:
+async def get_token_expiration(access_token: str) -> int | None:
+    app_id = os.environ["FACEBOOK_APP_ID"]
+    app_secret = os.environ["FACEBOOK_APP_SECRET"]
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.get(
+            f"{GRAPH_API_URL}/debug_token",
+            params={
+                "input_token": access_token,
+            },
+            headers={
+                "Authorization": f"Bearer {app_id}|{app_secret}",
+            },
+        )
+
+    _raise_meta_error(response)
+
+    try:
+        payload = response.json()
+    except (TypeError, ValueError) as exc:
+        raise TokenExchangeError("debug_token_invalid_json") from exc
+
+    if not isinstance(payload, dict):
+        raise TokenExchangeError("debug_token_invalid_response")
+
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise TokenExchangeError("debug_token_missing_data")
+
+    if data.get("is_valid") is not True:
+        raise TokenExchangeError("debug_token_invalid_token")
+
+    if not isinstance(data.get("app_id"), str) or data["app_id"] != app_id:
+        raise TokenExchangeError("debug_token_app_mismatch")
+
+    expires_at = data.get("expires_at")
+
+    if isinstance(expires_at, bool) or not isinstance(expires_at, int):
+        raise TokenExchangeError("debug_token_invalid_expiration")
+
+    if expires_at == 0:
+        # Meta uses zero to indicate a token without a fixed expiration.
+        return None
+
+    remaining_seconds = int(expires_at - datetime.now(timezone.utc).timestamp())
+
+    if remaining_seconds <= 0:
+        raise TokenExchangeError("debug_token_expired")
+
+    return remaining_seconds
+
+
+async def exchange_code_for_long_lived_token(
+    code: str,
+) -> tuple[str, int | None]:
     app_id = os.environ["FACEBOOK_APP_ID"]
     app_secret = os.environ["FACEBOOK_APP_SECRET"]
     redirect_uri = os.environ["INSTAGRAM_REDIRECT_URI"]
@@ -82,13 +137,18 @@ async def exchange_code_for_long_lived_token(code: str) -> tuple[str, int]:
         payload = _parse_token_response(response, "long")
 
     token = _read_access_token(payload, "long")
-    expires_in = payload.get("expires_in")
+
     if "expires_in" not in payload:
-        raise TokenExchangeError("long_token_missing_expires_in")
-    if isinstance(expires_in, bool) or not isinstance(expires_in, int):
-        raise TokenExchangeError("long_token_invalid_expires_in_type")
-    if expires_in <= 0:
-        raise TokenExchangeError("long_token_invalid_expires_in_value")
+        expires_in = await get_token_expiration(token)
+    else:
+        expires_in = payload["expires_in"]
+
+        if isinstance(expires_in, bool) or not isinstance(expires_in, int):
+            raise TokenExchangeError("long_token_invalid_expires_in_type")
+
+        if expires_in <= 0:
+            raise TokenExchangeError("long_token_invalid_expires_in_value")
+
     return token, expires_in
 
 
@@ -129,8 +189,8 @@ async def get_granted_permissions(access_token: str) -> set[str]:
         item["permission"]
         for item in data
         if isinstance(item, dict)
-        and item.get("status") == "granted"
-        and isinstance(item.get("permission"), str)
+           and item.get("status") == "granted"
+           and isinstance(item.get("permission"), str)
     }
 
 
@@ -162,8 +222,8 @@ async def get_managed_pages(access_token: str) -> list[dict]:
 
 
 async def get_page_instagram_account(
-    access_token: str,
-    page_id: str,
+        access_token: str,
+        page_id: str,
 ) -> dict:
     async with httpx.AsyncClient(timeout=15.0) as client:
         response = await client.get(

@@ -1,9 +1,11 @@
 import type { FormEvent } from "react";
+import { LoaderCircle, Trash2, X } from "lucide-react";
 import type {
   CampaignInput,
   CampaignStatus,
 } from "../../services/campaignsApi";
-import { statusLabels } from "./campaignLabels";
+import { useLocalization } from "../../app/useLocalization";
+import { statusTranslationKeys } from "./campaignLabels";
 
 type Props = {
   form: CampaignInput;
@@ -12,7 +14,7 @@ type Props = {
   onChange: (form: CampaignInput) => void;
   onSave: (event: FormEvent) => Promise<void>;
   onCancel: () => void;
-  onDelete: () => Promise<void>;
+  onDelete: () => void;
 };
 
 export default function CampaignForm({
@@ -24,12 +26,13 @@ export default function CampaignForm({
   onCancel,
   onDelete,
 }: Props) {
+  const { t } = useLocalization();
   return (
     <section className="panel business-form-panel campaign-form">
-      <h2>{isEditing ? "Editar campaña" : "Nueva campaña"}</h2>
+      <h2>{t(isEditing ? "campaigns.edit" : "campaigns.new")}</h2>
       <form onSubmit={(event) => void onSave(event)}>
         <fieldset disabled={busy}>
-          <label htmlFor="campaign-name">Nombre *</label>
+          <label htmlFor="campaign-name">{t("campaigns.name")} *</label>
           <input
             id="campaign-name"
             required
@@ -37,7 +40,9 @@ export default function CampaignForm({
             value={form.name}
             onChange={(e) => onChange({ ...form, name: e.target.value })}
           />
-          <label htmlFor="campaign-objective">Objetivo *</label>
+          <label htmlFor="campaign-objective">
+            {t("campaigns.objective")} *
+          </label>
           <textarea
             id="campaign-objective"
             required
@@ -45,7 +50,7 @@ export default function CampaignForm({
             value={form.objective}
             onChange={(e) => onChange({ ...form, objective: e.target.value })}
           />
-          <label htmlFor="campaign-status">Estado</label>
+          <label htmlFor="campaign-status">{t("campaigns.status")}</label>
           <select
             id="campaign-status"
             value={form.status}
@@ -53,13 +58,15 @@ export default function CampaignForm({
               onChange({ ...form, status: e.target.value as CampaignStatus })
             }
           >
-            {Object.entries(statusLabels).map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
+            {(
+              ["draft", "active", "paused", "completed", "archived"] as const
+            ).map((status) => (
+              <option key={status} value={status}>
+                {t(statusTranslationKeys[status])}
               </option>
             ))}
           </select>
-          <label htmlFor="campaign-start">Fecha inicial (opcional)</label>
+          <label htmlFor="campaign-start">{t("campaigns.startDate")}</label>
           <input
             id="campaign-start"
             type="date"
@@ -68,7 +75,7 @@ export default function CampaignForm({
               onChange({ ...form, start_date: e.target.value || null })
             }
           />
-          <label htmlFor="campaign-end">Fecha final (opcional)</label>
+          <label htmlFor="campaign-end">{t("campaigns.endDate")}</label>
           <input
             id="campaign-end"
             type="date"
@@ -83,8 +90,16 @@ export default function CampaignForm({
               className="primary-button"
               type="submit"
               disabled={!form.name.trim() || !form.objective.trim()}
+              aria-busy={busy}
             >
-              {busy ? "Guardando..." : "Guardar campaña"}
+              {busy && (
+                <LoaderCircle
+                  size={16}
+                  className="campaign-save-spinner"
+                  aria-hidden="true"
+                />
+              )}
+              {busy ? t("campaigns.saving") : t("campaigns.save")}
             </button>
             <button
               className="outline-button"
@@ -92,16 +107,18 @@ export default function CampaignForm({
               disabled={busy}
               onClick={onCancel}
             >
-              Cancelar
+              <X size={16} aria-hidden="true" />
+              {t("campaigns.cancel")}
             </button>
             {isEditing && (
               <button
-                className="danger-button"
+                className="outline-button campaign-delete-button"
                 type="button"
                 disabled={busy}
                 onClick={() => void onDelete()}
               >
-                {busy ? "Eliminando..." : "Eliminar campaña"}
+                <Trash2 size={16} aria-hidden="true" />
+                {t("campaigns.delete")}
               </button>
             )}
           </div>

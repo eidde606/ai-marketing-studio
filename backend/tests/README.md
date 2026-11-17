@@ -29,6 +29,14 @@ direct SQL/ORM operations, trace dependencies through re-exports or services, or
 resolve dynamic imports (`importlib`/`__import__`). A green result does not certify
 the entire closed layered architecture.
 
+The legacy service/repository inventory also permits five exact OAuth bootstrap
+lookups. A callback has only an opaque state token, so it must read the stored
+business and initiating identity before resolving current membership. These
+lookups return metadata only; callbacks then re-resolve the active initiator,
+require `MANAGE_CONNECTIONS`, and consume state through tenant-scoped repository
+operations. Do not add OAuth credentials, account, draft, or publication reads to
+this bootstrap exception.
+
 Run it from `backend` using the existing environment:
 
 ```sh
@@ -127,7 +135,7 @@ only checking an in-memory object or a successful HTTP response.
 
 ### AI platform and publishing destinations
 
-The tests call both generation endpoints with mocked Sofía and Leo SDK responses.
+The tests call both generation endpoints with mocked Sebastián and Valeria SDK responses.
 They check two calls in order, the current model and output platform enum, saved
 content, business scoping, conversation instructions, pending status and the
 absence of publication IDs or automatic campaign assignment.

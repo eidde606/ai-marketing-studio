@@ -1,10 +1,44 @@
 """Facebook publishing and analytics provider adapter."""
 import httpx
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
 GRAPH_API_URL = "https://graph.facebook.com/v26.0"
+
+
+def _provider_error_fields(response: httpx.Response) -> tuple[str | None, str | None]:
+    try:
+        body = response.json()
+    except (ValueError, TypeError):
+        body = {}
+    error = body.get("error", {}) if isinstance(body, dict) else {}
+    if not isinstance(error, dict):
+        error = {}
+    code = error.get("code")
+    if type(code) not in {int, str}:
+        code = None
+    elif not re.fullmatch(r"[A-Za-z0-9_.-]{1,40}", str(code)):
+        code = None
+    provider_type = error.get("type")
+    if not isinstance(provider_type, str) or not re.fullmatch(
+        r"[A-Za-z0-9_.-]{1,40}", provider_type,
+    ):
+        provider_type = None
+    return (str(code) if code is not None else None, provider_type)
+
+
+def _metric_count(name: str, value: object) -> int | None:
+    if not isinstance(value, dict):
+        return None
+    if name == "shares":
+        count = value.get("count")
+    else:
+        summary = value.get("summary")
+        count = summary.get("total_count") if isinstance(summary, dict) else None
+    return count if type(count) is int and count >= 0 else None
+
 
 async def publish_text_post(
         page_id: str,
@@ -17,8 +51,8 @@ async def publish_text_post(
             f"{GRAPH_API_URL}/{page_id}/feed",
             data={
                 "message": message,
-                "access_token": access_token,
             },
+            headers={"Authorization": f"Bearer {access_token}"},
         )
         response.raise_for_status()
         return response.json()
@@ -48,9 +82,9 @@ async def publish_image_post(
             f"{GRAPH_API_URL}/{page_id}/photos",
             data={
                 "message": message,
-                "access_token": access_token,
                 "published": "true",
             },
+            headers={"Authorization": f"Bearer {access_token}"},
             files={"source": (filename, image_bytes, content_type)},
         )
         response.raise_for_status()
@@ -103,12 +137,52 @@ async def get_post_insights(
                 params={"fields": fields},
                 headers=headers,
             )
+            if response.is_error:
+                code, provider_type = _provider_error_fields(response)
+                logger.warning(
+                    "Facebook analytics field unavailable: status=%s code=%s type=%s",
+                    response.status_code,
+                    code,
+                    provider_type,
+                )
+                if code == "190" or response.status_code == 401:
+                    return {"_analytics_issue": "reauthorization_required"}
+                if code in {"10", "200"} or response.status_code == 403:
+                    return {"_analytics_issue": "permission_required"}
+                if response.status_code == 400:
+                    return {"_analytics_issue": "unavailable"}
             response.raise_for_status()
             return response.json()
 
         if media_type != "video":
-            # Regular Facebook feed post
             data = await fetch("id")
+            issue = data.pop("_analytics_issue", None)
+            metric_status = {
+                "reactions": "unavailable",
+                "comments": "unavailable",
+                "shares": "unavailable",
+            }
+            authorization_status = "connected"
+            if issue == "reauthorization_required":
+                authorization_status = issue
+            elif issue == "permission_required":
+                authorization_status = issue
+                metric_status = {name: issue for name in metric_status}
+            elif issue:
+                return {
+                    "id": post_id,
+                    "post_status": "unavailable",
+                    "authorization_status": authorization_status,
+                    "metric_status": metric_status,
+                }
+
+            if authorization_status != "connected":
+                return {
+                    "id": post_id,
+                    "post_status": "unverified",
+                    "authorization_status": authorization_status,
+                    "metric_status": metric_status,
+                }
 
             for field in (
                     "reactions.limit(0).summary(true)",
@@ -116,23 +190,68 @@ async def get_post_insights(
                     "shares",
                     "permalink_url",
             ):
-                try:
-                    result = await fetch(f"id,{field}")
-                    data.update(result)
-                except httpx.HTTPStatusError as exc:
-                    if exc.response.status_code != 400:
-                        raise
-                    # This field is unavailable for this object.
-                    logger.warning(
-                        "Facebook field unavailable: %s", field
-                    )
+                result = await fetch(f"id,{field}")
+                issue = result.pop("_analytics_issue", None)
+                metric = (
+                    "reactions" if field.startswith("reactions")
+                    else "comments" if field.startswith("comments")
+                    else "shares" if field == "shares"
+                    else None
+                )
+                if issue == "reauthorization_required":
+                    authorization_status = issue
+                    break
+                if issue == "permission_required":
+                    authorization_status = issue
+                    if metric:
+                        metric_status[metric] = issue
+                    continue
+                if issue:
+                    continue
+                data.update(result)
+                if metric:
+                    if _metric_count(metric, result.get(metric)) is not None:
+                        metric_status[metric] = "available"
 
-            return data
+            if authorization_status == "reauthorization_required":
+                metric_status = {
+                    name: "unavailable" for name in metric_status
+                }
+            return {
+                **data,
+                "post_status": "available",
+                "authorization_status": authorization_status,
+                "metric_status": metric_status,
+            }
 
-        # Facebook video object
         data = await fetch("id")
+        issue = data.pop("_analytics_issue", None)
+        metric_status = {
+            "reactions": "unavailable",
+            "comments": "unavailable",
+            "shares": "unavailable",
+        }
+        authorization_status = "connected"
+        if issue in {"reauthorization_required", "permission_required"}:
+            authorization_status = issue
+            if issue == "permission_required":
+                metric_status = {
+                    name: issue for name in metric_status
+                }
+            return {
+                "id": post_id,
+                "post_status": "unverified",
+                "authorization_status": authorization_status,
+                "metric_status": metric_status,
+            }
+        if issue:
+            return {
+                "id": post_id,
+                "post_status": "unavailable",
+                "authorization_status": authorization_status,
+                "metric_status": metric_status,
+            }
 
-        # Keep the existing working video comments and likes.
         for edge, key in (
                 ("likes", "reactions"),
                 ("comments", "comments"),
@@ -147,23 +266,44 @@ async def get_post_insights(
             )
 
             if response.is_error:
+                code, provider_type = _provider_error_fields(response)
                 logger.warning(
-                    "Facebook video %s error: %s",
-                    edge,
-                    response.text,
+                    "Facebook provider error: status=%s code=%s type=%s",
+                    response.status_code,
+                    code,
+                    provider_type,
                 )
-                if response.status_code != 400:
-                    response.raise_for_status()
+                if code == "190" or response.status_code == 401:
+                    authorization_status = "reauthorization_required"
+                    break
+                if code in {"10", "200"} or response.status_code == 403:
+                    authorization_status = "permission_required"
+                    metric_status[key] = "permission_required"
+                    continue
+                if response.status_code == 400:
+                    continue
+                response.raise_for_status()
                 continue
 
             data[key] = response.json()
+            if _metric_count(key, data[key]) is not None:
+                metric_status[key] = "available"
 
-        # Try to resolve the video's associated Facebook feed post.
-        try:
+        if authorization_status != "reauthorization_required":
             video_details = await fetch("id,post_id")
+            issue = video_details.pop("_analytics_issue", None)
+            if issue == "reauthorization_required":
+                authorization_status = issue
+            elif issue == "permission_required":
+                authorization_status = issue
+                metric_status["reactions"] = issue
+            elif issue:
+                pass
+            else:
+                data.update(video_details)
             feed_post_id = video_details.get("post_id")
 
-            if feed_post_id:
+            if feed_post_id and authorization_status != "reauthorization_required":
                 response = await client.get(
                     f"{GRAPH_API_URL}/{feed_post_id}",
                     params={
@@ -171,18 +311,31 @@ async def get_post_insights(
                     },
                     headers=headers,
                 )
-                response.raise_for_status()
+                if response.is_error:
+                    code, provider_type = _provider_error_fields(response)
+                    logger.warning(
+                        "Facebook provider error: status=%s code=%s type=%s",
+                        response.status_code,
+                        code,
+                        provider_type,
+                    )
+                    if code == "190" or response.status_code == 401:
+                        authorization_status = "reauthorization_required"
+                    elif code in {"10", "200"} or response.status_code == 403:
+                        authorization_status = "permission_required"
+                        metric_status["reactions"] = "permission_required"
+                    elif response.status_code != 400:
+                        response.raise_for_status()
+                else:
+                    reactions = response.json().get("reactions")
+                    if reactions is not None:
+                        data["reactions"] = reactions
+                        if _metric_count("reactions", reactions) is not None:
+                            metric_status["reactions"] = "available"
 
-                reactions = response.json().get("reactions")
-                if reactions is not None:
-                    data["reactions"] = reactions
-
-        except httpx.HTTPStatusError as exc:
-            logger.warning(
-                "Video feed-post reactions unavailable: %s",
-                exc.response.text,
-            )
-
+        data["post_status"] = "available"
+        data["authorization_status"] = authorization_status
+        data["metric_status"] = metric_status
         return data
 
 
@@ -197,8 +350,8 @@ async def get_post_reach(
             f"{GRAPH_API_URL}/{post_id}/insights",
             params={
                 "metric": "post_total_media_view_unique",
-                "access_token": access_token,
             },
+            headers={"Authorization": f"Bearer {access_token}"},
         )
 
         response.raise_for_status()

@@ -116,7 +116,7 @@ it("keeps authorization and unexpected failures visible", async () => {
     "No tienes autorización",
   );
   await expect(reconcileGeneration("business/1", "draft/1")).rejects.toThrow(
-    "No se pudo consultar HeyGen",
+    "No se pudo consultar el servicio de video",
   );
 });
 it("reports missing configuration and never retries a failed paid request", async () => {
@@ -130,7 +130,7 @@ it("reports missing configuration and never retries a failed paid request", asyn
       voice_id: "voice",
       script: "Guion",
     }),
-  ).rejects.toThrow("HeyGen no está configurado");
+  ).rejects.toThrow("AI Video Studio no está configurado");
   expect(fetchMock).toHaveBeenCalledTimes(1);
 });
 it("rejects foreign draft responses and unauthenticated requests", async () => {
@@ -145,5 +145,28 @@ it("rejects foreign draft responses and unauthenticated requests", async () => {
   await expect(getGeneration("business/1", "draft/1")).rejects.toThrow(
     "iniciar sesión",
   );
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+});
+
+it("explains an allowance denial without retrying the paid request", async () => {
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          detail: "The business AI video generation allowance is exhausted",
+        }),
+        { status: 429 },
+      ),
+    );
+  vi.stubGlobal("fetch", fetchMock);
+  await expect(
+    submitGeneration("business/1", "draft/1", {
+      avatar_id: "look",
+      voice_id: "voice",
+      script: "Script",
+      confirmed_paid_generation: true,
+    }),
+  ).rejects.toThrow("allowance is exhausted");
   expect(fetchMock).toHaveBeenCalledTimes(1);
 });

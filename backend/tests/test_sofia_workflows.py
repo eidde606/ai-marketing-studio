@@ -5,6 +5,11 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from tests.tenancy_fixtures import (
+    grant_test_active_entitlement,
+    grant_test_owner,
+)
+
 from app.models import Business, Conversation, ConversationMessage, Draft
 
 
@@ -14,6 +19,11 @@ def businesses(engine):
             Business(id="a", name="Negocio A"),
             Business(id="b", name="Negocio B"),
         ])
+        db.flush()
+        principal = grant_test_owner(db, ["a", "b"])
+        grant_test_active_entitlement(
+            db, ["a", "b"], owner_user_id=principal.user_id,
+        )
         db.commit()
 
 
@@ -28,17 +38,22 @@ def test_conversation_round_trip_history_and_business_isolation(
     assert client.get("/businesses/a/sofia/conversation/latest").json() is None
     created = client.post(
         "/businesses/a/sofia/chat",
-        json={"message": "  Promociona café  "},
+        json={
+            "message": "  Promociona café  ",
+            "idempotency_key": "conversation-create",
+        },
     )
     assert created.status_code == 200
     conversation_id = created.json()["conversation_id"]
     assert created.json() == {
         "conversation_id": conversation_id,
         "reply": "Una estrategia",
+        "language": "en",
     }
     response = client.get(f"/businesses/a/sofia/conversations/{conversation_id}")
     expected = {
         "conversation_id": conversation_id,
+        "language": "en",
         "messages": [
             {"role": "user", "content": "Promociona café"},
             {"role": "assistant", "content": "Una estrategia"},
@@ -56,7 +71,11 @@ def test_conversation_round_trip_history_and_business_isolation(
     assert other.json() == {"detail": "Conversation not found for this business"}
     continuation = client.post(
         "/businesses/a/sofia/chat",
-        json={"message": "Más breve", "conversation_id": conversation_id},
+        json={
+            "message": "Más breve",
+            "conversation_id": conversation_id,
+            "idempotency_key": "conversation-continue",
+        },
     )
     assert continuation.json()["conversation_id"] == conversation_id
     assert reply.call_count == 2
@@ -73,7 +92,7 @@ def test_chat_failure_rolls_back_only_pending_messages(
 ):
     client, engine = isolated_client
     businesses(engine)
-    request = {"message": "Un mensaje"}
+    request = {"message": "Un mensaje", "idempotency_key": "provider-failure"}
     if existing:
         with Session(engine) as db:
             db.add(Conversation(id="conversation", business_id="a"))
@@ -91,7 +110,7 @@ def test_chat_failure_rolls_back_only_pending_messages(
     )
     result = client.post("/businesses/a/sofia/chat", json=request)
     assert result.status_code == 502
-    assert result.json() == {"detail": "Sofía could not respond. Please try again."}
+    assert result.json() == {"detail": "Sebastián could not respond. Please try again."}
     with Session(engine) as db:
         assert len(db.scalars(select(Conversation)).all()) == int(existing)
         messages = db.scalars(select(ConversationMessage)).all()
@@ -113,9 +132,12 @@ def test_conversation_generation_failure_does_not_create_draft(
         "app.features.content.generation_service.generate_marketing_content",
         Mock(side_effect=RuntimeError("Provider failure")),
     )
-    result = client.post("/businesses/a/sofia/conversations/conversation/generate-draft")
+    result = client.post(
+        "/businesses/a/sofia/conversations/conversation/generate-draft",
+        json={"idempotency_key": "generation-failure"},
+    )
     assert result.status_code == 502
-    assert result.json() == {"detail": "Sofía and Leo could not generate the draft"}
+    assert result.json() == {"detail": "Sebastián and Valeria could not generate the draft"}
     with Session(engine) as db:
         assert db.scalars(select(Draft)).all() == []
         assert len(db.scalars(select(ConversationMessage)).all()) == 1

@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 
 from app.auth import verify_token
 from app.main import app
-from app.models import Business, Draft, SocialAccount
+from app.models import Business, BusinessMembership, Draft, SocialAccount
+from tests.tenancy_fixtures import grant_test_owner
 
 
 @pytest.fixture
@@ -18,6 +19,7 @@ def publishing_case(isolated_client, monkeypatch):
         business = Business(name="Test Business")
         db.add(business)
         db.flush()
+        grant_test_owner(db, [business.id])
         draft = Draft(
             business_id=business.id, title="Test Post", caption="Texto de prueba",
             platform="facebook", status="approved",
@@ -112,6 +114,27 @@ def test_approved_draft_publishes_successfully(publishing_case):
     assert_saved_state(case, "published", "fake_post_123", published=True)
 
 
+def test_multiple_connected_pages_block_ambiguous_publishing(publishing_case):
+    case = publishing_case
+    with Session(case.engine) as db:
+        db.add(SocialAccount(
+            business_id=case.business_id,
+            platform="facebook",
+            platform_account_id="fake_page_456",
+            account_name="Another Page",
+            encrypted_access_token="encrypted_fake_token",
+            connection_status="connected",
+        ))
+        db.commit()
+
+    response = case.client.post(case.url)
+    assert response.status_code == 409
+    assert "Disconnect extra Facebook Pages" in response.json()["detail"]
+    for publisher in case.publishers.values():
+        publisher.assert_not_awaited()
+    assert_saved_state(case, "not_published")
+
+
 @pytest.mark.parametrize("provider_response,expected_id", [
     ({"post_id": "feed-post", "id": "photo-object"}, "feed-post"),
     ({"id": "photo-object"}, "photo-object"),
@@ -133,7 +156,9 @@ def test_image_publication_saves_supported_provider_id(publishing_case, provider
 
 @pytest.mark.parametrize("media", ["text", "image", "video"])
 @pytest.mark.parametrize("failure", ["timeout", "missing_id", 429, 500, 503])
-def test_uncertain_outcome_requires_review_and_blocks_resubmission(publishing_case, media, failure):
+def test_uncertain_outcome_requires_review_and_blocks_resubmission(
+    publishing_case, media, failure, caplog,
+):
     case = publishing_case
     set_media(case, media)
     publisher = case.publishers[media]
@@ -158,6 +183,8 @@ def test_uncertain_outcome_requires_review_and_blocks_resubmission(publishing_ca
     assert response.json() == {"detail": expected_detail}
     assert_saved_state(case, "needs_review")
     assert case.client.post(case.url).status_code == 409
+    if media == "video" and failure == "timeout":
+        assert "Simulated timeout after submission" not in caplog.text
     publisher.assert_awaited_once()
     for other_media, other_publisher in case.publishers.items():
         if other_media != media:
@@ -273,3 +300,86 @@ def test_facebook_publishing_requires_authentication(publishing_case):
     response = case.client.post(case.url)
 
     assert response.status_code == 401
+
+
+def test_facebook_member_cannot_publish_or_change_publication_state(publishing_case):
+    case = publishing_case
+    with Session(case.engine) as db:
+        membership = db.query(BusinessMembership).filter_by(
+            business_id=case.business_id,
+        ).one()
+        membership.role = "member"
+        db.commit()
+
+    response = case.client.post(case.url)
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Operation not permitted"}
+    for publisher in case.publishers.values():
+        publisher.assert_not_awaited()
+    assert_saved_state(case, "not_published")
+
+
+def test_facebook_revocation_after_media_preparation_releases_claim(
+    publishing_case, monkeypatch,
+):
+    from app.errors import ApplicationError, ErrorKind
+    from app.features.facebook import publishing_service
+
+    case = publishing_case
+    set_media(case, "image")
+    original = publishing_service.access.require_draft_permission
+    checks = 0
+
+    def revoke_before_submission(db, principal, draft_id, permission, **kwargs):
+        nonlocal checks
+        checks += 1
+        if checks == 3:
+            raise ApplicationError(ErrorKind.NOT_FOUND, "Draft not found")
+        return original(db, principal, draft_id, permission, **kwargs)
+
+    monkeypatch.setattr(
+        publishing_service.access,
+        "require_draft_permission",
+        revoke_before_submission,
+    )
+
+    response = case.client.post(case.url)
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Draft not found"}
+    case.publishers["image"].assert_not_awaited()
+    assert_saved_state(case, "not_published")
+
+
+def test_facebook_publication_hides_drafts_from_other_tenants(publishing_case):
+    case = publishing_case
+    with Session(case.engine) as db:
+        other_business = Business(name="Other Facebook business")
+        db.add(other_business)
+        db.flush()
+        draft = Draft(
+            business_id=other_business.id,
+            title="Other tenant",
+            caption="Must not publish",
+            platform="facebook",
+            status="approved",
+        )
+        db.add(draft)
+        db.add(SocialAccount(
+            business_id=other_business.id,
+            platform="facebook",
+            platform_account_id="other-page",
+            account_name="Other Page",
+            encrypted_access_token="other-token",
+            connection_status="connected",
+        ))
+        db.commit()
+        draft_id = draft.id
+
+    response = case.client.post(f"/drafts/{draft_id}/publish-facebook")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Draft not found"}
+    for publisher in case.publishers.values():
+        publisher.assert_not_awaited()

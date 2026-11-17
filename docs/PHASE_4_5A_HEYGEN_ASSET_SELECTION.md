@@ -8,11 +8,17 @@ voices. It does not submit video-generation requests or change manual MP4 upload
 The media feature exposes cursor-paginated endpoints:
 
 - `GET /heygen/assets/avatars` accepts `avatar_type`, `ownership`, `limit`, and
-  `token`. It returns look IDs, names, avatar types, default voice IDs, preview
-  metadata, and supported rendering engines.
+  `token`; private requests also require `business_id`. Private results are
+  filtered to explicitly assigned business assets. Public provider results are
+  filtered to platform-stock assets explicitly designated in the access table.
 - `GET /heygen/assets/voices` accepts `type` (`private` or `public`), `limit`,
-  and `token`. It returns voice IDs, names, language, status, mode, and preview
-  audio metadata.
+  and `token`; private requests also require `business_id` and are filtered to
+  that business's assignments. Public results are filtered to explicitly
+  designated platform stock.
+- `POST /businesses/{business_id}/heygen/assets/assignments` assigns one private
+  avatar or voice to a business. Only Owners and Admins may assign or revoke
+  assets. `POST .../assignments/revoke` removes that grant. A provider ID alone
+  grants no access, and each asset type/provider ID can be assigned only once.
 
 The HeyGen client now uses `GET /v3/avatars/looks` and
 `GET /v3/models/audio/voices`. The existing `/heygen/avatars` and
@@ -35,6 +41,12 @@ or used for generation yet.
 The browser is read-only with respect to HeyGen. Existing script-copy and manual
 MP4 upload controls remain in place.
 
+Platform-stock access is opt-in. The additive `heygen_asset_access` migration
+does not seed or classify any existing provider asset. Platform stock must be
+explicitly designated by a trusted operator after review; private assets are
+explicitly assigned to one business. Until an asset has an access record it is
+not listed for selection and cannot be used for generation.
+
 ## Verification and limitations
 
 Backend provider and route tests mock responses; the test harness blocks
@@ -52,9 +64,8 @@ Validation completed:
   warning.
 
 HeyGen v3 endpoints use cursor pagination. Legacy list routes retain their
-array-shaped response, but the voice route now returns the account's private
-voices through v3 pagination; public voices are available through the new
-paginated endpoint. Asset selection currently lasts only for the mounted
+array-shaped response but return only explicitly designated platform stock.
+Asset selection currently lasts only for the mounted
 approval page and is not yet attached to a draft. Generation, idempotency,
 video download, private-storage persistence, and completion recovery remain
 out of scope.
